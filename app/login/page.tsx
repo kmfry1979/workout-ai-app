@@ -10,10 +10,12 @@ export default function LoginPage() {
 
   const handleLogin = async () => {
     setLoading(true)
+
     const { error } = await supabase.auth.signInWithPassword({
       email,
       password,
     })
+
     setLoading(false)
 
     if (error) {
@@ -21,29 +23,21 @@ export default function LoginPage() {
       return
     }
 
-    alert('Logged in!')
+    window.location.href = '/dashboard'
   }
 
-const handleSignup = async () => {
-  setLoading(true)
+  const handleSignup = async () => {
+    setLoading(true)
 
-  const { error } = await supabase.auth.signUp({
-    email,
-    password,
-    options: {
-      emailRedirectTo: 'https://workout-ai-app-gilt.vercel.app/login',
-    },
-  })
+    const { error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        emailRedirectTo: 'https://workout-ai-app-gilt.vercel.app/login',
+      },
+    })
 
-  setLoading(false)
-
-  if (error) {
-    alert(error.message)
-    return
-  }
-
-  alert('Check your email to confirm your account!')
-}
+    setLoading(false)
 
     if (error) {
       alert(error.message)
