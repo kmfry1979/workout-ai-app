@@ -1,9 +1,11 @@
 'use client'
 
 import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { supabase } from '../../lib/supabase'
 
 export default function LoginPage() {
+  const router = useRouter()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
@@ -11,7 +13,7 @@ export default function LoginPage() {
   const handleLogin = async () => {
     setLoading(true)
 
-    const { error } = await supabase.auth.signInWithPassword({
+    const { data, error } = await supabase.auth.signInWithPassword({
       email,
       password,
     })
@@ -19,11 +21,25 @@ export default function LoginPage() {
     setLoading(false)
 
     if (error) {
-      alert(error.message)
+      const message = error.message.toLowerCase()
+
+      if (message.includes('email not confirmed')) {
+        alert('Please verify your email before logging in.')
+      } else if (message.includes('invalid login credentials')) {
+        alert('No account found or password is incorrect. Please sign up first.')
+      } else {
+        alert(error.message)
+      }
+
       return
     }
 
-    window.location.href = '/dashboard'
+    if (!data.user?.email_confirmed_at) {
+      alert('Please verify your email before logging in.')
+      return
+    }
+
+    router.push('/dashboard')
   }
 
   const handleSignup = async () => {
@@ -33,7 +49,7 @@ export default function LoginPage() {
       email,
       password,
       options: {
-        emailRedirectTo: 'https://workout-ai-app-gilt.vercel.app/login',
+        emailRedirectTo: 'https://workout-ai-app-gilt.vercel.app/confirmed',
       },
     })
 
