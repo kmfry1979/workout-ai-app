@@ -43,6 +43,12 @@ export default function DashboardPage() {
       <div className="mx-auto max-w-4xl rounded-2xl bg-white p-6 shadow">
         <h1 className="text-3xl font-bold mb-2">Dashboard</h1>
         <p className="text-gray-600 mb-6">Welcome back{email ? `, ${email}` : ''}.</p>
+	<a
+  href="/profile"
+  className="inline-block mb-6 bg-gray-200 px-4 py-2 rounded-lg"
+>
+  Edit Profile
+</a>
 
         <div className="rounded-xl border p-4 mb-6">
           <h2 className="text-xl font-semibold mb-2">Today</h2>
