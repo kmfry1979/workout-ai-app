@@ -35,6 +35,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true)
   const [displayName, setDisplayName] = useState('')
   const [email, setEmail] = useState('')
+  const [provider, setProvider] = useState('')
   const [todayWorkouts, setTodayWorkouts] = useState<WorkoutRow[]>([])
   const [weekWorkouts, setWeekWorkouts] = useState<WorkoutRow[]>([])
   const [recentWorkout, setRecentWorkout] = useState<WorkoutRow | null>(null)
@@ -53,11 +54,12 @@ export default function DashboardPage() {
 
       const { data: profile } = await supabase
         .from('profiles')
-        .select('display_name, name')
+        .select('display_name, name, workout_provider')
         .eq('user_id', user.id)
         .maybeSingle()
 
       setDisplayName(profile?.display_name ?? profile?.name ?? user.email ?? '')
+      setProvider(profile?.workout_provider ?? '')
 
       const todayStart = startOfTodayLocal().toISOString()
       const weekStart = startOfWeekLocal().toISOString()
@@ -203,7 +205,7 @@ export default function DashboardPage() {
             </div>
 
             <div className="rounded-full bg-gray-100 px-3 py-1 text-sm text-gray-700">
-              Garmin sync ready
+              {provider || 'Manual only'}
             </div>
           </div>
 
@@ -222,7 +224,7 @@ export default function DashboardPage() {
 
             <div className="rounded-lg bg-gray-50 p-4">
               <p className="text-sm text-gray-500">Provider</p>
-              <p className="mt-1 font-medium">Garmin / Manual</p>
+              <p className="mt-1 font-medium">{provider || 'Not connected yet'}</p>
               <p className="text-sm text-gray-500 mt-1">
                 Sync data will appear here once Garmin is connected
               </p>
