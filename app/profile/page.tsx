@@ -9,8 +9,8 @@ type Tab = 'profile' | 'provider'
 export default function ProfilePage() {
   const router = useRouter()
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [connecting, setConnecting] = useState(false)
+  const [savingProfile, setSavingProfile] = useState(false)
+  const [savingProvider, setSavingProvider] = useState(false)
   const [tab, setTab] = useState<Tab>('profile')
   const [displayName, setDisplayName] = useState('')
   const [selectedProvider, setSelectedProvider] = useState('')
@@ -27,7 +27,7 @@ export default function ProfilePage() {
 
       const { data, error } = await supabase
         .from('profiles')
-        .select('display_name, name')
+        .select('display_name, name, workout_provider')
         .eq('user_id', user.id)
         .maybeSingle()
 
@@ -39,6 +39,7 @@ export default function ProfilePage() {
 
       if (data) {
         setDisplayName(data.display_name ?? data.name ?? '')
+        setSelectedProvider(data.workout_provider ?? '')
       }
 
       setLoading(false)
@@ -47,18 +48,27 @@ export default function ProfilePage() {
     loadProfile()
   }, [router])
 
-  const saveProfile = async () => {
-    const trimmedName = displayName.trim()
-    if (!trimmedName) return
-
-    setSaving(true)
-
+  const ensureUser = async () => {
     const { data: sessionData } = await supabase.auth.getSession()
     const user = sessionData.session?.user
 
     if (!user) {
-      setSaving(false)
       router.push('/login')
+      return null
+    }
+
+    return user
+  }
+
+  const saveProfile = async () => {
+    const trimmedName = displayName.trim()
+    if (!trimmedName) return
+
+    setSavingProfile(true)
+
+    const user = await ensureUser()
+    if (!user) {
+      setSavingProfile(false)
       return
     }
 
@@ -70,7 +80,7 @@ export default function ProfilePage() {
 
     if (findError) {
       alert(findError.message)
-      setSaving(false)
+      setSavingProfile(false)
       return
     }
 
@@ -87,7 +97,7 @@ export default function ProfilePage() {
 
       if (error) {
         alert(error.message)
-        setSaving(false)
+        setSavingProfile(false)
         return
       }
     } else {
@@ -98,26 +108,68 @@ export default function ProfilePage() {
 
       if (error) {
         alert(error.message)
-        setSaving(false)
+        setSavingProfile(false)
         return
       }
     }
 
-    setSaving(false)
+    setSavingProfile(false)
     router.push('/dashboard')
   }
 
-  const connectProvider = async () => {
+  const saveProvider = async () => {
     if (!selectedProvider) return
 
-    setConnecting(true)
+    setSavingProvider(true)
 
-    // Placeholder for future provider connection flow.
-    // For now, this simply acknowledges the selection.
-    await new Promise((resolve) => setTimeout(resolve, 500))
+    const user = await ensureUser()
+    if (!user) {
+      setSavingProvider(false)
+      return
+    }
 
-    setConnecting(false)
-    alert(`${selectedProvider} selected. Provider connection can be added next.`)
+    const { data: existingProfile, error: findError } = await supabase
+      .from('profiles')
+      .select('id')
+      .eq('user_id', user.id)
+      .maybeSingle()
+
+    if (findError) {
+      alert(findError.message)
+      setSavingProvider(false)
+      return
+    }
+
+    if (existingProfile) {
+      const { error } = await supabase
+        .from('profiles')
+        .update({
+          workout_provider: selectedProvider,
+        })
+        .eq('user_id', user.id)
+
+      if (error) {
+        alert(error.message)
+        setSavingProvider(false)
+        return
+      }
+    } else {
+      const { error } = await supabase.from('profiles').insert({
+        user_id: user.id,
+        display_name: displayName.trim() || '',
+        name: displayName.trim() || '',
+        workout_provider: selectedProvider,
+      })
+
+      if (error) {
+        alert(error.message)
+        setSavingProvider(false)
+        return
+      }
+    }
+
+    setSavingProvider(false)
+    router.push('/dashboard')
   }
 
   if (loading) return <p className="p-6">Loading...</p>
@@ -159,9 +211,9 @@ export default function ProfilePage() {
             <button
               className="w-full rounded-lg bg-black py-3 text-white disabled:cursor-not-allowed disabled:bg-gray-400"
               onClick={saveProfile}
-              disabled={!displayName.trim() || saving}
+              disabled={!displayName.trim() || savingProfile}
             >
-              {saving ? 'Saving...' : 'Save and return to Dashboard'}
+              {savingProfile ? 'Saving...' : 'Save and return to Dashboard'}
             </button>
           </div>
         )}
@@ -184,14 +236,15 @@ export default function ProfilePage() {
 
             <button
               className="w-full rounded-lg bg-black py-3 text-white disabled:cursor-not-allowed disabled:bg-gray-400"
-              onClick={connectProvider}
-              disabled={!selectedProvider || connecting}
+              onClick={saveProvider}
+              disabled={!selectedProvider || savingProvider}
             >
-              {connecting ? 'Connecting...' : 'Connect to Provider'}
+              {savingProvider ? 'Saving...' : 'Save Provider'}
             </button>
 
             <p className="mt-4 text-sm text-gray-600">
-              Provider setup will be added here next. This tab stays separate so it never blocks saving your profile.
+              This stores your provider choice for now. We will wire the actual Garmin
+              connection flow into this tab next.
             </p>
           </div>
         )}
