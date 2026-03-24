@@ -36,6 +36,7 @@ export default function DashboardPage() {
   const [displayName, setDisplayName] = useState('')
   const [email, setEmail] = useState('')
   const [provider, setProvider] = useState('')
+  const [providerStatus, setProviderStatus] = useState('')
   const [todayWorkouts, setTodayWorkouts] = useState<WorkoutRow[]>([])
   const [weekWorkouts, setWeekWorkouts] = useState<WorkoutRow[]>([])
   const [recentWorkout, setRecentWorkout] = useState<WorkoutRow | null>(null)
@@ -59,7 +60,20 @@ export default function DashboardPage() {
         .maybeSingle()
 
       setDisplayName(profile?.display_name ?? profile?.name ?? user.email ?? '')
-      setProvider(profile?.workout_provider ?? '')
+      const selectedProvider = profile?.workout_provider ?? ''
+setProvider(selectedProvider)
+
+// Now check connection status
+if (selectedProvider) {
+  const { data: connection } = await supabase
+    .from('provider_connections')
+    .select('status')
+    .eq('user_id', user.id)
+    .eq('provider_type', selectedProvider.toLowerCase())
+    .maybeSingle()
+
+  setProviderStatus(connection?.status ?? 'not_connected')
+}
 
       const todayStart = startOfTodayLocal().toISOString()
       const weekStart = startOfWeekLocal().toISOString()
@@ -205,8 +219,10 @@ export default function DashboardPage() {
             </div>
 
             <div className="rounded-full bg-gray-100 px-3 py-1 text-sm text-gray-700">
-              {provider || 'Manual only'}
-            </div>
+  {provider
+    ? `${provider} (${providerStatus === 'connected' ? 'Connected' : 'Not connected'})`
+    : 'Manual only'}
+</div>
           </div>
 
           <div className="mt-4 grid gap-4 md:grid-cols-3">
@@ -224,7 +240,11 @@ export default function DashboardPage() {
 
             <div className="rounded-lg bg-gray-50 p-4">
               <p className="text-sm text-gray-500">Provider</p>
-              <p className="mt-1 font-medium">{provider || 'Not connected yet'}</p>
+              <p className="mt-1 font-medium">
+  {provider
+    ? `${provider} (${providerStatus === 'connected' ? 'Connected' : 'Not connected'})`
+    : 'No provider selected'}
+</p>
               <p className="text-sm text-gray-500 mt-1">
                 Sync data will appear here once Garmin is connected
               </p>
