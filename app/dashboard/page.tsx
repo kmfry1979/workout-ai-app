@@ -23,8 +23,8 @@ function startOfTodayLocal() {
 
 function startOfWeekLocal() {
   const d = new Date()
-  const day = d.getDay() // 0 = Sunday
-  const diff = day === 0 ? 6 : day - 1 // Monday start
+  const day = d.getDay()
+  const diff = day === 0 ? 6 : day - 1
   d.setHours(0, 0, 0, 0)
   d.setDate(d.getDate() - diff)
   return d
@@ -190,6 +190,43 @@ export default function DashboardPage() {
           <div className="rounded-xl border p-4">
             <p className="text-sm text-gray-500">Total volume this week</p>
             <p className="mt-2 text-3xl font-bold">{totalVolume.toFixed(0)}</p>
+          </div>
+        </div>
+
+        <div className="mt-8 rounded-xl border p-4">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <h2 className="text-xl font-semibold">Today Workout Summary</h2>
+              <p className="text-sm text-gray-500">
+                Quick snapshot of today&apos;s training and provider sync
+              </p>
+            </div>
+
+            <div className="rounded-full bg-gray-100 px-3 py-1 text-sm text-gray-700">
+              Garmin sync ready
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-4 md:grid-cols-3">
+            <div className="rounded-lg bg-gray-50 p-4">
+              <p className="text-sm text-gray-500">Workouts Today</p>
+              <p className="mt-1 text-2xl font-bold">{todayWorkouts.length}</p>
+            </div>
+
+            <div className="rounded-lg bg-gray-50 p-4">
+              <p className="text-sm text-gray-500">Latest Session</p>
+              <p className="mt-1 font-medium">
+                {recentWorkout?.workout_name || recentWorkout?.exercise || 'No session yet'}
+              </p>
+            </div>
+
+            <div className="rounded-lg bg-gray-50 p-4">
+              <p className="text-sm text-gray-500">Provider</p>
+              <p className="mt-1 font-medium">Garmin / Manual</p>
+              <p className="text-sm text-gray-500 mt-1">
+                Sync data will appear here once Garmin is connected
+              </p>
+            </div>
           </div>
         </div>
 
