@@ -4,10 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       user_id:
-        description: "User ID"
         required: true
       reason:
-        description: "Trigger reason"
         required: true
 
 jobs:
@@ -18,11 +16,21 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Debug input
-        run: |
-          echo "User ID: ${{ github.event.inputs.user_id }}"
-          echo "Reason: ${{ github.event.inputs.reason }}"
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-      # 👉 You will replace this later with your Python sync
-      - name: Fake sync step
-        run: echo "Garmin sync triggered"
+      - name: Install dependencies
+        run: |
+          pip install garminconnect requests
+
+      - name: Run Garmin Sync
+        env:
+          GARMIN_EMAIL: ${{ secrets.GARMIN_EMAIL }}
+          GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          USER_ID: ${{ github.event.inputs.user_id }}
+        run: |
+          python garmin_sync.py
