@@ -1,297 +1,386 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../../lib/supabase'
 
-type WorkoutRow = {
-  id: string
-  exercise: string | null
-  workout_name: string | null
-  sets: number | null
-  reps: number | null
-  weight: number | null
-  performed_at: string
-  source: string | null
+type DailyMetrics = {
+  metric_date: string
+  steps: number | null
+  sleep_minutes: number | null
+  resting_hr: number | null
+  resting_heart_rate_bpm: number | null
+  pulse_ox: number | null
+  garmin_spo2_avg: number | null
+  garmin_hrv_nightly_avg: number | null
+  garmin_hrv_status: string | null
+  garmin_sleep_score: number | null
+  garmin_body_battery_high: number | null
+  garmin_body_battery_eod: number | null
+  garmin_stress_avg: number | null
+  active_calories_kcal: number | null
+  calories: number | null
+  distance_m: number | null
 }
 
-function startOfTodayLocal() {
-  const d = new Date()
-  d.setHours(0, 0, 0, 0)
-  return d
+type ActivitySummary = {
+  duration_sec: number | null
+  activity_type: string | null
+  start_time: string
 }
 
-function startOfWeekLocal() {
-  const d = new Date()
-  const day = d.getDay()
-  const diff = day === 0 ? 6 : day - 1
-  d.setHours(0, 0, 0, 0)
-  d.setDate(d.getDate() - diff)
-  return d
+function clamp(val: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, val))
+}
+
+function computeScores(m: DailyMetrics, recentActivities: ActivitySummary[]) {
+  const hrv = m.garmin_hrv_nightly_avg
+  const sleepScore = m.garmin_sleep_score
+  const sleepMin = m.sleep_minutes
+  const rhr = m.resting_hr ?? m.resting_heart_rate_bpm
+  const spo2 = m.pulse_ox ?? m.garmin_spo2_avg
+
+  // Total exercise minutes today
+  const exerciseMin = recentActivities
+    .filter(a => {
+      const d = new Date(a.start_time)
+      const today = new Date()
+      return d.toDateString() === today.toDateString()
+    })
+    .reduce((s, a) => s + (a.duration_sec ?? 0) / 60, 0)
+
+  const hrvScore = hrv != null ? clamp(((hrv - 20) / 60) * 100, 0, 100) : null
+  const sleep = sleepScore ?? (sleepMin != null ? clamp((sleepMin / 480) * 100, 0, 100) : null)
+  const hrScore = rhr != null ? clamp(((80 - rhr) / 40) * 100, 0, 100) : null
+  const spo2Score = spo2 != null ? clamp(((spo2 - 90) / 10) * 100, 0, 100) : null
+  const loadScore = exerciseMin > 0 ? clamp(100 - (exerciseMin - 30) * 0.5, 40, 100) : 85
+
+  const scores = [hrvScore, sleep, hrScore, spo2Score, loadScore].filter(s => s != null) as number[]
+  const readiness = scores.length > 0
+    ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length)
+    : null
+
+  return {
+    readiness,
+    radar: {
+      hrv: Math.round(hrvScore ?? 0),
+      sleep: Math.round(sleep ?? 0),
+      heartRate: Math.round(hrScore ?? 0),
+      spo2: Math.round(spo2Score ?? 0),
+      load: Math.round(loadScore),
+    },
+    keyFactor: getKeyFactor({ hrv: hrvScore, sleep, heartRate: hrScore, spo2: spo2Score }),
+    exerciseMin: Math.round(exerciseMin),
+  }
+}
+
+function getKeyFactor(scores: Record<string, number | null>) {
+  const labels: Record<string, string> = {
+    hrv: 'HRV variability',
+    sleep: 'Sleep quality',
+    heartRate: 'Resting heart rate',
+    spo2: 'Blood oxygen',
+  }
+  let lowest: string | null = null
+  let lowestVal = Infinity
+  for (const [k, v] of Object.entries(scores)) {
+    if (v != null && v < lowestVal) { lowestVal = v; lowest = k }
+  }
+  return lowest ? labels[lowest] : null
+}
+
+function readinessLabel(score: number) {
+  if (score >= 85) return 'Excellent'
+  if (score >= 70) return 'Good'
+  if (score >= 55) return 'Moderate'
+  if (score >= 40) return 'Low'
+  return 'Poor'
+}
+
+function readinessColor(score: number) {
+  if (score >= 85) return '#22c55e'
+  if (score >= 70) return '#84cc16'
+  if (score >= 55) return '#eab308'
+  return '#ef4444'
+}
+
+function RadarBar({ label, value, icon }: { label: string; value: number; icon: string }) {
+  const color = value >= 70 ? '#22c55e' : value >= 45 ? '#eab308' : '#ef4444'
+  return (
+    <div className="flex items-center gap-3">
+      <span className="text-base w-5">{icon}</span>
+      <span className="text-sm text-gray-300 w-24 shrink-0">{label}</span>
+      <div className="flex-1 bg-gray-700 rounded-full h-2">
+        <div
+          className="h-2 rounded-full transition-all duration-500"
+          style={{ width: `${value}%`, backgroundColor: color }}
+        />
+      </div>
+      <span className="text-sm font-bold w-8 text-right" style={{ color }}>{value}</span>
+    </div>
+  )
+}
+
+function StatCard({ label, value, icon }: { label: string; value: string; icon: string }) {
+  return (
+    <div className="bg-gray-800 rounded-2xl p-4">
+      <div className="flex items-center gap-2 text-gray-400 text-xs mb-2">
+        <span>{icon}</span> {label}
+      </div>
+      <p className="text-2xl font-bold text-white">{value}</p>
+    </div>
+  )
+}
+
+function getGreeting() {
+  const h = new Date().getHours()
+  if (h < 12) return 'Good morning'
+  if (h < 17) return 'Good afternoon'
+  return 'Good evening'
 }
 
 export default function DashboardPage() {
   const router = useRouter()
   const [loading, setLoading] = useState(true)
   const [displayName, setDisplayName] = useState('')
-  const [email, setEmail] = useState('')
-  const [provider, setProvider] = useState('')
-  const [providerStatus, setProviderStatus] = useState('')
-  const [todayWorkouts, setTodayWorkouts] = useState<WorkoutRow[]>([])
-  const [weekWorkouts, setWeekWorkouts] = useState<WorkoutRow[]>([])
-  const [recentWorkout, setRecentWorkout] = useState<WorkoutRow | null>(null)
+  const [metrics, setMetrics] = useState<DailyMetrics | null>(null)
+  const [activities, setActivities] = useState<ActivitySummary[]>([])
 
   useEffect(() => {
-    const loadDashboard = async () => {
+    const load = async () => {
       const { data } = await supabase.auth.getSession()
-
-      if (!data.session) {
-        router.push('/login')
-        return
-      }
-
+      if (!data.session) { router.push('/login'); return }
       const user = data.session.user
-      setEmail(user.email ?? '')
 
       const { data: profile } = await supabase
         .from('profiles')
-        .select('display_name, name, workout_provider')
+        .select('display_name, name')
         .eq('user_id', user.id)
         .maybeSingle()
-
       setDisplayName(profile?.display_name ?? profile?.name ?? user.email ?? '')
-      const selectedProvider = profile?.workout_provider ?? ''
-setProvider(selectedProvider)
 
-// Now check connection status
-if (selectedProvider) {
-  const { data: connection } = await supabase
-    .from('provider_connections')
-    .select('status')
-    .eq('user_id', user.id)
-    .eq('provider_type', selectedProvider.toLowerCase())
-    .maybeSingle()
+      const today = new Date().toISOString().split('T')[0]
 
-  setProviderStatus(connection?.status ?? 'not_connected')
-}
-
-      const todayStart = startOfTodayLocal().toISOString()
-      const weekStart = startOfWeekLocal().toISOString()
-
-      const { data: todayData, error: todayError } = await supabase
-        .from('workouts')
-        .select('id, exercise, workout_name, sets, reps, weight, performed_at, source')
+      const { data: m } = await supabase
+        .from('daily_health_metrics')
+        .select(`metric_date, steps, sleep_minutes, resting_hr, resting_heart_rate_bpm,
+          pulse_ox, garmin_spo2_avg, garmin_hrv_nightly_avg, garmin_hrv_status,
+          garmin_sleep_score, garmin_body_battery_high, garmin_body_battery_eod,
+          garmin_stress_avg, active_calories_kcal, calories, distance_m`)
         .eq('user_id', user.id)
-        .gte('performed_at', todayStart)
-        .order('performed_at', { ascending: false })
-
-      if (todayError) {
-        alert(todayError.message)
-        setLoading(false)
-        return
-      }
-
-      const { data: weekData, error: weekError } = await supabase
-        .from('workouts')
-        .select('id, exercise, workout_name, sets, reps, weight, performed_at, source')
-        .eq('user_id', user.id)
-        .gte('performed_at', weekStart)
-        .order('performed_at', { ascending: false })
-
-      if (weekError) {
-        alert(weekError.message)
-        setLoading(false)
-        return
-      }
-
-      const { data: latestData, error: latestError } = await supabase
-        .from('workouts')
-        .select('id, exercise, workout_name, sets, reps, weight, performed_at, source')
-        .eq('user_id', user.id)
-        .order('performed_at', { ascending: false })
-        .limit(1)
+        .eq('metric_date', today)
         .maybeSingle()
 
-      if (latestError) {
-        alert(latestError.message)
-        setLoading(false)
-        return
-      }
+      setMetrics(m as DailyMetrics | null)
 
-      setTodayWorkouts((todayData ?? []) as WorkoutRow[])
-      setWeekWorkouts((weekData ?? []) as WorkoutRow[])
-      setRecentWorkout((latestData ?? null) as WorkoutRow | null)
+      const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString()
+      const { data: acts } = await supabase
+        .from('garmin_activities')
+        .select('duration_sec, activity_type, start_time')
+        .eq('user_id', user.id)
+        .gte('start_time', weekAgo)
+        .order('start_time', { ascending: false })
+
+      setActivities((acts ?? []) as ActivitySummary[])
       setLoading(false)
     }
-
-    loadDashboard()
+    load()
   }, [router])
-
-  const totalReps = useMemo(
-    () => weekWorkouts.reduce((sum, workout) => sum + (workout.reps ?? 0), 0),
-    [weekWorkouts]
-  )
-
-  const totalVolume = useMemo(
-    () =>
-      weekWorkouts.reduce(
-        (sum, workout) => sum + (Number(workout.reps ?? 0) * Number(workout.weight ?? 0)),
-        0
-      ),
-    [weekWorkouts]
-  )
-
-  const handleLogout = async () => {
-    await supabase.auth.signOut()
-    router.push('/login')
-  }
 
   if (loading) {
     return (
-      <main className="min-h-screen flex items-center justify-center bg-gray-50 p-6">
-        <p>Loading dashboard...</p>
+      <main className="min-h-screen bg-gray-950 flex items-center justify-center">
+        <p className="text-gray-400">Loading...</p>
       </main>
     )
   }
 
-  return (
-    <main className="min-h-screen bg-gray-50 p-6">
-      <div className="mx-auto max-w-5xl rounded-2xl bg-white p-6 shadow">
-        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-          <div>
-            <h1 className="text-3xl font-bold mb-2">Dashboard</h1>
-            <p className="text-gray-600">
-              Welcome back, {displayName || email}.
-            </p>
-          </div>
+  const scores = metrics ? computeScores(metrics, activities) : null
+  const readiness = scores?.readiness ?? null
+  const color = readiness != null ? readinessColor(readiness) : '#6b7280'
+  const today = new Date()
+  const dateStr = today.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })
 
-          <div className="flex flex-wrap gap-2">
-            <a
-              href="/profile"
-              className="inline-block rounded-lg bg-gray-200 px-4 py-2"
-            >
-              Edit Profile
-            </a>
-            <a
-              href="/workouts"
-              className="inline-block rounded-lg bg-gray-200 px-4 py-2"
-            >
-              Go to Workouts
+  const sleepHours = metrics?.sleep_minutes
+    ? `${Math.floor(metrics.sleep_minutes / 60)}h ${metrics.sleep_minutes % 60}m`
+    : '—'
+  const steps = metrics?.steps ? (metrics.steps / 1000).toFixed(1) + 'k' : '—'
+  const cals = metrics?.active_calories_kcal ?? metrics?.calories
+  const calStr = cals ? Math.round(cals) + ' kcal' : '—'
+  const distKm = metrics?.distance_m ? (metrics.distance_m / 1000).toFixed(1) + ' km' : '—'
+
+  const todayActivities = activities.filter(a => {
+    const d = new Date(a.start_time)
+    return d.toDateString() === today.toDateString()
+  })
+  const exerciseStr = scores?.exerciseMin ? `${scores.exerciseMin} min` : '—'
+
+  return (
+    <main className="min-h-screen bg-gray-950 p-4 md:p-8">
+      <div className="mx-auto max-w-2xl space-y-4">
+
+        {/* Header */}
+        <div className="flex items-start justify-between">
+          <div>
+            <p className="text-gray-400 text-sm">{dateStr}</p>
+            <h1 className="text-2xl font-bold text-white mt-1">
+              {getGreeting()}{displayName ? `, ${displayName.split(' ')[0]}` : ''}
+            </h1>
+          </div>
+          <div className="flex gap-2">
+            <a href="/activities" className="text-xs bg-gray-800 text-gray-300 px-3 py-1.5 rounded-lg">
+              Activities
             </a>
             <button
-              className="rounded-lg bg-black px-4 py-2 text-white"
-              onClick={handleLogout}
+              onClick={async () => { await supabase.auth.signOut(); router.push('/login') }}
+              className="text-xs bg-gray-800 text-gray-400 px-3 py-1.5 rounded-lg"
             >
-              Logout
+              Sign out
             </button>
           </div>
         </div>
 
-        <div className="mt-8 grid gap-4 md:grid-cols-4">
-          <div className="rounded-xl border p-4">
-            <p className="text-sm text-gray-500">Today&apos;s workouts</p>
-            <p className="mt-2 text-3xl font-bold">{todayWorkouts.length}</p>
-          </div>
+        {/* Readiness card */}
+        <div className="bg-gray-900 rounded-3xl p-6">
+          <div className="flex items-center gap-6">
+            {/* Circle */}
+            <div className="relative shrink-0">
+              <svg width="100" height="100" viewBox="0 0 100 100">
+                <circle cx="50" cy="50" r="42" fill="none" stroke="#374151" strokeWidth="8" />
+                {readiness != null && (
+                  <circle
+                    cx="50" cy="50" r="42" fill="none"
+                    stroke={color} strokeWidth="8"
+                    strokeLinecap="round"
+                    strokeDasharray={`${(readiness / 100) * 263.9} 263.9`}
+                    transform="rotate(-90 50 50)"
+                  />
+                )}
+                <text x="50" y="46" textAnchor="middle" fill="white" fontSize="22" fontWeight="bold">
+                  {readiness ?? '—'}
+                </text>
+                <text x="50" y="62" textAnchor="middle" fill="#9ca3af" fontSize="9">
+                  READY
+                </text>
+              </svg>
+            </div>
 
-          <div className="rounded-xl border p-4">
-            <p className="text-sm text-gray-500">Weekly workout count</p>
-            <p className="mt-2 text-3xl font-bold">{weekWorkouts.length}</p>
-          </div>
-
-          <div className="rounded-xl border p-4">
-            <p className="text-sm text-gray-500">Total reps this week</p>
-            <p className="mt-2 text-3xl font-bold">{totalReps}</p>
-          </div>
-
-          <div className="rounded-xl border p-4">
-            <p className="text-sm text-gray-500">Total volume this week</p>
-            <p className="mt-2 text-3xl font-bold">{totalVolume.toFixed(0)}</p>
-          </div>
-        </div>
-
-        <div className="mt-8 rounded-xl border p-4">
-          <div className="flex items-center justify-between gap-4">
+            {/* Label + key factor */}
             <div>
-              <h2 className="text-xl font-semibold">Today Workout Summary</h2>
-              <p className="text-sm text-gray-500">
-                Quick snapshot of today&apos;s training and provider sync
+              <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">Readiness</p>
+              <p className="text-2xl font-bold text-white">
+                {readiness != null ? readinessLabel(readiness) : 'No data'}
               </p>
+              {scores?.keyFactor && (
+                <>
+                  <p className="text-xs text-gray-500 mt-2">Key factor</p>
+                  <p className="text-sm font-medium mt-0.5" style={{ color }}>
+                    {scores.keyFactor}
+                  </p>
+                </>
+              )}
+              {metrics?.garmin_hrv_status && (
+                <span className="mt-2 inline-block text-xs bg-gray-800 text-gray-300 px-2 py-0.5 rounded-full">
+                  HRV {metrics.garmin_hrv_status}
+                </span>
+              )}
             </div>
-
-            <div className="rounded-full bg-gray-100 px-3 py-1 text-sm text-gray-700">
-  {provider
-    ? `${provider} (${providerStatus === 'connected' ? 'Connected' : 'Not connected'})`
-    : 'Manual only'}
-</div>
           </div>
 
-          <div className="mt-4 grid gap-4 md:grid-cols-3">
-            <div className="rounded-lg bg-gray-50 p-4">
-              <p className="text-sm text-gray-500">Workouts Today</p>
-              <p className="mt-1 text-2xl font-bold">{todayWorkouts.length}</p>
-            </div>
-
-            <div className="rounded-lg bg-gray-50 p-4">
-              <p className="text-sm text-gray-500">Latest Session</p>
-              <p className="mt-1 font-medium">
-                {recentWorkout?.workout_name || recentWorkout?.exercise || 'No session yet'}
+          {/* Radar bars */}
+          {scores && (
+            <div className="mt-6 space-y-3">
+              <p className="text-xs text-gray-500 uppercase tracking-wider mb-3">Readiness Radar</p>
+              <RadarBar label="HRV" value={scores.radar.hrv} icon="💚" />
+              <RadarBar label="Sleep" value={scores.radar.sleep} icon="🌙" />
+              <RadarBar label="Heart Rate" value={scores.radar.heartRate} icon="❤️" />
+              <RadarBar label="SpO2" value={scores.radar.spo2} icon="🩸" />
+              <RadarBar label="Load" value={scores.radar.load} icon="⚡" />
+              <p className="text-xs text-gray-600 text-right mt-1">
+                {[scores.radar.hrv, scores.radar.sleep, scores.radar.heartRate, scores.radar.spo2, scores.radar.load]
+                  .filter(v => v >= 70).length} of 5 metrics in good range
               </p>
             </div>
-
-            <div className="rounded-lg bg-gray-50 p-4">
-              <p className="text-sm text-gray-500">Provider</p>
-              <p className="mt-1 font-medium">
-  {provider
-    ? `${provider} (${providerStatus === 'connected' ? 'Connected' : 'Not connected'})`
-    : 'No provider selected'}
-</p>
-              <p className="text-sm text-gray-500 mt-1">
-                Sync data will appear here once Garmin is connected
-              </p>
-            </div>
-          </div>
+          )}
         </div>
 
-        <div className="mt-8 grid gap-6 md:grid-cols-2">
-          <div className="rounded-xl border p-4">
-            <h2 className="text-xl font-semibold mb-4">Most Recent Session</h2>
+        {/* Quick stats */}
+        <div className="grid grid-cols-2 gap-3">
+          <StatCard label="Sleep" value={sleepHours} icon="🌙" />
+          <StatCard label="Steps" value={steps} icon="🦶" />
+          <StatCard label="Exercise" value={exerciseStr} icon="🏃" />
+          <StatCard label="Active Cal" value={calStr} icon="🔥" />
+        </div>
 
-            {recentWorkout ? (
-              <div>
-                <p className="font-medium">
-                  {recentWorkout.workout_name || recentWorkout.exercise || 'Workout'}
-                </p>
-                <p className="text-sm text-gray-600 mt-1">
-                  {recentWorkout.reps ?? '-'} reps • {recentWorkout.weight ?? '-'} kg •{' '}
-                  {recentWorkout.sets ?? '-'} sets
-                </p>
-                <p className="text-sm text-gray-400 mt-2">
-                  {new Date(recentWorkout.performed_at).toLocaleString()}
-                </p>
-              </div>
-            ) : (
-              <p className="text-gray-500">No workouts yet.</p>
-            )}
+        {/* Body Battery */}
+        {metrics?.garmin_body_battery_high != null && (
+          <div className="bg-gray-900 rounded-2xl p-4 flex items-center justify-between">
+            <div>
+              <p className="text-xs text-gray-500 uppercase tracking-wider">Body Battery</p>
+              <p className="text-3xl font-bold text-white mt-1">
+                {metrics.garmin_body_battery_eod ?? metrics.garmin_body_battery_high}
+              </p>
+              <p className="text-xs text-gray-500 mt-1">
+                Peak: {metrics.garmin_body_battery_high} today
+              </p>
+            </div>
+            <div className="text-5xl">⚡</div>
           </div>
+        )}
 
-          <div className="rounded-xl border p-4">
-            <h2 className="text-xl font-semibold mb-4">Today</h2>
-
-            {todayWorkouts.length === 0 ? (
-              <p className="text-gray-500">No workouts logged today.</p>
-            ) : (
-              <div className="space-y-3">
-                {todayWorkouts.slice(0, 5).map((w) => (
-                  <div key={w.id} className="border-b pb-3 last:border-b-0 last:pb-0">
-                    <p className="font-medium">{w.exercise || w.workout_name || 'Workout'}</p>
-                    <p className="text-sm text-gray-600">
-                      {w.reps ?? '-'} reps • {w.weight ?? '-'} kg
-                    </p>
-                  </div>
-                ))}
-              </div>
-            )}
+        {/* Stress */}
+        {metrics?.garmin_stress_avg != null && (
+          <div className="bg-gray-900 rounded-2xl p-4 flex items-center justify-between">
+            <div>
+              <p className="text-xs text-gray-500 uppercase tracking-wider">Avg Stress</p>
+              <p className="text-3xl font-bold text-white mt-1">{metrics.garmin_stress_avg}</p>
+            </div>
+            <div
+              className="text-sm font-medium px-3 py-1 rounded-full"
+              style={{
+                background: metrics.garmin_stress_avg < 26 ? '#14532d' : metrics.garmin_stress_avg < 51 ? '#713f12' : '#7f1d1d',
+                color: metrics.garmin_stress_avg < 26 ? '#86efac' : metrics.garmin_stress_avg < 51 ? '#fde68a' : '#fca5a5'
+              }}
+            >
+              {metrics.garmin_stress_avg < 26 ? 'Low' : metrics.garmin_stress_avg < 51 ? 'Medium' : 'High'}
+            </div>
           </div>
+        )}
+
+        {/* No data state */}
+        {!metrics && (
+          <div className="bg-gray-900 rounded-2xl p-6 text-center">
+            <p className="text-gray-500 text-sm">No health data for today yet.</p>
+            <p className="text-gray-600 text-xs mt-1">
+              Sync your Garmin or open the Android app to populate data.
+            </p>
+          </div>
+        )}
+
+        {/* Recent activity */}
+        {todayActivities.length > 0 && (
+          <div className="bg-gray-900 rounded-2xl p-4">
+            <p className="text-xs text-gray-500 uppercase tracking-wider mb-3">Today&apos;s Activities</p>
+            <div className="space-y-2">
+              {todayActivities.map((a, i) => (
+                <div key={i} className="flex items-center justify-between">
+                  <p className="text-white text-sm font-medium capitalize">
+                    {a.activity_type?.replace(/_/g, ' ') ?? 'Activity'}
+                  </p>
+                  <p className="text-gray-400 text-sm">
+                    {a.duration_sec ? `${Math.round(a.duration_sec / 60)} min` : ''}
+                  </p>
+                </div>
+              ))}
+            </div>
+            <a href="/activities" className="block text-center text-xs text-orange-400 mt-3">
+              View all activities →
+            </a>
+          </div>
+        )}
+
+        <div className="text-center pb-4">
+          <a href="/activities" className="text-xs text-gray-600 underline">Activities & Coach</a>
         </div>
       </div>
     </main>

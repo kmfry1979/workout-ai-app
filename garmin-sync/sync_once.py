@@ -275,13 +275,29 @@ def login_garmin() -> Garmin:
             api = Garmin()
             api.login(str(TOKENS_DIR))
             return api
+        except GarminConnectTooManyRequestsError as exc:
+            # 429 — stop immediately, do NOT fall back to password (makes it worse)
+            raise RuntimeError(
+                f"Garmin rate limit (429) hit during token login. "
+                f"Wait 24h before retrying. Details: {exc}"
+            ) from exc
+        except GarthHTTPError as exc:
+            # garth-level 429 (oauth exchange endpoint)
+            if "429" in str(exc) or "Too Many" in str(exc):
+                raise RuntimeError(
+                    f"Garmin rate limit (429) hit during token exchange. "
+                    f"Wait 24h before retrying. Details: {exc}"
+                ) from exc
+            print(f"Token login failed ({exc}), falling back to password login.")
+            for f in TOKENS_DIR.glob("*.json"):
+                f.unlink(missing_ok=True)
         except Exception as exc:
             err_str = str(exc)
-            if "429" in err_str:
-                # Rate limited — don't fall back to password (makes it worse)
+            print(f"DEBUG exc type: {type(exc).__name__}, str: {err_str[:200]}")
+            if "429" in err_str or "Too Many" in err_str or "rate" in err_str.lower():
                 raise RuntimeError(
-                    "Garmin rate limit (429) hit during token refresh. "
-                    "Wait 1-2 hours before retrying. Do NOT re-run the workflow repeatedly."
+                    f"Garmin rate limit hit during token login ({type(exc).__name__}). "
+                    f"Wait 24h before retrying. Details: {exc}"
                 ) from exc
             print(f"Token login failed ({exc}), falling back to password login.")
             # Clear stale token files so next run doesn't loop on them
@@ -294,9 +310,7 @@ def login_garmin() -> Garmin:
             "Run garmin_bootstrap.py first or set credentials."
         )
 
-    # Prevent garminconnect from auto-loading a missing token dir from env
-    original_token_env = os.environ.pop("GARMINTOKENS", None)
-
+    # 429 on password path too — raise immediately rather than wasting an attempt
     try:
         print("Logging in with email/password...")
         api = Garmin(
@@ -319,9 +333,17 @@ def login_garmin() -> Garmin:
         print("Garmin login successful, tokens saved.")
         return api
 
-    finally:
-        if original_token_env is not None:
-            os.environ["GARMINTOKENS"] = original_token_env
+    except GarminConnectTooManyRequestsError as exc:
+        raise RuntimeError(
+            f"Garmin rate limit (429) on password login too. "
+            f"Account is fully rate-limited — wait 24h. Details: {exc}"
+        ) from exc
+    except GarthHTTPError as exc:
+        if "429" in str(exc) or "Too Many" in str(exc):
+            raise RuntimeError(
+                f"Garmin rate limit (429) on password login. Wait 24h. Details: {exc}"
+            ) from exc
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -528,7 +550,13 @@ def normalize_garmin_activity_row(
         default=None,
     )
     if isinstance(activity_type, dict):
-        activity_type = activity_type.get("typeKey") or activity_type.get("name") or str(activity_type)
+        activity_type = (
+            activity_type.get("typeKey")
+            or activity_type.get("TypeKey")   # Garmin Connect uses capital T
+            or activity_type.get("name")
+            or activity_type.get("Name")
+            or str(activity_type)
+        )
 
     return {
         "user_id": user_id,
