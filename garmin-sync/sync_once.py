@@ -276,6 +276,13 @@ def login_garmin() -> Garmin:
             api.login(str(TOKENS_DIR))
             return api
         except Exception as exc:
+            err_str = str(exc)
+            if "429" in err_str:
+                # Rate limited — don't fall back to password (makes it worse)
+                raise RuntimeError(
+                    "Garmin rate limit (429) hit during token refresh. "
+                    "Wait 1-2 hours before retrying. Do NOT re-run the workflow repeatedly."
+                ) from exc
             print(f"Token login failed ({exc}), falling back to password login.")
             # Clear stale token files so next run doesn't loop on them
             for f in TOKENS_DIR.glob("*.json"):
