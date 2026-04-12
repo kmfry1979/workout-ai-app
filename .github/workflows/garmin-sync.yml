@@ -1,36 +1,54 @@
 name: Garmin Sync
 
 on:
+  # Run daily at 6:30am UTC (after midnight in most US timezones so "today" is complete)
+  schedule:
+    - cron: "30 6 * * *"
+
+  # Allow manual trigger from GitHub UI or via API dispatch from the website
   workflow_dispatch:
     inputs:
       user_id:
-        required: true
+        description: "Supabase user UUID to sync (leave blank to use secret default)"
+        required: false
+        default: ""
       reason:
-        required: true
+        description: "Reason for manual sync"
+        required: false
+        default: "manual"
+      days_back:
+        description: "Number of days to sync (1 = today only)"
+        required: false
+        default: "1"
 
 jobs:
   sync:
+    name: Sync Garmin → Supabase
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
-      - name: Checkout repo
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: garmin-sync/requirements.txt
 
       - name: Install dependencies
-        run: |
-          pip install garminconnect requests
+        run: pip install -r garmin-sync/requirements.txt
 
-      - name: Run Garmin Sync
+      - name: Run Garmin sync
         env:
           GARMIN_EMAIL: ${{ secrets.GARMIN_EMAIL }}
           GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          USER_ID: ${{ github.event.inputs.user_id }}
-        run: |
-          python garmin_sync.py
+          SUPABASE_USER_ID: ${{ inputs.user_id || secrets.SUPABASE_USER_ID }}
+          GARMIN_ACTIVITY_LIMIT: "20"
+          GARMIN_DAYS_BACK: ${{ inputs.days_back || '1' }}
+          GARMINTOKENS: /tmp/garmin_tokens
+        run: python garmin-sync/sync_once.py
