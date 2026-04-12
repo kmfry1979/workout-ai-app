@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434'
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? 'gemma3'
+const GROQ_API_KEY = process.env.GROQ_API_KEY
+const GROQ_MODEL = process.env.GROQ_MODEL ?? 'llama-3.3-70b-versatile'
 
 function buildPrompt(activity: Record<string, unknown>): string {
   const type = String(activity.activity_type ?? 'workout').replace(/_/g, ' ')
@@ -12,7 +12,6 @@ function buildPrompt(activity: Record<string, unknown>): string {
   const calories = activity.calories ? Math.round(Number(activity.calories)) : null
   const trainingEffect = activity.training_effect ?? null
 
-  // Pull extra fields from raw_payload if available
   const raw = (activity.raw_payload ?? {}) as Record<string, unknown>
   const avgPaceSecPerKm = raw.averageSpeed
     ? Math.round(1000 / Number(raw.averageSpeed))
@@ -52,6 +51,10 @@ Keep your response to around 150–200 words. Do not use bullet points or header
 }
 
 export async function POST(req: NextRequest) {
+  if (!GROQ_API_KEY) {
+    return NextResponse.json({ error: 'GROQ_API_KEY is not configured' }, { status: 503 })
+  }
+
   let body: { activity: Record<string, unknown> }
   try {
     body = await req.json()
@@ -66,46 +69,40 @@ export async function POST(req: NextRequest) {
 
   const prompt = buildPrompt(activity)
 
-  let ollamaRes: Response
+  let res: Response
   try {
-    ollamaRes = await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
+    res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${GROQ_API_KEY}`,
+      },
       body: JSON.stringify({
-        model: OLLAMA_MODEL,
-        prompt,
-        stream: false,
-        options: {
-          temperature: 0.7,
-          top_p: 0.9,
-          num_predict: 300,
-        },
+        model: GROQ_MODEL,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.7,
+        max_tokens: 400,
       }),
     })
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : 'Unknown error'
-    return NextResponse.json(
-      { error: `Cannot reach Ollama at ${OLLAMA_BASE_URL}. Is it running? (${msg})` },
-      { status: 503 }
-    )
+    const msg = e instanceof Error ? e.message : String(e)
+    return NextResponse.json({ error: `Cannot reach Groq API: ${msg}` }, { status: 503 })
   }
 
-  if (!ollamaRes.ok) {
-    const text = await ollamaRes.text()
-    return NextResponse.json(
-      { error: `Ollama error ${ollamaRes.status}: ${text}` },
-      { status: 502 }
-    )
+  if (!res.ok) {
+    const text = await res.text()
+    return NextResponse.json({ error: `Groq error ${res.status}: ${text}` }, { status: 502 })
   }
 
-  const data = await ollamaRes.json() as { response?: string; error?: string }
-
-  if (!data.response) {
-    return NextResponse.json(
-      { error: data.error ?? 'No response from model' },
-      { status: 502 }
-    )
+  const data = await res.json() as {
+    choices?: { message?: { content?: string } }[]
+    error?: { message?: string }
   }
 
-  return NextResponse.json({ analysis: data.response.trim() })
+  const text = data.choices?.[0]?.message?.content
+  if (!text) {
+    return NextResponse.json({ error: data.error?.message ?? 'No response from Groq' }, { status: 502 })
+  }
+
+  return NextResponse.json({ analysis: text.trim() })
 }
