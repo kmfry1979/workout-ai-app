@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { BottomNav } from '../../components/BottomNav'
 // Note: useState still used in ActivitiesPage for activities/loading/displayName
 import { supabase } from '../../lib/supabase'
 
@@ -212,7 +213,7 @@ export default function ActivitiesPage() {
   }
 
   return (
-    <main className="min-h-screen bg-gray-950 p-4 md:p-8">
+    <main className="min-h-screen bg-gray-950 p-4 md:p-8 pb-24">
       <div className="mx-auto max-w-2xl space-y-4">
 
         <div className="flex items-center justify-between">
@@ -237,6 +238,7 @@ export default function ActivitiesPage() {
           </div>
         )}
       </div>
+      <BottomNav />
     </main>
   )
 }

@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../../lib/supabase'
+import { BottomNav } from '../../components/BottomNav'
 
 type DailyMetrics = {
   metric_date: string
@@ -216,7 +217,7 @@ export default function DashboardPage() {
   const exerciseStr = scores?.exerciseMin ? `${scores.exerciseMin} min` : '—'
 
   return (
-    <main className="min-h-screen bg-gray-950 p-4 md:p-8">
+    <main className="min-h-screen bg-gray-950 p-4 md:p-8 pb-24">
       <div className="mx-auto max-w-2xl space-y-4">
 
         {/* Header */}
@@ -379,10 +380,8 @@ export default function DashboardPage() {
           </div>
         )}
 
-        <div className="text-center pb-4">
-          <a href="/activities" className="text-xs text-gray-600 underline">Activities & Coach</a>
-        </div>
       </div>
+      <BottomNav />
     </main>
   )
 }
