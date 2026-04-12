@@ -94,7 +94,7 @@ function HrZones({ raw }: { raw: Record<string, unknown> }) {
     return val != null ? Math.round(Number(val) / 60) : null
   })
 
-  const total = zones.reduce((s, v) => s + (v ?? 0), 0)
+  const total = zones.reduce((s, v) => (s ?? 0) + (v ?? 0), 0) as number
   if (total === 0) return null
 
   return (
