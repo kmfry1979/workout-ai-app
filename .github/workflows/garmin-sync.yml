@@ -1,9 +1,9 @@
 name: Garmin Sync
 
 on:
-  # Run daily at 6:30am UTC (after midnight in most US timezones so "today" is complete)
-  schedule:
-    - cron: "30 6 * * *"
+  # Schedule DISABLED — re-enable once Garmin 429 rate limit has cleared
+  # schedule:
+  #   - cron: "30 6 * * *"
 
   # Allow manual trigger from GitHub UI or via API dispatch from the website
   workflow_dispatch:
