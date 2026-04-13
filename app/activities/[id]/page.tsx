@@ -405,7 +405,7 @@ export default function ActivityDetailPage() {
   ].filter(Boolean) as { label: string; value: string; highlight?: boolean }[]
 
   return (
-    <main className="min-h-screen bg-gray-950 p-4 md:p-8 pb-24">
+    <main className="min-h-screen bg-gray-950 p-4 md:p-8 pb-32">
       <div className="mx-auto max-w-2xl space-y-4">
 
         {/* Back */}
