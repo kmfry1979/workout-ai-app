@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import { supabase } from '../../../lib/supabase'
+import { BottomNav } from '../../../components/BottomNav'
 
 type GarminActivity = {
   id: string
@@ -74,49 +75,244 @@ function formatPace(mps: number): string {
 
 // ─── Stat block ───────────────────────────────────────────────────────────────
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
   return (
     <div className="bg-gray-800/60 rounded-xl p-3">
       <p className="text-gray-500 text-xs mb-1">{label}</p>
-      <p className="text-white font-bold text-lg leading-none">{value}</p>
+      <p className={`font-bold text-lg leading-none ${highlight ? 'text-orange-400' : 'text-white'}`}>{value}</p>
     </div>
   )
 }
 
-// ─── HR Zones ─────────────────────────────────────────────────────────────────
+// ─── Training Effect Gauge ─────────────────────────────────────────────────────
 
-const ZONE_COLORS = ['bg-blue-500', 'bg-green-500', 'bg-yellow-500', 'bg-orange-500', 'bg-red-500']
+function TrainingEffectGauge({ aerobic, anaerobic }: { aerobic?: number; anaerobic?: number }) {
+  if (!aerobic && !anaerobic) return null
+
+  const teLabels = ['None', 'Minor', 'Maintaining', 'Improving', 'Highly Improving', 'Overreaching']
+  const teColors = ['#374151', '#3b82f6', '#22c55e', '#f59e0b', '#f97316', '#ef4444']
+
+  function Gauge({ value, label }: { value: number; label: string }) {
+    const pct = Math.min(value / 5, 1)
+    const radius = 40
+    const circumference = 2 * Math.PI * radius
+    // Only draw top half (semicircle)
+    const semiCirc = circumference / 2
+    const offset = semiCirc - pct * semiCirc
+    const colorIndex = Math.min(Math.floor(value), 5)
+    const color = teColors[colorIndex]
+    const teLabel = teLabels[Math.round(value)] ?? 'Unknown'
+
+    return (
+      <div className="flex flex-col items-center gap-1">
+        <div className="relative w-24 h-14">
+          <svg viewBox="0 0 100 52" className="w-full h-full">
+            {/* Background track */}
+            <path
+              d="M 10 50 A 40 40 0 0 1 90 50"
+              fill="none"
+              stroke="#374151"
+              strokeWidth="10"
+              strokeLinecap="round"
+            />
+            {/* Filled arc */}
+            <path
+              d="M 10 50 A 40 40 0 0 1 90 50"
+              fill="none"
+              stroke={color}
+              strokeWidth="10"
+              strokeLinecap="round"
+              strokeDasharray={`${semiCirc}`}
+              strokeDashoffset={`${offset}`}
+              style={{ transition: 'stroke-dashoffset 1s ease' }}
+            />
+          </svg>
+          <div className="absolute inset-0 flex flex-col items-center justify-end pb-1">
+            <span className="text-white font-bold text-lg leading-none">{value.toFixed(1)}</span>
+          </div>
+        </div>
+        <p className="text-gray-500 text-xs">{label}</p>
+        <p className="text-xs font-medium" style={{ color }}>{teLabel}</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="bg-gray-900 rounded-2xl p-4">
+      <h3 className="text-white font-semibold text-sm mb-4">Training Effect</h3>
+      <div className="flex justify-around">
+        {aerobic != null && <Gauge value={aerobic} label="Aerobic" />}
+        {anaerobic != null && <Gauge value={anaerobic} label="Anaerobic" />}
+      </div>
+      <p className="text-gray-600 text-xs text-center mt-3">Scale: 0–5 · 5 = Overreaching</p>
+    </div>
+  )
+}
+
+// ─── HR Zone Donut ────────────────────────────────────────────────────────────
+
+const ZONE_STROKE_COLORS = ['#3b82f6', '#22c55e', '#eab308', '#f97316', '#ef4444']
+const ZONE_BG_COLORS = ['bg-blue-500', 'bg-green-500', 'bg-yellow-500', 'bg-orange-500', 'bg-red-500']
 const ZONE_LABELS = ['Z1 Recovery', 'Z2 Aerobic', 'Z3 Tempo', 'Z4 Threshold', 'Z5 Max']
+const ZONE_SHORT = ['Z1', 'Z2', 'Z3', 'Z4', 'Z5']
 
 function HrZones({ raw }: { raw: Record<string, unknown> }) {
   const zones = [1, 2, 3, 4, 5].map(i => {
     const val = raw[`hrTimeInZone_${i}`] ?? raw[`timeInHRZone${i}`]
-    return val != null ? Math.round(Number(val) / 60) : null
+    return val != null ? Math.round(Number(val) / 60) : 0
   })
 
-  const total = zones.reduce((s, v) => (s ?? 0) + (v ?? 0), 0) as number
+  const total = zones.reduce((s, v) => s + v, 0)
   if (total === 0) return null
+
+  // Build donut segments
+  const radius = 42
+  const cx = 60
+  const cy = 60
+  const circumference = 2 * Math.PI * radius
+  let cumulativePct = 0
+
+  const segments = zones.map((min, i) => {
+    const pct = total > 0 ? min / total : 0
+    const offset = circumference * (1 - pct)
+    const rotation = cumulativePct * 360 - 90
+    cumulativePct += pct
+    return { pct, offset, rotation, min, color: ZONE_STROKE_COLORS[i] }
+  })
+
+  const dominantZone = zones.indexOf(Math.max(...zones))
+  const dominantPct = total > 0 ? Math.round((zones[dominantZone] / total) * 100) : 0
 
   return (
     <div className="bg-gray-900 rounded-2xl p-4">
-      <h3 className="text-white font-semibold text-sm mb-3">Heart Rate Zones</h3>
-      <div className="space-y-2">
-        {zones.map((min, i) => {
-          if (min == null) return null
-          const pct = total > 0 ? Math.round((min / total) * 100) : 0
-          return (
-            <div key={i} className="flex items-center gap-3">
-              <span className="text-gray-400 text-xs w-24 shrink-0">{ZONE_LABELS[i]}</span>
-              <div className="flex-1 bg-gray-800 rounded-full h-2">
-                <div
-                  className={`${ZONE_COLORS[i]} h-2 rounded-full transition-all`}
-                  style={{ width: `${pct}%` }}
+      <h3 className="text-white font-semibold text-sm mb-4">Heart Rate Zones</h3>
+      <div className="flex gap-4 items-center">
+        {/* Donut */}
+        <div className="relative shrink-0">
+          <svg width="120" height="120" viewBox="0 0 120 120">
+            {/* Background ring */}
+            <circle cx={cx} cy={cy} r={radius} fill="none" stroke="#1f2937" strokeWidth="16" />
+            {segments.map((seg, i) => (
+              seg.pct > 0 ? (
+                <circle
+                  key={i}
+                  cx={cx}
+                  cy={cy}
+                  r={radius}
+                  fill="none"
+                  stroke={seg.color}
+                  strokeWidth="16"
+                  strokeDasharray={`${circumference * seg.pct} ${circumference * (1 - seg.pct)}`}
+                  strokeDashoffset={circumference * 0.25}
+                  transform={`rotate(${seg.rotation} ${cx} ${cy})`}
+                  strokeLinecap="butt"
                 />
+              ) : null
+            ))}
+          </svg>
+          {/* Centre label */}
+          <div className="absolute inset-0 flex flex-col items-center justify-center">
+            <span className="text-white font-bold text-lg leading-none">{dominantPct}%</span>
+            <span className="text-gray-500 text-xs">{ZONE_SHORT[dominantZone]}</span>
+          </div>
+        </div>
+
+        {/* Legend + bars */}
+        <div className="flex-1 space-y-2">
+          {zones.map((min, i) => {
+            const pct = total > 0 ? Math.round((min / total) * 100) : 0
+            return (
+              <div key={i} className="flex items-center gap-2">
+                <div className={`w-2 h-2 rounded-full shrink-0 ${ZONE_BG_COLORS[i]}`} />
+                <span className="text-gray-400 text-xs w-20 shrink-0">{ZONE_LABELS[i]}</span>
+                <div className="flex-1 bg-gray-800 rounded-full h-1.5">
+                  <div
+                    className={`${ZONE_BG_COLORS[i]} h-1.5 rounded-full`}
+                    style={{ width: `${pct}%` }}
+                  />
+                </div>
+                <span className="text-gray-500 text-xs w-8 text-right shrink-0">{min}m</span>
               </div>
-              <span className="text-gray-400 text-xs w-10 text-right shrink-0">{min}m</span>
-            </div>
-          )
-        })}
+            )
+          })}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Effort Summary (for runs/walks) ─────────────────────────────────────────
+
+function EffortSummary({ activity, raw }: { activity: GarminActivity; raw: Record<string, unknown> }) {
+  const avgSpeed = raw.averageSpeed as number | undefined
+  const maxSpeed = raw.maxSpeed as number | undefined
+  const avgCadence = raw.averageRunningCadenceInStepsPerMinute as number | undefined
+  const maxCadence = raw.maxRunningCadenceInStepsPerMinute as number | undefined
+  const avgStrideLen = raw.avgStrideLength as number | undefined
+  const vo2max = (raw.vO2MaxValue ?? raw.vo2MaxValue) as number | undefined
+
+  const hasData = avgSpeed || avgCadence || vo2max
+  if (!hasData) return null
+
+  const items = [
+    avgSpeed && activity.distance_m && activity.distance_m > 100
+      ? { label: 'Avg Pace', value: formatPace(avgSpeed), sub: null }
+      : null,
+    maxSpeed && activity.distance_m && activity.distance_m > 100
+      ? { label: 'Best Pace', value: formatPace(maxSpeed), sub: null }
+      : null,
+    avgCadence ? { label: 'Avg Cadence', value: `${Math.round(avgCadence)} spm`, sub: maxCadence ? `max ${Math.round(maxCadence)}` : null } : null,
+    avgStrideLen ? { label: 'Stride Length', value: `${(Number(avgStrideLen)).toFixed(2)} m`, sub: null } : null,
+    vo2max ? { label: 'VO2 Max', value: String(vo2max), sub: 'mL/kg/min' } : null,
+  ].filter(Boolean) as { label: string; value: string; sub: string | null }[]
+
+  if (items.length === 0) return null
+
+  return (
+    <div className="bg-gray-900 rounded-2xl p-4">
+      <h3 className="text-white font-semibold text-sm mb-3">Performance</h3>
+      <div className="grid grid-cols-2 gap-3">
+        {items.map(item => (
+          <div key={item.label} className="bg-gray-800/60 rounded-xl p-3">
+            <p className="text-gray-500 text-xs mb-1">{item.label}</p>
+            <p className="text-white font-bold text-base leading-none">{item.value}</p>
+            {item.sub && <p className="text-gray-600 text-xs mt-0.5">{item.sub}</p>}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ─── Relative Effort Bar ──────────────────────────────────────────────────────
+
+function RelativeEffort({ raw }: { raw: Record<string, unknown> }) {
+  const aerobicTE = raw.aerobicTrainingEffect as number | undefined
+  const anaerobicTE = raw.anaerobicTrainingEffect as number | undefined
+  if (!aerobicTE && !anaerobicTE) return null
+
+  // Combine into overall effort 0–100
+  const combined = Math.min(((aerobicTE ?? 0) + (anaerobicTE ?? 0)) / 10 * 100, 100)
+  const label = combined < 20 ? 'Very Low' : combined < 40 ? 'Low' : combined < 60 ? 'Moderate' : combined < 80 ? 'High' : 'Very High'
+  const color = combined < 40 ? '#22c55e' : combined < 70 ? '#f97316' : '#ef4444'
+
+  return (
+    <div className="bg-gray-900 rounded-2xl p-4">
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-white font-semibold text-sm">Relative Effort</h3>
+        <span className="text-xs font-bold px-2 py-0.5 rounded-full" style={{ color, background: `${color}22` }}>
+          {label}
+        </span>
+      </div>
+      <div className="bg-gray-800 rounded-full h-3 overflow-hidden">
+        <div
+          className="h-3 rounded-full transition-all duration-1000"
+          style={{ width: `${combined}%`, background: `linear-gradient(90deg, #22c55e, ${color})` }}
+        />
+      </div>
+      <div className="flex justify-between text-gray-600 text-xs mt-1">
+        <span>Easy</span>
+        <span>Max</span>
       </div>
     </div>
   )
@@ -154,7 +350,6 @@ export default function ActivityDetailPage() {
     load()
   }, [id, router])
 
-  // Auto-fetch AI analysis once activity is loaded
   useEffect(() => {
     if (!activity) return
     setAnalysisLoading(true)
@@ -174,8 +369,9 @@ export default function ActivityDetailPage() {
 
   if (loading || !activity) {
     return (
-      <main className="min-h-screen bg-gray-950 flex items-center justify-center">
+      <main className="min-h-screen bg-gray-950 flex items-center justify-center pb-16">
         <p className="text-gray-400">Loading activity...</p>
+        <BottomNav />
       </main>
     )
   }
@@ -195,26 +391,21 @@ export default function ActivityDetailPage() {
   const avgSpeed = raw.averageSpeed as number | undefined
   const aerobicTE = raw.aerobicTrainingEffect as number | undefined
   const anaerobicTE = raw.anaerobicTrainingEffect as number | undefined
-  const vo2max = (raw.vO2MaxValue ?? raw.vo2MaxValue) as number | undefined
   const steps = raw.steps as number | undefined
-  const avgCadence = raw.averageRunningCadenceInStepsPerMinute as number | undefined
 
-  const stats: { label: string; value: string }[] = [
+  // Primary stats grid
+  const stats: { label: string; value: string; highlight?: boolean }[] = [
     activity.duration_sec ? { label: 'Duration', value: formatDuration(activity.duration_sec) } : null,
     activity.distance_m && activity.distance_m > 100 ? { label: 'Distance', value: formatDistance(activity.distance_m) } : null,
-    avgSpeed && activity.distance_m && activity.distance_m > 100 ? { label: 'Avg Pace', value: formatPace(avgSpeed) } : null,
+    avgSpeed && activity.distance_m && activity.distance_m > 100 ? { label: 'Avg Pace', value: formatPace(avgSpeed), highlight: true } : null,
     activity.avg_hr ? { label: 'Avg HR', value: `${activity.avg_hr} bpm` } : null,
     activity.max_hr ? { label: 'Max HR', value: `${activity.max_hr} bpm` } : null,
     activity.calories ? { label: 'Calories', value: `${Math.round(activity.calories)} kcal` } : null,
-    aerobicTE ? { label: 'Aerobic TE', value: `${Number(aerobicTE).toFixed(1)} / 5.0` } : null,
-    anaerobicTE ? { label: 'Anaerobic TE', value: `${Number(anaerobicTE).toFixed(1)} / 5.0` } : null,
-    vo2max ? { label: 'VO2 Max', value: String(vo2max) } : null,
-    steps ? { label: 'Steps', value: steps.toLocaleString() } : null,
-    avgCadence ? { label: 'Cadence', value: `${Math.round(avgCadence)} spm` } : null,
-  ].filter(Boolean) as { label: string; value: string }[]
+    steps && steps > 20 ? { label: 'Steps', value: steps.toLocaleString() } : null,
+  ].filter(Boolean) as { label: string; value: string; highlight?: boolean }[]
 
   return (
-    <main className="min-h-screen bg-gray-950 p-4 md:p-8">
+    <main className="min-h-screen bg-gray-950 p-4 md:p-8 pb-24">
       <div className="mx-auto max-w-2xl space-y-4">
 
         {/* Back */}
@@ -229,23 +420,27 @@ export default function ActivityDetailPage() {
               <p className="text-gray-400 text-sm mt-1">{dateStr} · {timeStr}</p>
               {location && <p className="text-gray-500 text-xs mt-0.5">📍 {location}</p>}
             </div>
-            {activity.training_effect != null && (
-              <div className="bg-orange-500/20 text-orange-400 text-sm font-bold px-3 py-1.5 rounded-xl shrink-0">
-                TE {activity.training_effect.toFixed(1)}
-              </div>
-            )}
           </div>
         </div>
 
-        {/* Stats grid */}
+        {/* Primary stats */}
         {stats.length > 0 && (
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-            {stats.map(s => <Stat key={s.label} label={s.label} value={s.value} />)}
+            {stats.map(s => <Stat key={s.label} label={s.label} value={s.value} highlight={s.highlight} />)}
           </div>
         )}
 
-        {/* HR Zones */}
+        {/* Relative effort bar */}
+        <RelativeEffort raw={raw} />
+
+        {/* Training effect gauges */}
+        <TrainingEffectGauge aerobic={aerobicTE} anaerobic={anaerobicTE} />
+
+        {/* HR Zone donut + breakdown */}
         <HrZones raw={raw} />
+
+        {/* Performance stats (pace, cadence, VO2) */}
+        <EffortSummary activity={activity} raw={raw} />
 
         {/* AI Coach */}
         <div className="bg-gray-900 rounded-2xl overflow-hidden">
@@ -260,16 +455,13 @@ export default function ActivityDetailPage() {
                 Analysing your session...
               </div>
             )}
-            {analysisError && (
-              <p className="text-red-400 text-sm">{analysisError}</p>
-            )}
-            {analysis && (
-              <p className="text-gray-200 text-sm leading-relaxed">{analysis}</p>
-            )}
+            {analysisError && <p className="text-red-400 text-sm">{analysisError}</p>}
+            {analysis && <p className="text-gray-200 text-sm leading-relaxed">{analysis}</p>}
           </div>
         </div>
 
       </div>
+      <BottomNav />
     </main>
   )
 }
