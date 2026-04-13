@@ -456,7 +456,16 @@ export default function ActivityDetailPage() {
               </div>
             )}
             {analysisError && <p className="text-red-400 text-sm">{analysisError}</p>}
-            {analysis && <p className="text-gray-200 text-sm leading-relaxed">{analysis}</p>}
+            {analysis && (
+              <div className="relative">
+                <div className="h-48 overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent">
+                  <p className="text-gray-200 text-sm leading-relaxed">{analysis}</p>
+                </div>
+                {/* Fade indicator at bottom */}
+                <div className="absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-gray-900 to-transparent pointer-events-none rounded-b-xl" />
+                <p className="text-gray-600 text-xs text-center mt-2">↕ scroll to read more</p>
+              </div>
+            )}
           </div>
         </div>
 
