@@ -458,7 +458,7 @@ export default function ActivityDetailPage() {
             {analysisError && <p className="text-red-400 text-sm">{analysisError}</p>}
             {analysis && (
               <div className="relative">
-                <div className="h-48 overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent">
+                <div className="h-48 overflow-y-auto pr-2" style={{ scrollbarWidth: 'thin', scrollbarColor: '#f97316 #1f2937' }}>
                   <p className="text-gray-200 text-sm leading-relaxed">{analysis}</p>
                 </div>
                 {/* Fade indicator at bottom */}
