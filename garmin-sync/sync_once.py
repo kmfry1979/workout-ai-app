@@ -323,13 +323,20 @@ def login_garmin() -> Garmin:
     # 429 on password path too — raise immediately rather than wasting an attempt
     try:
         print("Logging in with email/password...")
-        api = Garmin(
-            email=GARMIN_EMAIL,
-            password=GARMIN_PASSWORD,
-            is_cn=False,
-        )
-
-        api.login()
+        # Temporarily unset GARMINTOKENS so garminconnect doesn't try to load
+        # missing/stale token files that were just cleared above.
+        import os as _os
+        _saved_garmintokens = _os.environ.pop("GARMINTOKENS", None)
+        try:
+            api = Garmin(
+                email=GARMIN_EMAIL,
+                password=GARMIN_PASSWORD,
+                is_cn=False,
+            )
+            api.login()
+        finally:
+            if _saved_garmintokens:
+                _os.environ["GARMINTOKENS"] = _saved_garmintokens
 
         # Save tokens locally and to Supabase
         api.garth.dump(str(TOKENS_DIR))
