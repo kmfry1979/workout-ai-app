@@ -211,10 +211,20 @@ def load_tokens_from_supabase(user_id: str) -> bool:
         token_files: dict[str, str] = result[0]["token_files"]
         TOKENS_DIR.mkdir(parents=True, exist_ok=True)
 
+        written = 0
         for filename, content in token_files.items():
+            if not content or not content.strip():
+                print(f"WARNING: token file '{filename}' in Supabase is empty — skipping.")
+                continue
+            print(f"DEBUG token '{filename}' first 80 chars: {content[:80]}")
             (TOKENS_DIR / filename).write_text(content, encoding="utf-8")
+            written += 1
 
-        print(f"Loaded {len(token_files)} token file(s) from Supabase.")
+        if written == 0:
+            print("No valid (non-empty) token files found in Supabase.")
+            return False
+
+        print(f"Loaded {written} token file(s) from Supabase.")
         return True
     except Exception as exc:
         print(f"Could not load tokens from Supabase: {exc}")
@@ -317,14 +327,9 @@ def login_garmin() -> Garmin:
             email=GARMIN_EMAIL,
             password=GARMIN_PASSWORD,
             is_cn=False,
-            return_on_mfa=True,
         )
 
-        result1, result2 = api.login()
-
-        if result1 == "needs_mfa":
-            mfa_code = input("Garmin MFA code: ").strip()
-            api.resume_login(result2, mfa_code)
+        api.login()
 
         # Save tokens locally and to Supabase
         api.garth.dump(str(TOKENS_DIR))
