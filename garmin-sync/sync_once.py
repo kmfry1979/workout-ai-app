@@ -42,7 +42,6 @@ from garminconnect import (
     GarminConnectConnectionError,
     GarminConnectTooManyRequestsError,
 )
-from garth.exc import GarthException, GarthHTTPError
 
 
 load_dotenv()
@@ -231,19 +230,12 @@ def load_tokens_from_supabase(user_id: str) -> bool:
         return False
 
 
-def save_tokens_to_supabase(user_id: str) -> None:
+def save_tokens_to_supabase(user_id: str, token_content: str) -> None:
     """
-    Read token files from TOKENS_DIR and upsert into garmin_token_store.
+    Upsert the garmin_tokens.json content (from api.client.dumps()) into garmin_token_store.
     """
-    if not TOKENS_DIR.exists():
-        return
-
-    token_files: dict[str, str] = {}
-    for file_path in TOKENS_DIR.iterdir():
-        if file_path.is_file():
-            token_files[file_path.name] = file_path.read_text(encoding="utf-8")
-
-    if not token_files:
+    if not token_content or not token_content.strip():
+        print("Warning: token content is empty, skipping Supabase save.")
         return
 
     try:
@@ -253,11 +245,11 @@ def save_tokens_to_supabase(user_id: str) -> None:
             params={"on_conflict": "user_id"},
             json_body={
                 "user_id": user_id,
-                "token_files": token_files,
+                "token_files": {"garmin_tokens.json": token_content},
                 "updated_at": utc_now_iso(),
             },
         )
-        print(f"Saved {len(token_files)} token file(s) to Supabase.")
+        print("Saved tokens to Supabase.")
     except Exception as exc:
         print(f"Warning: could not save tokens to Supabase: {exc}")
 
@@ -268,48 +260,32 @@ def save_tokens_to_supabase(user_id: str) -> None:
 
 def login_garmin() -> Garmin:
     """
-    In CI (GitHub Actions): token-only login. Never attempts password login —
-    failed password attempts count against Garmin's rate limit and make things worse.
-    Run bootstrap_tokens.py locally to upload fresh tokens when needed.
+    In CI (GitHub Actions): token-only login using garmin_tokens.json from Supabase.
+    Never attempts password login — failed attempts count against Garmin's rate limit.
+    Run bootstrap_tokens.py (or the web reauth flow) to upload fresh tokens when needed.
 
     Locally: token login first, then password fallback.
     """
-    # GitHub Actions sets CI=true; treat any non-empty CI env as hosted runner.
     in_ci = bool(os.getenv("CI", "").strip())
 
     TOKENS_DIR.mkdir(parents=True, exist_ok=True)
-    oauth_file = TOKENS_DIR / "oauth1_token.json"
+    token_file = TOKENS_DIR / "garmin_tokens.json"
 
-    # If no local tokens, try pulling from Supabase first
-    if not oauth_file.exists():
+    # If no local token file, try pulling from Supabase first
+    if not token_file.exists():
         load_tokens_from_supabase(SUPABASE_USER_ID)
 
-    if oauth_file.exists():
+    if token_file.exists():
         try:
             print("Using existing Garmin tokens...")
-            api = Garmin()
-            api.login(str(TOKENS_DIR))
+            api = Garmin(is_cn=False)
+            api.login(tokenstore=str(TOKENS_DIR))
             return api
         except GarminConnectTooManyRequestsError as exc:
             raise RuntimeError(
                 f"Garmin rate limit (429) hit during token login. "
                 f"Wait 24h before retrying. Details: {exc}"
             ) from exc
-        except GarthHTTPError as exc:
-            if "429" in str(exc) or "Too Many" in str(exc):
-                raise RuntimeError(
-                    f"Garmin rate limit (429) hit during token exchange. "
-                    f"Wait 24h before retrying. Details: {exc}"
-                ) from exc
-            if in_ci:
-                raise RuntimeError(
-                    f"Token login failed in CI and password fallback is disabled to protect "
-                    f"against rate limiting. Run bootstrap_tokens.py locally to upload fresh "
-                    f"tokens to Supabase. Error: {exc}"
-                ) from exc
-            print(f"Token login failed ({exc}), falling back to password login.")
-            for f in TOKENS_DIR.glob("*.json"):
-                f.unlink(missing_ok=True)
         except Exception as exc:
             err_str = str(exc)
             print(f"DEBUG exc type: {type(exc).__name__}, str: {err_str[:200]}")
@@ -321,17 +297,16 @@ def login_garmin() -> Garmin:
             if in_ci:
                 raise RuntimeError(
                     f"Token login failed in CI and password fallback is disabled to protect "
-                    f"against rate limiting. Run bootstrap_tokens.py locally to upload fresh "
+                    f"against rate limiting. Re-run bootstrap_tokens.py to upload fresh "
                     f"tokens to Supabase. Error: {exc}"
                 ) from exc
             print(f"Token login failed ({exc}), falling back to password login.")
-            for f in TOKENS_DIR.glob("*.json"):
-                f.unlink(missing_ok=True)
+            token_file.unlink(missing_ok=True)
 
     if in_ci:
         raise RuntimeError(
             "No valid tokens found in Supabase and password login is disabled in CI. "
-            "Run bootstrap_tokens.py locally to upload fresh tokens to Supabase."
+            "Run bootstrap_tokens.py to upload fresh tokens to Supabase."
         )
 
     if not GARMIN_EMAIL or not GARMIN_PASSWORD:
@@ -343,30 +318,21 @@ def login_garmin() -> Garmin:
     # Local password fallback
     try:
         print("Logging in with email/password...")
-        import os as _os
-        _saved_garmintokens = _os.environ.pop("GARMINTOKENS", None)
-        try:
-            api = Garmin(
-                email=GARMIN_EMAIL,
-                password=GARMIN_PASSWORD,
-                is_cn=False,
-            )
-            api.login()
-        finally:
-            if _saved_garmintokens:
-                _os.environ["GARMINTOKENS"] = _saved_garmintokens
-
-        api.garth.dump(str(TOKENS_DIR))
-        save_tokens_to_supabase(SUPABASE_USER_ID)
-
-        print("Garmin login successful, tokens saved.")
+        api = Garmin(
+            email=GARMIN_EMAIL,
+            password=GARMIN_PASSWORD,
+            is_cn=False,
+            prompt_mfa=lambda: input("Enter Garmin MFA code: ").strip(),
+        )
+        api.login()
+        print("Garmin login successful.")
         return api
 
     except GarminConnectTooManyRequestsError as exc:
         raise RuntimeError(
             f"Garmin rate limit (429) on password login. Wait 24h. Details: {exc}"
         ) from exc
-    except GarthHTTPError as exc:
+    except Exception as exc:
         if "429" in str(exc) or "Too Many" in str(exc):
             raise RuntimeError(
                 f"Garmin rate limit (429) on password login. Wait 24h. Details: {exc}"
@@ -720,8 +686,7 @@ def main() -> None:
     api = login_garmin()
 
     # Save refreshed tokens back to Supabase after every successful login
-    if TOKENS_DIR.exists():
-        save_tokens_to_supabase(SUPABASE_USER_ID)
+    save_tokens_to_supabase(SUPABASE_USER_ID, api.client.dumps())
 
     full_name = get_user_profile_name(api) or ""
 

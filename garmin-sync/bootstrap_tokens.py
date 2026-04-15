@@ -31,7 +31,6 @@ GARMIN_PASSWORD = os.getenv("GARMIN_PASSWORD", "").strip()
 SUPABASE_URL    = (os.getenv("SUPABASE_URL") or os.getenv("NEXT_PUBLIC_SUPABASE_URL") or "").rstrip("/")
 SUPABASE_KEY    = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
 SUPABASE_USER_ID = os.getenv("SUPABASE_USER_ID", "").strip()
-TOKENS_DIR      = Path(__file__).parent / "tokens"
 
 # ── validation ────────────────────────────────────────────────────────────────
 
@@ -51,53 +50,37 @@ if missing:
 # ── Garmin login ───────────────────────────────────────────────────────────────
 
 print(f"Logging in to Garmin as {GARMIN_EMAIL} ...")
-TOKENS_DIR.mkdir(parents=True, exist_ok=True)
 
-# Unset GARMINTOKENS so garminconnect doesn't try to load stale files
 os.environ.pop("GARMINTOKENS", None)
 
-api = Garmin(email=GARMIN_EMAIL, password=GARMIN_PASSWORD, is_cn=False)
+def mfa_prompt() -> str:
+    return input("Enter Garmin MFA code: ").strip()
 
+api = Garmin(
+    email=GARMIN_EMAIL,
+    password=GARMIN_PASSWORD,
+    is_cn=False,
+    prompt_mfa=mfa_prompt,
+)
+api.login()
+
+# ── Get token content ──────────────────────────────────────────────────────────
+
+token_content = api.client.dumps()
+
+if not token_content or not token_content.strip():
+    print("ERROR: token content is empty after login — something went wrong.")
+    sys.exit(1)
+
+# Validate it's real JSON
 try:
-    api.login()
-except Exception as exc:
-    err = str(exc)
-    if "MFA" in err or "mfa" in err or "factor" in err.lower():
-        print("MFA required. Check your email/phone for the code.")
-        code = input("Enter MFA code: ").strip()
-        # garminconnect 0.2.x doesn't expose resume_login without return_on_mfa,
-        # so we need to use garth directly if MFA is needed.
-        print("ERROR: MFA flow not supported in automated bootstrap.")
-        print("Disable MFA temporarily in your Garmin account, run this script, then re-enable it.")
-        sys.exit(1)
-    raise
-
-# ── Save tokens locally ────────────────────────────────────────────────────────
-
-api.garth.dump(str(TOKENS_DIR))
-
-token_files_found = list(TOKENS_DIR.glob("*.json"))
-print(f"Saved {len(token_files_found)} token file(s) locally: {[f.name for f in token_files_found]}")
-
-# Verify files are non-empty valid JSON
-for f in token_files_found:
-    content = f.read_text(encoding="utf-8").strip()
-    if not content:
-        print(f"ERROR: {f.name} is empty after login — something went wrong.")
-        sys.exit(1)
-    try:
-        json.loads(content)
-        print(f"  ✓ {f.name} ({len(content)} bytes, valid JSON)")
-    except json.JSONDecodeError as e:
-        print(f"  ✗ {f.name} is not valid JSON: {e}")
-        sys.exit(1)
+    json.loads(token_content)
+    print(f"  ✓ garmin_tokens.json ({len(token_content)} bytes, valid JSON)")
+except json.JSONDecodeError as e:
+    print(f"  ✗ Token content is not valid JSON: {e}")
+    sys.exit(1)
 
 # ── Upload to Supabase ─────────────────────────────────────────────────────────
-
-token_files: dict[str, str] = {
-    f.name: f.read_text(encoding="utf-8")
-    for f in token_files_found
-}
 
 headers = {
     "apikey": SUPABASE_KEY,
@@ -112,7 +95,7 @@ resp = requests.post(
     params={"on_conflict": "user_id"},
     json={
         "user_id": SUPABASE_USER_ID,
-        "token_files": token_files,
+        "token_files": {"garmin_tokens.json": token_content},
     },
     timeout=15,
 )
