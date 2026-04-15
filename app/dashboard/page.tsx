@@ -145,113 +145,6 @@ function readinessColor(score: number) {
   return '#ef4444'
 }
 
-function generateAIInsight(
-  metrics: DailyMetrics | null,
-  sleep: SleepData | null,
-  health: DailyHealthMetrics | null,
-  steps: DailySteps | null,
-  activities: ActivitySummary[]
-): string {
-  const insights: string[] = []
-  const recommendations: string[] = []
-
-  // Check body battery
-  const bbEnd = health?.body_battery_end ?? metrics?.garmin_body_battery_eod
-  if (bbEnd !== null && bbEnd !== undefined) {
-    if (bbEnd < 30) {
-      insights.push(`Your Body Battery is critically low (${bbEnd}).`)
-      recommendations.push('Prioritize recovery today - consider light stretching, meditation, or a rest day.')
-    } else if (bbEnd < 50) {
-      insights.push(`Your Body Battery is moderate (${bbEnd}).`)
-      recommendations.push('A light to moderate workout would be appropriate. Avoid high-intensity training.')
-    } else if (bbEnd >= 70) {
-      insights.push(`Excellent Body Battery (${bbEnd}) - you're well recovered!`)
-      recommendations.push('Great day for a challenging workout - consider intervals, tempo run, or heavy lifting.')
-    }
-  }
-
-  // Check sleep quality
-  const sleepScore = sleep?.sleep_score ?? metrics?.garmin_sleep_score
-  const sleepDuration = sleep?.sleep_duration_seconds ?? metrics?.sleep_minutes
-  if (sleepScore !== null && sleepScore !== undefined) {
-    if (sleepScore < 50) {
-      insights.push(`Poor sleep quality last night (score: ${sleepScore}).`)
-      recommendations.push('Focus on recovery and consider an earlier bedtime tonight. Avoid caffeine after 2pm.')
-    } else if (sleepScore >= 70) {
-      insights.push(`Great sleep quality (score: ${sleepScore}).`)
-    }
-  }
-  if (sleepDuration !== null && sleepDuration !== undefined) {
-    const sleepHours = sleepDuration / 3600
-    if (sleepHours < 6) {
-      insights.push(`Sleep duration was short (${sleepHours.toFixed(1)} hours).`)
-      recommendations.push('Aim for 7-9 hours tonight for optimal recovery.')
-    } else if (sleepHours >= 8) {
-      insights.push(`Solid sleep duration (${sleepHours.toFixed(1)} hours).`)
-    }
-  }
-
-  // Check HRV
-  const hrv = health?.hrv_avg ?? metrics?.garmin_hrv_nightly_avg
-  const hrvStatus = health?.hrv_status ?? metrics?.garmin_hrv_status
-  if (hrvStatus) {
-    if (hrvStatus.toLowerCase().includes('low') || hrvStatus.toLowerCase().includes('poor')) {
-      insights.push(`HRV status is ${hrvStatus}.`)
-      recommendations.push('Your nervous system may be stressed. Light activity or rest recommended.')
-    } else if (hrvStatus.toLowerCase().includes('good') || hrvStatus.toLowerCase().includes('excellent')) {
-      insights.push(`HRV status is ${hrvStatus} - your body is handling stress well.`)
-    }
-  }
-
-  // Check stress
-  const stressAvg = health?.stress_avg ?? metrics?.garmin_stress_avg
-  if (stressAvg !== null && stressAvg !== undefined) {
-    if (stressAvg >= 50) {
-      insights.push(`Elevated stress levels today (avg: ${stressAvg}).`)
-      recommendations.push('Consider stress-reduction activities like yoga, walking, or breathing exercises.')
-    }
-  }
-
-  // Check recent activity
-  const todayActivities = activities.filter(a => {
-    const d = new Date(a.start_time)
-    return d.toDateString() === new Date().toDateString()
-  })
-  const exerciseMin = todayActivities.reduce((s, a) => s + (a.duration_sec ?? 0) / 60, 0)
-  if (exerciseMin > 60) {
-    insights.push(`You've already exercised ${Math.round(exerciseMin)} minutes today.`)
-    if (bbEnd !== null && bbEnd !== undefined && bbEnd < 50) {
-      recommendations.push('You may be accumulating fatigue. Ensure adequate rest between sessions.')
-    }
-  }
-
-  // Check steps
-  const totalSteps = steps?.total_steps ?? metrics?.steps
-  if (totalSteps !== null && totalSteps !== undefined) {
-    if (totalSteps < 5000) {
-      insights.push(`Low step count today (${totalSteps.toLocaleString()} steps).`)
-      recommendations.push('Try to get moving with a light walk to boost circulation and recovery.')
-    } else if (totalSteps >= 10000) {
-      insights.push(`Great step count today (${totalSteps.toLocaleString()} steps)!`)
-    }
-  }
-
-  // Build final insight
-  let result = ''
-  if (insights.length > 0) {
-    result += '📊 Current Status:\n' + insights.join(' ') + '\n\n'
-  }
-  if (recommendations.length > 0) {
-    result += '💡 Recommendation:\n' + recommendations.join(' ')
-  }
-
-  if (!result) {
-    result = 'Sync your Garmin data to get personalized AI insights and training recommendations.'
-  }
-
-  return result
-}
-
 function RadarBar({ label, value, icon }: { label: string; value: number; icon: string }) {
   const color = value >= 70 ? '#22c55e' : value >= 45 ? '#eab308' : '#ef4444'
   return (
@@ -384,6 +277,72 @@ export default function DashboardPage() {
     )
   }
 
+  const fetchAIInsight = async () => {
+    if (aiInsight || aiLoading) return
+    setAiLoading(true)
+    try {
+      const today = new Date().toISOString().split('T')[0]
+      const stepsVal = dailySteps?.total_steps ?? metrics?.steps ?? null
+      const bodyBatteryEnd = dailyHealth?.body_battery_end ?? metrics?.garmin_body_battery_eod ?? null
+
+      const recentActs = activities.slice(0, 7).map(a => ({
+        type: a.activity_type?.replace(/_/g, ' ') ?? 'activity',
+        durationMin: a.duration_sec ? Math.round(a.duration_sec / 60) : null,
+        distanceKm: null as number | null,
+        avgHr: null as number | null,
+        calories: null as number | null,
+        trainingEffect: null as number | null,
+        date: new Date(a.start_time).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }),
+      }))
+
+      const readinessScore = metrics ? computeScores(metrics, activities).readiness : null
+      const readinessLbl = readinessScore != null ? readinessLabel(readinessScore) : null
+
+      const res = await fetch('/api/ai/snapshot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          metrics: {
+            hrv: dailyHealth?.hrv_avg ?? metrics?.garmin_hrv_nightly_avg ?? null,
+            hrvStatus: dailyHealth?.hrv_status ?? metrics?.garmin_hrv_status ?? null,
+            sleepScore: sleepData?.sleep_score ?? metrics?.garmin_sleep_score ?? null,
+            sleepDurationSeconds: sleepData?.sleep_duration_seconds ?? (metrics?.sleep_minutes != null ? metrics.sleep_minutes * 60 : null),
+            deepSeconds: sleepData?.deep_sleep_seconds ?? null,
+            remSeconds: sleepData?.rem_sleep_seconds ?? null,
+            bodyBatteryHigh: dailyHealth?.body_battery_peak ?? metrics?.garmin_body_battery_high ?? null,
+            bodyBatteryLow: dailyHealth?.body_battery_low ?? null,
+            bodyBatteryEnd: bodyBatteryEnd,
+            stressAvg: dailyHealth?.stress_avg ?? metrics?.garmin_stress_avg ?? null,
+            stressMax: dailyHealth?.stress_max ?? null,
+            restingHr: metrics?.resting_hr ?? metrics?.resting_heart_rate_bpm ?? null,
+            steps: stepsVal,
+            stepGoal: null,
+            spo2: dailyHealth?.spo2_avg ?? metrics?.garmin_spo2_avg ?? metrics?.pulse_ox ?? null,
+            respirationAwake: dailyHealth?.respiration_avg_bpm ?? null,
+            respirationSleep: null,
+            intensityMinutes: null,
+            intensityGoal: null,
+            readinessScore,
+            readinessLabel: readinessLbl,
+            date: today,
+          },
+          activities: recentActs,
+        }),
+      })
+
+      const data = await res.json()
+      if (res.ok && data.insight) {
+        setAiInsight(data.insight)
+      } else {
+        setAiInsight('Could not generate insight. Check your Groq API key is set in Vercel.')
+      }
+    } catch {
+      setAiInsight('Could not reach the AI. Please try again.')
+    } finally {
+      setAiLoading(false)
+    }
+  }
+
   const scores = metrics ? computeScores(metrics, activities) : null
   const readiness = scores?.readiness ?? null
   const color = readiness != null ? readinessColor(readiness) : '#6b7280'
@@ -503,7 +462,11 @@ export default function DashboardPage() {
         {/* AI Insights Section */}
         <div className="bg-gradient-to-r from-orange-900/40 to-purple-900/40 rounded-3xl p-6 border border-orange-500/20">
           <button
-            onClick={() => setAiExpanded(!aiExpanded)}
+            onClick={() => {
+              const next = !aiExpanded
+              setAiExpanded(next)
+              if (next && !aiInsight && !aiLoading) fetchAIInsight()
+            }}
             className="w-full flex items-center justify-between"
           >
             <div className="flex items-center gap-3">
@@ -526,11 +489,33 @@ export default function DashboardPage() {
           {aiExpanded && (
             <div className="mt-4 pt-4 border-t border-orange-500/20">
               {aiLoading ? (
-                <p className="text-gray-400 text-sm">Analyzing your data...</p>
-              ) : (
-                <div className="whitespace-pre-wrap text-sm text-gray-200 leading-relaxed">
-                  {aiInsight || generateAIInsight(metrics, sleepData, dailyHealth, dailySteps, activities)}
+                <div className="space-y-2">
+                  <div className="h-3 bg-orange-900/40 rounded animate-pulse w-3/4" />
+                  <div className="h-3 bg-orange-900/40 rounded animate-pulse w-full" />
+                  <div className="h-3 bg-orange-900/40 rounded animate-pulse w-5/6" />
+                  <div className="h-3 bg-orange-900/40 rounded animate-pulse w-2/3" />
+                  <p className="text-xs text-gray-500 mt-2">Analysing your metrics...</p>
                 </div>
+              ) : aiInsight ? (
+                <div className="text-sm text-gray-200 leading-relaxed space-y-2">
+                  {aiInsight.split('\n').map((line, i) => {
+                    const boldMatch = line.match(/^\*\*(.+?)\*\*(.*)/)
+                    if (boldMatch) {
+                      return (
+                        <p key={i} className="mt-3 first:mt-0">
+                          <span className="font-bold text-white">{boldMatch[1]}</span>
+                          <span className="text-gray-300">{boldMatch[2]}</span>
+                        </p>
+                      )
+                    }
+                    if (line.startsWith('•') || line.startsWith('-')) {
+                      return <p key={i} className="pl-3 text-gray-300">{line}</p>
+                    }
+                    return line.trim() ? <p key={i} className="text-gray-300">{line}</p> : null
+                  })}
+                </div>
+              ) : (
+                <p className="text-gray-500 text-sm">Tap above to generate your AI snapshot.</p>
               )}
             </div>
           )}
@@ -543,6 +528,47 @@ export default function DashboardPage() {
           <StatCard label="Exercise" value={exerciseStr} icon="🏃" />
           <StatCard label="Active Cal" value={calStr} icon="🔥" />
         </div>
+
+        {/* Daily Steps - detailed, shown prominently after quick stats */}
+        {(dailySteps?.total_steps != null || metrics?.steps != null) && (() => {
+          const totalSteps = dailySteps?.total_steps ?? metrics?.steps ?? 0
+          const distKmSteps = dailySteps?.total_distance_meters
+            ? (dailySteps.total_distance_meters / 1000).toFixed(1)
+            : metrics?.distance_m
+            ? (metrics.distance_m / 1000).toFixed(1)
+            : null
+          return (
+            <div className="bg-gray-900 rounded-2xl p-4">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <p className="text-xs text-gray-500 uppercase tracking-wider">Daily Steps</p>
+                  <p className="text-3xl font-bold text-white mt-1">
+                    {totalSteps.toLocaleString()}
+                  </p>
+                  {distKmSteps && (
+                    <p className="text-xs text-gray-500 mt-0.5">{distKmSteps} km covered</p>
+                  )}
+                </div>
+                <div className="text-5xl">🦶</div>
+              </div>
+              <div className="bg-gray-700 rounded-full h-2 mt-2">
+                <div
+                  className="h-2 rounded-full transition-all duration-500"
+                  style={{
+                    width: `${Math.min(100, (totalSteps / 10000) * 100)}%`,
+                    backgroundColor: totalSteps >= 10000 ? '#22c55e' : '#f97316',
+                  }}
+                />
+              </div>
+              <div className="flex justify-between text-xs text-gray-500 mt-1">
+                <span>{Math.round((totalSteps / 10000) * 100)}% of 10k goal</span>
+                {dailySteps?.active_minutes != null && (
+                  <span>{dailySteps.active_minutes} active min</span>
+                )}
+              </div>
+            </div>
+          )
+        })()}
 
         {/* Body Battery - Extended */}
         {(metrics?.garmin_body_battery_high != null || dailyHealth?.body_battery_start != null) && (
@@ -661,40 +687,6 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* Daily Steps */}
-        {(dailySteps?.total_steps != null || metrics?.steps != null) && (
-          <div className="bg-gray-900 rounded-2xl p-4">
-            <div className="flex items-center justify-between mb-3">
-              <div>
-                <p className="text-xs text-gray-500 uppercase tracking-wider">Daily Steps</p>
-                <p className="text-3xl font-bold text-white mt-1">
-                  {(dailySteps?.total_steps ?? metrics?.steps)?.toLocaleString() ?? '—'}
-                </p>
-              </div>
-              <div className="text-5xl">🦶</div>
-            </div>
-            <div className="grid grid-cols-3 gap-2">
-              <div className="bg-gray-800 rounded-lg p-2 text-center">
-                <p className="text-xs text-gray-500">Distance</p>
-                <p className="text-sm font-bold text-white">
-                  {dailySteps?.total_distance_meters
-                    ? `${(dailySteps.total_distance_meters / 1000).toFixed(1)} km`
-                    : metrics?.distance_m
-                    ? `${(metrics.distance_m / 1000).toFixed(1)} km`
-                    : '—'}
-                </p>
-              </div>
-              <div className="bg-gray-800 rounded-lg p-2 text-center">
-                <p className="text-xs text-gray-500">Active</p>
-                <p className="text-sm font-bold text-white">{dailySteps?.active_minutes ?? '—'} min</p>
-              </div>
-              <div className="bg-gray-800 rounded-lg p-2 text-center">
-                <p className="text-xs text-gray-500">Steps Cal</p>
-                <p className="text-sm font-bold text-white">{dailySteps?.total_calories ?? '—'}</p>
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* Hydration */}
         {dailyHealth?.hydration_goal_ml != null && (
