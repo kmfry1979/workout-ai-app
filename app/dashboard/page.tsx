@@ -24,6 +24,46 @@ type DailyMetrics = {
   distance_m: number | null
 }
 
+type SleepData = {
+  sleep_date: string
+  sleep_duration_seconds: number | null
+  sleep_score: number | null
+  sleep_quality_score: number | null
+  awake_seconds: number | null
+  light_sleep_seconds: number | null
+  deep_sleep_seconds: number | null
+  rem_sleep_seconds: number | null
+  avg_spO2: number | null
+  avg_heart_rate_bpm: number | null
+  sleep_start: string | null
+  sleep_end: string | null
+}
+
+type DailyHealthMetrics = {
+  metric_date: string
+  body_battery_start: number | null
+  body_battery_end: number | null
+  body_battery_peak: number | null
+  body_battery_low: number | null
+  stress_avg: number | null
+  stress_max: number | null
+  hrv_avg: number | null
+  hrv_status: string | null
+  respiration_avg_bpm: number | null
+  spo2_avg: number | null
+  hydration_intake_ml: number | null
+  hydration_goal_ml: number | null
+  hydration_remaining_ml: number | null
+}
+
+type DailySteps = {
+  step_date: string
+  total_steps: number | null
+  total_distance_meters: number | null
+  total_calories: number | null
+  active_minutes: number | null
+}
+
 type ActivitySummary = {
   duration_sec: number | null
   activity_type: string | null
@@ -105,6 +145,113 @@ function readinessColor(score: number) {
   return '#ef4444'
 }
 
+function generateAIInsight(
+  metrics: DailyMetrics | null,
+  sleep: SleepData | null,
+  health: DailyHealthMetrics | null,
+  steps: DailySteps | null,
+  activities: ActivitySummary[]
+): string {
+  const insights: string[] = []
+  const recommendations: string[] = []
+
+  // Check body battery
+  const bbEnd = health?.body_battery_end ?? metrics?.garmin_body_battery_eod
+  if (bbEnd !== null && bbEnd !== undefined) {
+    if (bbEnd < 30) {
+      insights.push(`Your Body Battery is critically low (${bbEnd}).`)
+      recommendations.push('Prioritize recovery today - consider light stretching, meditation, or a rest day.')
+    } else if (bbEnd < 50) {
+      insights.push(`Your Body Battery is moderate (${bbEnd}).`)
+      recommendations.push('A light to moderate workout would be appropriate. Avoid high-intensity training.')
+    } else if (bbEnd >= 70) {
+      insights.push(`Excellent Body Battery (${bbEnd}) - you're well recovered!`)
+      recommendations.push('Great day for a challenging workout - consider intervals, tempo run, or heavy lifting.')
+    }
+  }
+
+  // Check sleep quality
+  const sleepScore = sleep?.sleep_score ?? metrics?.garmin_sleep_score
+  const sleepDuration = sleep?.sleep_duration_seconds ?? metrics?.sleep_minutes
+  if (sleepScore !== null && sleepScore !== undefined) {
+    if (sleepScore < 50) {
+      insights.push(`Poor sleep quality last night (score: ${sleepScore}).`)
+      recommendations.push('Focus on recovery and consider an earlier bedtime tonight. Avoid caffeine after 2pm.')
+    } else if (sleepScore >= 70) {
+      insights.push(`Great sleep quality (score: ${sleepScore}).`)
+    }
+  }
+  if (sleepDuration !== null && sleepDuration !== undefined) {
+    const sleepHours = sleepDuration / 3600
+    if (sleepHours < 6) {
+      insights.push(`Sleep duration was short (${sleepHours.toFixed(1)} hours).`)
+      recommendations.push('Aim for 7-9 hours tonight for optimal recovery.')
+    } else if (sleepHours >= 8) {
+      insights.push(`Solid sleep duration (${sleepHours.toFixed(1)} hours).`)
+    }
+  }
+
+  // Check HRV
+  const hrv = health?.hrv_avg ?? metrics?.garmin_hrv_nightly_avg
+  const hrvStatus = health?.hrv_status ?? metrics?.garmin_hrv_status
+  if (hrvStatus) {
+    if (hrvStatus.toLowerCase().includes('low') || hrvStatus.toLowerCase().includes('poor')) {
+      insights.push(`HRV status is ${hrvStatus}.`)
+      recommendations.push('Your nervous system may be stressed. Light activity or rest recommended.')
+    } else if (hrvStatus.toLowerCase().includes('good') || hrvStatus.toLowerCase().includes('excellent')) {
+      insights.push(`HRV status is ${hrvStatus} - your body is handling stress well.`)
+    }
+  }
+
+  // Check stress
+  const stressAvg = health?.stress_avg ?? metrics?.garmin_stress_avg
+  if (stressAvg !== null && stressAvg !== undefined) {
+    if (stressAvg >= 50) {
+      insights.push(`Elevated stress levels today (avg: ${stressAvg}).`)
+      recommendations.push('Consider stress-reduction activities like yoga, walking, or breathing exercises.')
+    }
+  }
+
+  // Check recent activity
+  const todayActivities = activities.filter(a => {
+    const d = new Date(a.start_time)
+    return d.toDateString() === new Date().toDateString()
+  })
+  const exerciseMin = todayActivities.reduce((s, a) => s + (a.duration_sec ?? 0) / 60, 0)
+  if (exerciseMin > 60) {
+    insights.push(`You've already exercised ${Math.round(exerciseMin)} minutes today.`)
+    if (bbEnd !== null && bbEnd !== undefined && bbEnd < 50) {
+      recommendations.push('You may be accumulating fatigue. Ensure adequate rest between sessions.')
+    }
+  }
+
+  // Check steps
+  const totalSteps = steps?.total_steps ?? metrics?.steps
+  if (totalSteps !== null && totalSteps !== undefined) {
+    if (totalSteps < 5000) {
+      insights.push(`Low step count today (${totalSteps.toLocaleString()} steps).`)
+      recommendations.push('Try to get moving with a light walk to boost circulation and recovery.')
+    } else if (totalSteps >= 10000) {
+      insights.push(`Great step count today (${totalSteps.toLocaleString()} steps)!`)
+    }
+  }
+
+  // Build final insight
+  let result = ''
+  if (insights.length > 0) {
+    result += '📊 Current Status:\n' + insights.join(' ') + '\n\n'
+  }
+  if (recommendations.length > 0) {
+    result += '💡 Recommendation:\n' + recommendations.join(' ')
+  }
+
+  if (!result) {
+    result = 'Sync your Garmin data to get personalized AI insights and training recommendations.'
+  }
+
+  return result
+}
+
 function RadarBar({ label, value, icon }: { label: string; value: number; icon: string }) {
   const color = value >= 70 ? '#22c55e' : value >= 45 ? '#eab308' : '#ef4444'
   return (
@@ -145,7 +292,13 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true)
   const [displayName, setDisplayName] = useState('')
   const [metrics, setMetrics] = useState<DailyMetrics | null>(null)
+  const [sleepData, setSleepData] = useState<SleepData | null>(null)
+  const [dailyHealth, setDailyHealth] = useState<DailyHealthMetrics | null>(null)
+  const [dailySteps, setDailySteps] = useState<DailySteps | null>(null)
   const [activities, setActivities] = useState<ActivitySummary[]>([])
+  const [aiExpanded, setAiExpanded] = useState(false)
+  const [aiLoading, setAiLoading] = useState(false)
+  const [aiInsight, setAiInsight] = useState<string | null>(null)
 
   useEffect(() => {
     const load = async () => {
@@ -162,6 +315,7 @@ export default function DashboardPage() {
 
       const today = new Date().toISOString().split('T')[0]
 
+      // Load daily health metrics (existing table)
       const { data: m } = await supabase
         .from('daily_health_metrics')
         .select(`metric_date, steps, sleep_minutes, resting_hr, resting_heart_rate_bpm,
@@ -173,6 +327,40 @@ export default function DashboardPage() {
         .maybeSingle()
 
       setMetrics(m as DailyMetrics | null)
+
+      // Load detailed sleep data
+      const { data: sleep } = await supabase
+        .from('garmin_sleep_data')
+        .select(`sleep_date, sleep_duration_seconds, sleep_score, sleep_quality_score,
+          awake_seconds, light_sleep_seconds, deep_sleep_seconds, rem_sleep_seconds,
+          avg_spO2, avg_heart_rate_bpm, sleep_start, sleep_end`)
+        .eq('user_id', user.id)
+        .eq('sleep_date', today)
+        .maybeSingle()
+
+      setSleepData(sleep as SleepData | null)
+
+      // Load extended daily health metrics
+      const { data: health } = await supabase
+        .from('garmin_daily_health_metrics')
+        .select(`metric_date, body_battery_start, body_battery_end, body_battery_peak,
+          body_battery_low, stress_avg, stress_max, hrv_avg, hrv_status,
+          respiration_avg_bpm, spo2_avg, hydration_intake_ml, hydration_goal_ml`)
+        .eq('user_id', user.id)
+        .eq('metric_date', today)
+        .maybeSingle()
+
+      setDailyHealth(health as DailyHealthMetrics | null)
+
+      // Load daily steps
+      const { data: steps } = await supabase
+        .from('garmin_daily_steps')
+        .select(`step_date, total_steps, total_distance_meters, total_calories, active_minutes`)
+        .eq('user_id', user.id)
+        .eq('step_date', today)
+        .maybeSingle()
+
+      setDailySteps(steps as DailySteps | null)
 
       const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString()
       const { data: acts } = await supabase
@@ -202,13 +390,20 @@ export default function DashboardPage() {
   const today = new Date()
   const dateStr = today.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })
 
-  const sleepHours = metrics?.sleep_minutes
+  const sleepHours = sleepData?.sleep_duration_seconds
+    ? `${Math.floor(sleepData.sleep_duration_seconds / 3600)}h ${Math.floor((sleepData.sleep_duration_seconds % 3600) / 60)}m`
+    : metrics?.sleep_minutes
     ? `${Math.floor(metrics.sleep_minutes / 60)}h ${metrics.sleep_minutes % 60}m`
     : '—'
-  const steps = metrics?.steps ? (metrics.steps / 1000).toFixed(1) + 'k' : '—'
+  const stepsVal = dailySteps?.total_steps ?? metrics?.steps
+  const steps = stepsVal ? `${(stepsVal / 1000).toFixed(1)}k` : '—'
   const cals = metrics?.active_calories_kcal ?? metrics?.calories
   const calStr = cals ? Math.round(cals) + ' kcal' : '—'
-  const distKm = metrics?.distance_m ? (metrics.distance_m / 1000).toFixed(1) + ' km' : '—'
+  const distKm = dailySteps?.total_distance_meters
+    ? (dailySteps.total_distance_meters / 1000).toFixed(1) + ' km'
+    : metrics?.distance_m
+    ? (metrics.distance_m / 1000).toFixed(1) + ' km'
+    : '—'
 
   const todayActivities = activities.filter(a => {
     const d = new Date(a.start_time)
@@ -305,6 +500,42 @@ export default function DashboardPage() {
           )}
         </div>
 
+        {/* AI Insights Section */}
+        <div className="bg-gradient-to-r from-orange-900/40 to-purple-900/40 rounded-3xl p-6 border border-orange-500/20">
+          <button
+            onClick={() => setAiExpanded(!aiExpanded)}
+            className="w-full flex items-center justify-between"
+          >
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">✨</span>
+              <div className="text-left">
+                <p className="text-sm font-bold text-white">AI Insights</p>
+                <p className="text-xs text-gray-400">Personalized analysis & recommendations</p>
+              </div>
+            </div>
+            <svg
+              className={`w-6 h-6 text-gray-400 transition-transform ${aiExpanded ? 'rotate-180' : ''}`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+
+          {aiExpanded && (
+            <div className="mt-4 pt-4 border-t border-orange-500/20">
+              {aiLoading ? (
+                <p className="text-gray-400 text-sm">Analyzing your data...</p>
+              ) : (
+                <div className="whitespace-pre-wrap text-sm text-gray-200 leading-relaxed">
+                  {aiInsight || generateAIInsight(metrics, sleepData, dailyHealth, dailySteps, activities)}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
         {/* Quick stats */}
         <div className="grid grid-cols-2 gap-3">
           <StatCard label="Sleep" value={sleepHours} icon="🌙" />
@@ -313,38 +544,188 @@ export default function DashboardPage() {
           <StatCard label="Active Cal" value={calStr} icon="🔥" />
         </div>
 
-        {/* Body Battery */}
-        {metrics?.garmin_body_battery_high != null && (
-          <div className="bg-gray-900 rounded-2xl p-4 flex items-center justify-between">
-            <div>
-              <p className="text-xs text-gray-500 uppercase tracking-wider">Body Battery</p>
-              <p className="text-3xl font-bold text-white mt-1">
-                {metrics.garmin_body_battery_eod ?? metrics.garmin_body_battery_high}
-              </p>
-              <p className="text-xs text-gray-500 mt-1">
-                Peak: {metrics.garmin_body_battery_high} today
-              </p>
+        {/* Body Battery - Extended */}
+        {(metrics?.garmin_body_battery_high != null || dailyHealth?.body_battery_start != null) && (
+          <div className="bg-gray-900 rounded-2xl p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <p className="text-xs text-gray-500 uppercase tracking-wider">Body Battery</p>
+                <p className="text-3xl font-bold text-white mt-1">
+                  {dailyHealth?.body_battery_end ?? metrics?.garmin_body_battery_eod ?? metrics?.garmin_body_battery_high}
+                </p>
+              </div>
+              <div className="text-5xl">⚡</div>
             </div>
-            <div className="text-5xl">⚡</div>
+            <div className="grid grid-cols-3 gap-2">
+              <div className="bg-gray-800 rounded-lg p-2 text-center">
+                <p className="text-xs text-gray-500">Start</p>
+                <p className="text-lg font-bold text-green-400">{dailyHealth?.body_battery_start ?? metrics?.garmin_body_battery_high ?? '—'}</p>
+              </div>
+              <div className="bg-gray-800 rounded-lg p-2 text-center">
+                <p className="text-xs text-gray-500">Peak</p>
+                <p className="text-lg font-bold text-blue-400">{dailyHealth?.body_battery_peak ?? metrics?.garmin_body_battery_high ?? '—'}</p>
+              </div>
+              <div className="bg-gray-800 rounded-lg p-2 text-center">
+                <p className="text-xs text-gray-500">Low</p>
+                <p className="text-lg font-bold text-red-400">{dailyHealth?.body_battery_low ?? '—'}</p>
+              </div>
+            </div>
           </div>
         )}
 
-        {/* Stress */}
-        {metrics?.garmin_stress_avg != null && (
-          <div className="bg-gray-900 rounded-2xl p-4 flex items-center justify-between">
-            <div>
-              <p className="text-xs text-gray-500 uppercase tracking-wider">Avg Stress</p>
-              <p className="text-3xl font-bold text-white mt-1">{metrics.garmin_stress_avg}</p>
+        {/* Sleep Analysis */}
+        {sleepData && (sleepData.sleep_score != null || sleepData.sleep_duration_seconds != null) && (
+          <div className="bg-gray-900 rounded-2xl p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <p className="text-xs text-gray-500 uppercase tracking-wider">Sleep Analysis</p>
+                <p className="text-3xl font-bold text-white mt-1">
+                  {sleepData.sleep_score ?? '—'}
+                </p>
+              </div>
+              <div className="text-5xl">🌙</div>
             </div>
-            <div
-              className="text-sm font-medium px-3 py-1 rounded-full"
-              style={{
-                background: metrics.garmin_stress_avg < 26 ? '#14532d' : metrics.garmin_stress_avg < 51 ? '#713f12' : '#7f1d1d',
-                color: metrics.garmin_stress_avg < 26 ? '#86efac' : metrics.garmin_stress_avg < 51 ? '#fde68a' : '#fca5a5'
-              }}
-            >
-              {metrics.garmin_stress_avg < 26 ? 'Low' : metrics.garmin_stress_avg < 51 ? 'Medium' : 'High'}
+            <div className="grid grid-cols-2 gap-2 mb-3">
+              <div className="bg-gray-800 rounded-lg p-2">
+                <p className="text-xs text-gray-500">Duration</p>
+                <p className="text-lg font-bold text-white">
+                  {sleepData.sleep_duration_seconds
+                    ? `${Math.floor(sleepData.sleep_duration_seconds / 3600)}h ${Math.floor((sleepData.sleep_duration_seconds % 3600) / 60)}m`
+                    : '—'}
+                </p>
+              </div>
+              <div className="bg-gray-800 rounded-lg p-2">
+                <p className="text-xs text-gray-500">Quality</p>
+                <p className="text-lg font-bold text-white">{sleepData.sleep_quality_score ?? '—'}</p>
+              </div>
             </div>
+            {/* Sleep stages bar */}
+            {(sleepData.awake_seconds != null || sleepData.light_sleep_seconds != null || sleepData.deep_sleep_seconds != null || sleepData.rem_sleep_seconds != null) && (
+              <div className="mt-3">
+                <p className="text-xs text-gray-500 mb-1">Sleep Stages</p>
+                <div className="flex h-3 rounded-full overflow-hidden">
+                  {sleepData.awake_seconds != null && sleepData.awake_seconds > 0 && (
+                    <div className="bg-gray-500" style={{ width: `${(sleepData.awake_seconds / (sleepData.sleep_duration_seconds || 1)) * 100}%` }} />
+                  )}
+                  {sleepData.light_sleep_seconds != null && sleepData.light_sleep_seconds > 0 && (
+                    <div className="bg-blue-400" style={{ width: `${(sleepData.light_sleep_seconds / (sleepData.sleep_duration_seconds || 1)) * 100}%` }} />
+                  )}
+                  {sleepData.deep_sleep_seconds != null && sleepData.deep_sleep_seconds > 0 && (
+                    <div className="bg-purple-600" style={{ width: `${(sleepData.deep_sleep_seconds / (sleepData.sleep_duration_seconds || 1)) * 100}%` }} />
+                  )}
+                  {sleepData.rem_sleep_seconds != null && sleepData.rem_sleep_seconds > 0 && (
+                    <div className="bg-yellow-400" style={{ width: `${(sleepData.rem_sleep_seconds / (sleepData.sleep_duration_seconds || 1)) * 100}%` }} />
+                  )}
+                </div>
+                <div className="flex gap-3 mt-2 text-xs">
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-gray-500" /> Awake</span>
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-400" /> Light</span>
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-purple-600" /> Deep</span>
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-yellow-400" /> REM</span>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Stress - Extended */}
+        {(metrics?.garmin_stress_avg != null || dailyHealth?.stress_avg != null) && (
+          <div className="bg-gray-900 rounded-2xl p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <p className="text-xs text-gray-500 uppercase tracking-wider">Stress Levels</p>
+                <p className="text-3xl font-bold text-white mt-1">
+                  {dailyHealth?.stress_avg ?? metrics?.garmin_stress_avg}
+                </p>
+              </div>
+              <div
+                className="text-sm font-medium px-3 py-1 rounded-full"
+                style={{
+                  background: (dailyHealth?.stress_avg ?? metrics?.garmin_stress_avg ?? 0) < 26 ? '#14532d' : (dailyHealth?.stress_avg ?? metrics?.garmin_stress_avg ?? 0) < 51 ? '#713f12' : '#7f1d1d',
+                  color: (dailyHealth?.stress_avg ?? metrics?.garmin_stress_avg ?? 0) < 26 ? '#86efac' : (dailyHealth?.stress_avg ?? metrics?.garmin_stress_avg ?? 0) < 51 ? '#fde68a' : '#fca5a5'
+                }}
+              >
+                {(dailyHealth?.stress_avg ?? metrics?.garmin_stress_avg ?? 0) < 26 ? 'Low' : (dailyHealth?.stress_avg ?? metrics?.garmin_stress_avg ?? 0) < 51 ? 'Medium' : 'High'}
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="bg-gray-800 rounded-lg p-2 text-center">
+                <p className="text-xs text-gray-500">Max</p>
+                <p className="text-lg font-bold text-red-400">{dailyHealth?.stress_max ?? '—'}</p>
+              </div>
+              <div className="bg-gray-800 rounded-lg p-2 text-center">
+                <p className="text-xs text-gray-500">HRV Avg</p>
+                <p className="text-lg font-bold text-green-400">{dailyHealth?.hrv_avg ?? metrics?.garmin_hrv_nightly_avg ?? '—'}</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Daily Steps */}
+        {(dailySteps?.total_steps != null || metrics?.steps != null) && (
+          <div className="bg-gray-900 rounded-2xl p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <p className="text-xs text-gray-500 uppercase tracking-wider">Daily Steps</p>
+                <p className="text-3xl font-bold text-white mt-1">
+                  {(dailySteps?.total_steps ?? metrics?.steps)?.toLocaleString() ?? '—'}
+                </p>
+              </div>
+              <div className="text-5xl">🦶</div>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <div className="bg-gray-800 rounded-lg p-2 text-center">
+                <p className="text-xs text-gray-500">Distance</p>
+                <p className="text-sm font-bold text-white">
+                  {dailySteps?.total_distance_meters
+                    ? `${(dailySteps.total_distance_meters / 1000).toFixed(1)} km`
+                    : metrics?.distance_m
+                    ? `${(metrics.distance_m / 1000).toFixed(1)} km`
+                    : '—'}
+                </p>
+              </div>
+              <div className="bg-gray-800 rounded-lg p-2 text-center">
+                <p className="text-xs text-gray-500">Active</p>
+                <p className="text-sm font-bold text-white">{dailySteps?.active_minutes ?? '—'} min</p>
+              </div>
+              <div className="bg-gray-800 rounded-lg p-2 text-center">
+                <p className="text-xs text-gray-500">Steps Cal</p>
+                <p className="text-sm font-bold text-white">{dailySteps?.total_calories ?? '—'}</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Hydration */}
+        {dailyHealth?.hydration_goal_ml != null && (
+          <div className="bg-gray-900 rounded-2xl p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <p className="text-xs text-gray-500 uppercase tracking-wider">Hydration</p>
+                <p className="text-3xl font-bold text-white mt-1">
+                  {dailyHealth.hydration_intake_ml
+                    ? `${(dailyHealth.hydration_intake_ml / 1000).toFixed(1)}L`
+                    : '—'}
+                </p>
+              </div>
+              <div className="text-5xl">💧</div>
+            </div>
+            {dailyHealth.hydration_goal_ml && (
+              <div className="mt-2">
+                <div className="flex justify-between text-xs text-gray-400 mb-1">
+                  <span>Goal: {(dailyHealth.hydration_goal_ml / 1000).toFixed(1)}L</span>
+                  {dailyHealth.hydration_remaining_ml != null && (
+                    <span>Remaining: {(dailyHealth.hydration_remaining_ml / 1000).toFixed(1)}L</span>
+                  )}
+                </div>
+                <div className="w-full bg-gray-800 rounded-full h-2">
+                  <div
+                    className="bg-blue-500 h-2 rounded-full transition-all"
+                    style={{ width: `${Math.min(100, ((dailyHealth.hydration_intake_ml ?? 0) / (dailyHealth.hydration_goal_ml || 1)) * 100)}%` }}
+                  />
+                </div>
+              </div>
+            )}
           </div>
         )}
 
