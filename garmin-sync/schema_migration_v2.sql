@@ -31,8 +31,8 @@ CREATE TABLE IF NOT EXISTS garmin_sleep_data (
     sleep_quality_score INTEGER,
 
     -- Physiological metrics during sleep
-    avg_spO2 NUMERIC(5,2),
-    min_spO2 NUMERIC(5,2),
+    avg_spo2 NUMERIC(5,2),
+    min_spo2 NUMERIC(5,2),
     avg_respiration_bpm NUMERIC(5,2),
     avg_heart_rate_bpm INTEGER,
     max_heart_rate_bpm INTEGER,

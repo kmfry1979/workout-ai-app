@@ -559,8 +559,8 @@ def extract_sleep_session_data(sleep_data: dict[str, Any], date_iso: str) -> dic
     quality_score = as_int(dto.get("sleepQualityScore")) or as_int(dto.get("qualityScore"))
 
     # Physiological metrics
-    avg_spO2 = as_float(pick_first(dto, ["averageSpO2Value", "averageSpO2", "avgSpO2"]))
-    min_spO2 = as_float(pick_first(dto, ["minSpO2Value", "minSpO2", "lowestSpO2"]))
+    avg_spo2 = as_float(pick_first(dto, ["averageSpO2Value", "averageSpO2", "avgSpO2"]))
+    min_spo2 = as_float(pick_first(dto, ["minSpO2Value", "minSpO2", "lowestSpO2"]))
     avg_resp = as_float(pick_first(dto, ["averageRespirationValue", "averageRespiration", "avgRespiration"]))
     avg_hr = as_int(pick_first(dto, ["averageHeartRate", "avgHeartRate", "avgHR"]))
     max_hr = as_int(pick_first(dto, ["maxHeartRate", "maxHeartRate", "maxHR"]))
@@ -578,8 +578,8 @@ def extract_sleep_session_data(sleep_data: dict[str, Any], date_iso: str) -> dic
         "rem_sleep_seconds": rem_sec,
         "sleep_score": sleep_score,
         "sleep_quality_score": quality_score,
-        "avg_spO2": avg_spO2,
-        "min_spO2": min_spO2,
+        "avg_spo2": avg_spo2,
+        "min_spo2": min_spo2,
         "avg_respiration_bpm": avg_resp,
         "avg_heart_rate_bpm": avg_hr,
         "max_heart_rate_bpm": max_hr,
