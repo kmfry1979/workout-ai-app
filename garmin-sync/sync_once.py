@@ -471,13 +471,30 @@ def get_body_battery(api: Garmin, date_iso: str) -> list[dict[str, Any]]:
     return []
 
 
-def get_steps_data(api: Garmin, date_iso: str) -> dict[str, Any]:
-    """Returns daily steps data from Garmin."""
+def get_steps_data(api: Garmin, date_iso: str) -> list[dict[str, Any]]:
+    """
+    Returns the raw 15-minute step buckets from Garmin.
+    python-garminconnect returns a list of dicts, not a single daily-totals dict.
+    Daily totals are read from the user summary instead.
+    """
     success, data, err = safe_call(api.get_steps_data, date_iso)
+    if success and isinstance(data, list):
+        return data
+    if success and isinstance(data, dict):
+        # Older library versions returned a dict — still stash it
+        return [data]
+    if err:
+        print(f"  Warning: get_steps_data failed: {err}")
+    return []
+
+
+def get_spo2_data(api: Garmin, date_iso: str) -> dict[str, Any]:
+    """Daily SpO2 summary (averageSpO2 / lowestSpO2 / latestSpO2)."""
+    success, data, err = safe_call(api.get_spo2_data, date_iso)
     if success and isinstance(data, dict):
         return data
     if err:
-        print(f"  Warning: get_steps_data failed: {err}")
+        print(f"  Warning: get_spo2_data failed: {err}")
     return {}
 
 
@@ -510,63 +527,144 @@ def extract_sleep_score(sleep_data: dict[str, Any]) -> Optional[int]:
 def extract_body_battery_stats(
     summary: dict[str, Any],
     bb_readings: list[dict[str, Any]],
-) -> tuple[Optional[int], Optional[int], Optional[int]]:
+) -> tuple[Optional[int], Optional[int], Optional[int], Optional[int]]:
     """
-    Returns (high, low, end_of_day) Body Battery values.
-    Prefers the detailed readings list; falls back to summary fields.
-    """
-    if bb_readings:
-        levels = [
-            r.get("bodyBatteryLevel") or r.get("level")
-            for r in bb_readings
-            if r.get("bodyBatteryLevel") is not None or r.get("level") is not None
-        ]
-        levels = [l for l in levels if l is not None]
-        if levels:
-            high = max(levels)
-            low = min(levels)
-            eod = levels[-1]  # last reading of the day
-            return as_int(high), as_int(low), as_int(eod)
+    Returns (start, peak, low, end_of_day) Body Battery values.
 
-    # Fallback to summary
-    high = as_int(pick_first(summary, ["bodyBatteryChargedLevel", "highBodyBattery"]))
-    low = as_int(pick_first(summary, ["bodyBatteryDrainedLevel", "lowBodyBattery"]))
-    eod = as_int(pick_first(summary, ["lastUpdatedBodyBatteryLevel", "endOfDayBodyBatteryLevel"]))
-    return high, low, eod
+    python-garminconnect returns bb_readings as a list of per-day dicts, each with
+    a ``bodyBatteryValuesArray`` of ``[timestamp_ms, status, level, ...]`` rows
+    (level is usually index 2, but older payloads have it at index 1).
+    """
+    levels: list[int] = []
+    for entry in bb_readings or []:
+        if not isinstance(entry, dict):
+            continue
+        values = entry.get("bodyBatteryValuesArray") or entry.get("values") or []
+        for row in values:
+            level: Optional[int] = None
+            if isinstance(row, (list, tuple)):
+                # Try index 2 first (newer payloads: [ts, status, level]), then index 1.
+                for idx in (2, 1):
+                    if len(row) > idx and row[idx] is not None:
+                        level = as_int(row[idx])
+                        if level is not None:
+                            break
+            elif isinstance(row, dict):
+                level = as_int(
+                    row.get("bodyBatteryLevel")
+                    or row.get("level")
+                    or row.get("value")
+                )
+            if level is not None:
+                levels.append(level)
+
+    if levels:
+        return levels[0], max(levels), min(levels), levels[-1]
+
+    # Fallback to daily summary keys
+    start = as_int(
+        pick_first(summary, ["bodyBatteryAtWakeTime", "startBodyBattery"])
+    )
+    peak = as_int(
+        pick_first(summary, ["bodyBatteryHighestValue", "bodyBatteryChargedLevel", "highBodyBattery"])
+    )
+    low = as_int(
+        pick_first(summary, ["bodyBatteryLowestValue", "bodyBatteryDrainedLevel", "lowBodyBattery"])
+    )
+    eod = as_int(
+        pick_first(summary, ["bodyBatteryMostRecentValue", "lastUpdatedBodyBatteryLevel", "endOfDayBodyBatteryLevel"])
+    )
+    return start, peak, low, eod
+
+
+def _ms_epoch_to_iso(value: Any) -> Optional[str]:
+    """Convert a millisecond epoch (int or numeric string) to ISO 8601 UTC."""
+    ms = as_int(value)
+    if ms is None or ms <= 0:
+        return None
+    try:
+        return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat()
+    except (OverflowError, OSError, ValueError):
+        return None
 
 
 def extract_sleep_session_data(sleep_data: dict[str, Any], date_iso: str) -> dict[str, Any]:
     """
     Extract detailed sleep session data from Garmin sleep response.
     Returns normalized data for garmin_sleep_data table.
+
+    Garmin returns timestamps as millisecond epochs and sleep-stage seconds as
+    flat keys on the DTO (deepSleepSeconds, remSleepSeconds, etc.), not nested
+    under ``sleepLevels``.
     """
     dto = sleep_data.get("dailySleepDTO") or sleep_data
-    sleep_start = dto.get("sleepTimeTimestamp") or dto.get("sleep_start_timestamp")
-    sleep_end = dto.get("wakeTimeTimestamp") or dto.get("wake_time_timestamp")
 
-    # Sleep stages in seconds
+    sleep_start = _ms_epoch_to_iso(
+        pick_first(dto, ["sleepStartTimestampGMT", "sleepStartTimestampLocal", "sleepTimeTimestamp"])
+    )
+    sleep_end = _ms_epoch_to_iso(
+        pick_first(dto, ["sleepEndTimestampGMT", "sleepEndTimestampLocal", "wakeTimeTimestamp"])
+    )
+
+    # Sleep stages — flat on DTO in the current API, with legacy nested fallback
     stages = dto.get("sleepLevels") or {}
-    awake_sec = as_int(stages.get("awake")) or as_int(stages.get("awakeSeconds")) or 0
-    light_sec = as_int(stages.get("light")) or as_int(stages.get("lightSeconds")) or 0
-    deep_sec = as_int(stages.get("deep")) or as_int(stages.get("deepSeconds")) or 0
-    rem_sec = as_int(stages.get("rem")) or as_int(stages.get("remSeconds")) or 0
+    awake_sec = (
+        as_int(dto.get("awakeSleepSeconds"))
+        or as_int(stages.get("awake"))
+        or as_int(stages.get("awakeSeconds"))
+        or 0
+    )
+    light_sec = (
+        as_int(dto.get("lightSleepSeconds"))
+        or as_int(stages.get("light"))
+        or as_int(stages.get("lightSeconds"))
+        or 0
+    )
+    deep_sec = (
+        as_int(dto.get("deepSleepSeconds"))
+        or as_int(stages.get("deep"))
+        or as_int(stages.get("deepSeconds"))
+        or 0
+    )
+    rem_sec = (
+        as_int(dto.get("remSleepSeconds"))
+        or as_int(stages.get("rem"))
+        or as_int(stages.get("remSeconds"))
+        or 0
+    )
 
-    # Duration
-    duration_sec = as_int(dto.get("duration")) or as_int(dto.get("sleepDurationSeconds"))
+    # Duration — real key is sleepTimeSeconds; fall back to totals / legacy keys
+    duration_sec = (
+        as_int(dto.get("sleepTimeSeconds"))
+        or as_int(dto.get("duration"))
+        or as_int(dto.get("sleepDurationSeconds"))
+    )
+    if duration_sec is None:
+        total = awake_sec + light_sec + deep_sec + rem_sec
+        duration_sec = total if total > 0 else None
 
     # Sleep scores
     sleep_score = extract_sleep_score(sleep_data)
-    quality_score = as_int(dto.get("sleepQualityScore")) or as_int(dto.get("qualityScore"))
+    scores = dto.get("sleepScores") or {}
+    quality_obj = scores.get("qualityScore") if isinstance(scores, dict) else None
+    quality_score = None
+    if isinstance(quality_obj, dict):
+        quality_score = as_int(quality_obj.get("value"))
+    if quality_score is None:
+        quality_score = (
+            as_int(dto.get("sleepQualityScore"))
+            or as_int(dto.get("qualityScore"))
+        )
 
     # Physiological metrics
     avg_spo2 = as_float(pick_first(dto, ["averageSpO2Value", "averageSpO2", "avgSpO2"]))
-    min_spo2 = as_float(pick_first(dto, ["minSpO2Value", "minSpO2", "lowestSpO2"]))
+    min_spo2 = as_float(pick_first(dto, ["lowestSpO2Value", "minSpO2Value", "minSpO2", "lowestSpO2"]))
     avg_resp = as_float(pick_first(dto, ["averageRespirationValue", "averageRespiration", "avgRespiration"]))
-    avg_hr = as_int(pick_first(dto, ["averageHeartRate", "avgHeartRate", "avgHR"]))
-    max_hr = as_int(pick_first(dto, ["maxHeartRate", "maxHeartRate", "maxHR"]))
+    avg_hr = as_int(pick_first(dto, ["averageHeartRate", "avgHeartRate", "avgHR", "restingHeartRate"]))
+    max_hr = as_int(pick_first(dto, ["highestHeartRate", "maxHeartRate", "maxHR"]))
 
     # Stress during sleep
-    stress_score = as_int(dto.get("sleepStressScore")) or as_int(dto.get("stressScore"))
+    stress_score = as_int(dto.get("avgSleepStress")) or as_int(dto.get("sleepStressScore")) or as_int(dto.get("stressScore"))
 
     return {
         "sleep_start": sleep_start,
@@ -594,37 +692,60 @@ def extract_daily_health_metrics(
     hydration: dict[str, Any] | None,
     hrv_data: dict[str, Any],
     bb_readings: list[dict[str, Any]],
+    spo2_data: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Extract extended daily health metrics for garmin_daily_health_metrics table.
     """
     hrv_summary = hrv_data.get("hrvSummary") or {}
+    spo2_data = spo2_data or {}
 
-    # Body Battery detailed
-    bb_start = as_int(pick_first(summary, ["bodyBatteryChargedLevel", "startBodyBattery"]))
-    bb_end = as_int(pick_first(summary, ["lastUpdatedBodyBatteryLevel", "endOfDayBodyBatteryLevel"]))
-    bb_peak, bb_low, _ = extract_body_battery_stats(summary, bb_readings)
+    # Body Battery — peak/low/EOD from readings list, start from first reading or summary
+    bb_start, bb_peak, bb_low, bb_end = extract_body_battery_stats(summary, bb_readings)
 
     # Stress
     stress_avg = as_int(pick_first(summary, ["averageStressLevel", "stressScore"]))
     stress_max = as_int(pick_first(summary, ["maxStressLevel"]))
     stress_min = as_int(pick_first(summary, ["minStressLevel"]))
 
-    # HRV
-    hrv_avg = as_int(hrv_summary.get("lastNight"))
+    # HRV — real keys are lastNightAvg / lastNight5MinHigh; legacy fallbacks kept
+    hrv_avg = as_int(pick_first(hrv_summary, ["lastNightAvg", "lastNight"]))
+    hrv_max = as_int(pick_first(hrv_summary, ["lastNight5MinHigh", "max"]))
     hrv_min = as_int(hrv_summary.get("min"))
-    hrv_max = as_int(hrv_summary.get("max"))
+    if hrv_min is None:
+        # Derive min from the reading array if available
+        readings = hrv_data.get("hrvReadings") or []
+        reading_values: list[int] = []
+        for r in readings:
+            if isinstance(r, dict):
+                v = as_int(r.get("hrvValue") or r.get("value"))
+                if v is not None:
+                    reading_values.append(v)
+        if reading_values:
+            hrv_min = min(reading_values)
+            if hrv_max is None:
+                hrv_max = max(reading_values)
     hrv_status = hrv_summary.get("status")
 
-    # Respiration
-    resp_avg = as_float(pick_first(summary, ["averageRespirationValue", "avgRespiration"]))
-    resp_min = as_float(pick_first(summary, ["minRespirationValue", "minRespiration"]))
-    resp_max = as_float(pick_first(summary, ["maxRespirationValue", "maxRespiration"]))
+    # Respiration — avgWakingRespirationValue is the current key
+    resp_avg = as_float(pick_first(summary, ["avgWakingRespirationValue", "averageRespirationValue", "avgRespiration"]))
+    resp_min = as_float(pick_first(summary, ["lowestRespirationValue", "minRespirationValue", "minRespiration"]))
+    resp_max = as_float(pick_first(summary, ["highestRespirationValue", "maxRespirationValue", "maxRespiration"]))
 
-    # SpO2
-    spo2_avg = as_float(pick_first(summary, ["averageSpO2", "avgSpO2"]))
-    spo2_min = as_float(pick_first(summary, ["minSpO2", "lowestSpO2"]))
-    spo2_max = as_float(pick_first(summary, ["maxSpO2", "highestSpO2"]))
+    # SpO2 — dedicated endpoint (get_spo2_data) is authoritative; summary has averageSpo2
+    spo2_avg = as_float(
+        pick_first(spo2_data, ["averageSpO2", "avgSpO2", "averageSpo2"])
+    )
+    if spo2_avg is None:
+        spo2_avg = as_float(pick_first(summary, ["averageSpo2", "averageSpO2", "avgSpO2"]))
+    spo2_min = as_float(
+        pick_first(spo2_data, ["lowestSpO2", "minSpO2"])
+    )
+    if spo2_min is None:
+        spo2_min = as_float(pick_first(summary, ["lowestSpo2", "minSpO2", "lowestSpO2"]))
+    spo2_max = as_float(pick_first(spo2_data, ["highestSpO2", "maxSpO2"]))
+    if spo2_max is None:
+        spo2_max = as_float(pick_first(summary, ["maxSpO2", "highestSpO2"]))
 
     # Hydration
     hydration_goal = as_int(hydration.get("goalInML")) if hydration else None
@@ -655,31 +776,57 @@ def extract_daily_health_metrics(
     }
 
 
-def extract_daily_steps_data(steps_data: dict[str, Any]) -> dict[str, Any]:
+def extract_daily_steps_data(
+    summary: dict[str, Any],
+    steps_buckets: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """
     Extract daily steps data for garmin_daily_steps table.
+
+    The authoritative source for daily totals is the user summary
+    (``api.get_user_summary``). ``api.get_steps_data`` returns a list of
+    15-minute buckets, which we aggregate as a fallback and keep for the
+    ``hourly_steps`` column.
     """
-    total_steps = as_int(pick_first(steps_data, ["totalSteps", "steps", "total_steps"])) or 0
-    total_distance = as_float(pick_first(steps_data, ["totalDistanceMeters", "totalDistance", "distance_m"])) or 0
-    total_calories = as_int(pick_first(steps_data, ["totalCalories", "calories", "active_calories"])) or 0
+    summary = summary or {}
+    buckets = steps_buckets or []
 
-    # Activity time
-    active_min = as_int(pick_first(steps_data, ["activeMinutes", "highlyActiveSeconds", "active_seconds"])) or 0
-    if active_min > 60:
-        active_min = active_min // 60  # Convert from seconds if needed
+    total_steps = as_int(pick_first(summary, ["totalSteps", "steps"]))
+    total_distance = as_float(pick_first(summary, ["totalDistanceMeters", "wellnessDistanceMeters", "distanceMeters"]))
+    total_calories = as_int(pick_first(summary, ["totalKilocalories", "wellnessKilocalories", "totalCalories"]))
 
-    sedentary_min = as_int(pick_first(steps_data, ["sedentarySeconds", "sedentary_minutes"])) or 0
-    if sedentary_min > 60:
-        sedentary_min = sedentary_min // 60
+    # Fallback to aggregating the 15-minute buckets
+    if total_steps is None:
+        agg = 0
+        for b in buckets:
+            if isinstance(b, dict):
+                agg += as_int(b.get("steps")) or 0
+        total_steps = agg
 
-    # Hourly breakdown if available
-    hourly = steps_data.get("totalSteps") or steps_data.get("hourlySteps") or []
-    hourly_steps = hourly if isinstance(hourly, list) else None
+    if total_distance is None:
+        agg_dist = 0.0
+        for b in buckets:
+            if isinstance(b, dict):
+                agg_dist += as_float(b.get("distance")) or 0.0
+        total_distance = agg_dist
+
+    # Active / sedentary minutes — summary values are in seconds
+    active_sec = (
+        as_int(pick_first(summary, ["highlyActiveSeconds"])) or 0
+    ) + (
+        as_int(pick_first(summary, ["activeSeconds"])) or 0
+    )
+    active_min = active_sec // 60 if active_sec else 0
+
+    sedentary_sec = as_int(pick_first(summary, ["sedentarySeconds"])) or 0
+    sedentary_min = sedentary_sec // 60 if sedentary_sec else 0
+
+    hourly_steps = buckets if buckets else None
 
     return {
-        "total_steps": total_steps,
-        "total_distance_meters": total_distance,
-        "total_calories": total_calories,
+        "total_steps": total_steps or 0,
+        "total_distance_meters": total_distance or 0,
+        "total_calories": total_calories or 0,
         "active_minutes": active_min,
         "sedentary_minutes": sedentary_min,
         "hourly_steps": hourly_steps,
@@ -750,7 +897,7 @@ def upsert_daily_health(
     hrv_summary = hrv_data.get("hrvSummary") or {}
     sleep_dto = sleep_data.get("dailySleepDTO") or {}
 
-    bb_high, bb_low, bb_eod = extract_body_battery_stats(summary, bb_readings)
+    _bb_start, bb_high, bb_low, bb_eod = extract_body_battery_stats(summary, bb_readings)
     sleep_score = extract_sleep_score(sleep_data)
 
     payload = {
@@ -766,8 +913,8 @@ def upsert_daily_health(
         "sleep_minutes": as_int(pick_first(summary, ["sleepMinutes", "sleep_minutes"])),
         "stress_score": as_float(pick_first(summary, ["averageStressLevel", "stressScore", "stress_score"])),
         "body_battery": as_float(pick_first(summary, ["lastUpdatedBodyBatteryLevel", "bodyBattery", "body_battery"])),
-        "respiration_rate": as_float(pick_first(summary, ["averageRespirationValue", "respirationRate", "respiration_rate"])),
-        "pulse_ox": as_float(pick_first(summary, ["averageSpO2", "pulseOx", "pulse_ox"])),
+        "respiration_rate": as_float(pick_first(summary, ["avgWakingRespirationValue", "averageRespirationValue", "respirationRate", "respiration_rate"])),
+        "pulse_ox": as_float(pick_first(summary, ["averageSpo2", "averageSpO2", "pulseOx", "pulse_ox"])),
         "body_composition": summary.get("bodyComposition"),
         # Garmin enriched: Body Battery
         "garmin_body_battery_high": bb_high,
@@ -777,18 +924,18 @@ def upsert_daily_health(
         "garmin_stress_avg": as_int(pick_first(summary, ["averageStressLevel", "stressScore"])),
         "garmin_stress_max": as_int(pick_first(summary, ["maxStressLevel"])),
         # Garmin enriched: HRV
-        "garmin_hrv_nightly_avg": as_int(hrv_summary.get("lastNight")),
+        "garmin_hrv_nightly_avg": as_int(pick_first(hrv_summary, ["lastNightAvg", "lastNight"])),
         "garmin_hrv_5day_avg": as_int(hrv_summary.get("weeklyAvg") or hrv_summary.get("fiveDayAvg")),
         "garmin_hrv_status": hrv_summary.get("status"),
         # Garmin enriched: Sleep
         "garmin_sleep_score": sleep_score,
         "garmin_spo2_avg": as_float(
             pick_first(sleep_dto, ["averageSpO2Value", "averageSpO2"])
-            or summary.get("averageSpO2")
+            or pick_first(summary, ["averageSpo2", "averageSpO2"])
         ),
         "garmin_respiration_avg": as_float(
             pick_first(sleep_dto, ["averageRespirationValue", "averageRespiration"])
-            or summary.get("averageRespirationValue")
+            or pick_first(summary, ["avgWakingRespirationValue", "averageRespirationValue"])
         ),
         # Raw
         "raw_payload": {
@@ -839,11 +986,12 @@ def upsert_daily_health_extended(
     hydration: dict[str, Any] | None,
     hrv_data: dict[str, Any],
     bb_readings: list[dict[str, Any]],
+    spo2_data: dict[str, Any] | None = None,
 ) -> None:
     """
     Upsert extended daily health metrics into garmin_daily_health_metrics table.
     """
-    extracted = extract_daily_health_metrics(summary, hydration, hrv_data, bb_readings)
+    extracted = extract_daily_health_metrics(summary, hydration, hrv_data, bb_readings, spo2_data)
 
     payload = {
         "user_id": user_id,
@@ -855,6 +1003,7 @@ def upsert_daily_health_extended(
             "hydration": hydration,
             "hrv": hrv_data,
             "body_battery": bb_readings,
+            "spo2": spo2_data,
         },
         "created_at": utc_now_iso(),
     }
@@ -867,23 +1016,27 @@ def upsert_daily_steps(
     user_id: str,
     connection_id: str,
     date_iso: str,
-    steps_data: dict[str, Any],
+    summary: dict[str, Any],
+    steps_buckets: list[dict[str, Any]] | None = None,
 ) -> None:
     """
     Upsert daily steps data into garmin_daily_steps table.
     Uses upsert logic to update the same row when steps change during the day.
     """
-    if not steps_data:
-        return
+    extracted = extract_daily_steps_data(summary, steps_buckets)
 
-    extracted = extract_daily_steps_data(steps_data)
+    if not extracted["total_steps"] and not (steps_buckets or summary):
+        return
 
     payload = {
         "user_id": user_id,
         "connection_id": connection_id,
         "step_date": date_iso,
         **extracted,
-        "raw_payload": steps_data,
+        "raw_payload": {
+            "summary": summary,
+            "buckets": steps_buckets,
+        },
         "created_at": utc_now_iso(),
     }
 
@@ -964,7 +1117,8 @@ def main() -> None:
         hrv = get_hrv_data(api, date_iso)
         sleep = get_sleep_data(api, date_iso)
         bb = get_body_battery(api, date_iso)
-        steps = get_steps_data(api, date_iso)
+        steps_buckets = get_steps_data(api, date_iso)
+        spo2 = get_spo2_data(api, date_iso)
 
         summary = daily.get("summary") or {}
         hydration = daily.get("hydration")
@@ -972,8 +1126,11 @@ def main() -> None:
         # Upsert to all tables
         upsert_daily_health(SUPABASE_USER_ID, connection_id, date_iso, daily, hrv, sleep, bb)
         upsert_sleep_data(SUPABASE_USER_ID, connection_id, date_iso, sleep)
-        upsert_daily_health_extended(SUPABASE_USER_ID, connection_id, date_iso, summary, hydration, hrv, bb)
-        upsert_daily_steps(SUPABASE_USER_ID, connection_id, date_iso, steps)
+        upsert_daily_health_extended(
+            SUPABASE_USER_ID, connection_id, date_iso,
+            summary, hydration, hrv, bb, spo2,
+        )
+        upsert_daily_steps(SUPABASE_USER_ID, connection_id, date_iso, summary, steps_buckets)
 
     activity_count = sync_recent_garmin_activities(api, SUPABASE_USER_ID, connection_id)
 

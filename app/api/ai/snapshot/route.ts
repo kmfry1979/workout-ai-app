@@ -27,6 +27,7 @@ type SnapshotRequest = {
     readinessScore: number | null
     readinessLabel: string | null
     date: string
+    localHour?: number | null
   }
   activities: {
     type: string
@@ -44,6 +45,18 @@ function buildPrompt(body: SnapshotRequest): string {
   const today = new Date(m.date).toLocaleDateString('en-GB', {
     weekday: 'long', day: 'numeric', month: 'long',
   })
+
+  const hour = typeof m.localHour === 'number' ? m.localHour : new Date().getHours()
+  const timeOfDay =
+    hour < 11 ? 'morning' :
+    hour < 14 ? 'midday' :
+    hour < 17 ? 'afternoon' :
+    hour < 20 ? 'early evening' :
+    'late evening'
+
+  // Did the athlete already train today?
+  const todayStr = new Date(m.date).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
+  const trainedToday = activities.some(a => a.date === todayStr && (a.durationMin ?? 0) > 0)
 
   const lines: string[] = []
 
@@ -107,7 +120,32 @@ function buildPrompt(body: SnapshotRequest): string {
       }).join('\n')
     : 'No recent activities.'
 
-  return `You are an expert sports scientist giving a daily training snapshot. Today is ${today}.
+  const contextLine = `It is the ${timeOfDay} (local hour ${hour}:00). ${
+    trainedToday
+      ? 'The athlete has already completed at least one activity today.'
+      : 'No activity has been logged yet today.'
+  }`
+
+  // Recommendation framing changes by time of day. After ~18:00 it's too late
+  // to prescribe a hard session — validate rest if it fits and pivot to
+  // tomorrow's plan + a light evening option.
+  const recommendationGuidance =
+    hour >= 18
+      ? `
+**Tonight & Tomorrow**
+It is the ${timeOfDay}, so don't prescribe a hard workout for today.
+- If no training happened and recovery signals are only moderate, explicitly validate rest: a well-timed rest day supports adaptation. Say so plainly.
+- Suggest ONE gentle evening option the athlete can do now if they want movement: a 15–20 min easy walk, mobility/stretching, or breath-work for sleep.
+- Then prescribe the main session FOR TOMORROW — pick ONE of: full rest, active recovery, easy aerobic, moderate run/cycle, tempo/threshold, intervals, or strength. Be specific ("tomorrow: 30–40 min easy run at conversational pace" or "tomorrow: 5x800m at 5k pace, 90s rest").`
+      : `
+**Today's Recommendation**
+Pick ONE of: full rest, active recovery (light walk/yoga), easy aerobic, moderate run/cycle, tempo/threshold, intervals, or strength. State which and why with numbers. Give a specific session (e.g. "30–40 min easy run at conversational pace" or "5x800m intervals with 90s rest").${
+          trainedToday
+            ? ' The athlete already trained today, so frame this as "for the rest of the day" — likely recovery, mobility, or hydration/fuel focus rather than another hard session.'
+            : ''
+        }`
+
+  return `You are an expert sports scientist giving a daily training snapshot. Today is ${today}. ${contextLine}
 
 ## Today's Metrics
 ${metricsSection}
@@ -116,23 +154,21 @@ ${metricsSection}
 ${actSection}
 
 ## Instructions
-Analyse all the data above and give a concise, data-driven daily snapshot in exactly this format:
+Analyse the data and respond in EXACTLY this format (including the bold section headers):
 
 **Current Status**
-One sentence describing the athlete's overall recovery and readiness state today, referencing actual numbers.
+One sentence on overall recovery and readiness today, referencing actual numbers.
 
 **Key Signals**
 • [Most important positive or negative signal with the number]
 • [Second most important signal with the number]
 • [Third signal if relevant, or omit]
-
-**Today's Recommendation**
-Specific recommendation — choose ONE of: full rest, active recovery (light walk/yoga), easy aerobic session, moderate run/cycle, tempo/threshold session, interval session, or strength training. State exactly which and why, referencing the metrics. If conditions are good, suggest a specific workout (e.g. "30-40 min easy run at conversational pace" or "5x800m intervals with 90s rest").
+${recommendationGuidance}
 
 **Watch Out For**
-One sentence risk or focus area for today.
+One sentence risk or focus area.
 
-Be direct. Reference specific numbers. Total response under 220 words.`
+Be direct, warm, and non-preachy. Reference specific numbers. Never prescribe a hard workout later than the current time of day. Total response under 240 words.`
 }
 
 export async function POST(req: NextRequest) {

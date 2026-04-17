@@ -1,9 +1,11 @@
 name: Garmin Sync
 
 on:
-  # Schedule DISABLED — re-enable once Garmin 429 rate limit has cleared
-  # schedule:
-  #   - cron: "30 6 * * *"
+  # Token-based login only (password fallback is disabled in CI via the CI env
+  # var), so this doesn't burn password attempts against Garmin's rate limiter.
+  # Cadence: every 4 hours. Adjust if you want fresher data.
+  schedule:
+    - cron: "0 */4 * * *"
 
   # Allow manual trigger from GitHub UI or via API dispatch from the website
   workflow_dispatch:

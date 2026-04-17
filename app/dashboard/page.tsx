@@ -192,6 +192,69 @@ export default function DashboardPage() {
   const [aiExpanded, setAiExpanded] = useState(false)
   const [aiLoading, setAiLoading] = useState(false)
   const [aiInsight, setAiInsight] = useState<string | null>(null)
+  const [syncing, setSyncing] = useState(false)
+  const [syncMessage, setSyncMessage] = useState<string | null>(null)
+
+  const loadDashboardData = async (userId: string) => {
+    const today = new Date().toISOString().split('T')[0]
+
+    // Load daily health metrics (existing table)
+    const { data: m } = await supabase
+      .from('daily_health_metrics')
+      .select(`metric_date, steps, sleep_minutes, resting_hr, resting_heart_rate_bpm,
+        pulse_ox, garmin_spo2_avg, garmin_hrv_nightly_avg, garmin_hrv_status,
+        garmin_sleep_score, garmin_body_battery_high, garmin_body_battery_eod,
+        garmin_stress_avg, active_calories_kcal, calories, distance_m`)
+      .eq('user_id', userId)
+      .eq('metric_date', today)
+      .maybeSingle()
+
+    setMetrics(m as DailyMetrics | null)
+
+    // Load detailed sleep data
+    const { data: sleep } = await supabase
+      .from('garmin_sleep_data')
+      .select(`sleep_date, sleep_duration_seconds, sleep_score, sleep_quality_score,
+        awake_seconds, light_sleep_seconds, deep_sleep_seconds, rem_sleep_seconds,
+        avg_spO2, avg_heart_rate_bpm, sleep_start, sleep_end`)
+      .eq('user_id', userId)
+      .eq('sleep_date', today)
+      .maybeSingle()
+
+    setSleepData(sleep as SleepData | null)
+
+    // Load extended daily health metrics
+    const { data: health } = await supabase
+      .from('garmin_daily_health_metrics')
+      .select(`metric_date, body_battery_start, body_battery_end, body_battery_peak,
+        body_battery_low, stress_avg, stress_max, hrv_avg, hrv_status,
+        respiration_avg_bpm, spo2_avg, hydration_intake_ml, hydration_goal_ml`)
+      .eq('user_id', userId)
+      .eq('metric_date', today)
+      .maybeSingle()
+
+    setDailyHealth(health as DailyHealthMetrics | null)
+
+    // Load daily steps
+    const { data: steps } = await supabase
+      .from('garmin_daily_steps')
+      .select(`step_date, total_steps, total_distance_meters, total_calories, active_minutes`)
+      .eq('user_id', userId)
+      .eq('step_date', today)
+      .maybeSingle()
+
+    setDailySteps(steps as DailySteps | null)
+
+    const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString()
+    const { data: acts } = await supabase
+      .from('garmin_activities')
+      .select('duration_sec, activity_type, start_time')
+      .eq('user_id', userId)
+      .gte('start_time', weekAgo)
+      .order('start_time', { ascending: false })
+
+    setActivities((acts ?? []) as ActivitySummary[])
+  }
 
   useEffect(() => {
     const load = async () => {
@@ -206,68 +269,69 @@ export default function DashboardPage() {
         .maybeSingle()
       setDisplayName(profile?.display_name ?? profile?.name ?? user.email ?? '')
 
-      const today = new Date().toISOString().split('T')[0]
-
-      // Load daily health metrics (existing table)
-      const { data: m } = await supabase
-        .from('daily_health_metrics')
-        .select(`metric_date, steps, sleep_minutes, resting_hr, resting_heart_rate_bpm,
-          pulse_ox, garmin_spo2_avg, garmin_hrv_nightly_avg, garmin_hrv_status,
-          garmin_sleep_score, garmin_body_battery_high, garmin_body_battery_eod,
-          garmin_stress_avg, active_calories_kcal, calories, distance_m`)
-        .eq('user_id', user.id)
-        .eq('metric_date', today)
-        .maybeSingle()
-
-      setMetrics(m as DailyMetrics | null)
-
-      // Load detailed sleep data
-      const { data: sleep } = await supabase
-        .from('garmin_sleep_data')
-        .select(`sleep_date, sleep_duration_seconds, sleep_score, sleep_quality_score,
-          awake_seconds, light_sleep_seconds, deep_sleep_seconds, rem_sleep_seconds,
-          avg_spO2, avg_heart_rate_bpm, sleep_start, sleep_end`)
-        .eq('user_id', user.id)
-        .eq('sleep_date', today)
-        .maybeSingle()
-
-      setSleepData(sleep as SleepData | null)
-
-      // Load extended daily health metrics
-      const { data: health } = await supabase
-        .from('garmin_daily_health_metrics')
-        .select(`metric_date, body_battery_start, body_battery_end, body_battery_peak,
-          body_battery_low, stress_avg, stress_max, hrv_avg, hrv_status,
-          respiration_avg_bpm, spo2_avg, hydration_intake_ml, hydration_goal_ml`)
-        .eq('user_id', user.id)
-        .eq('metric_date', today)
-        .maybeSingle()
-
-      setDailyHealth(health as DailyHealthMetrics | null)
-
-      // Load daily steps
-      const { data: steps } = await supabase
-        .from('garmin_daily_steps')
-        .select(`step_date, total_steps, total_distance_meters, total_calories, active_minutes`)
-        .eq('user_id', user.id)
-        .eq('step_date', today)
-        .maybeSingle()
-
-      setDailySteps(steps as DailySteps | null)
-
-      const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString()
-      const { data: acts } = await supabase
-        .from('garmin_activities')
-        .select('duration_sec, activity_type, start_time')
-        .eq('user_id', user.id)
-        .gte('start_time', weekAgo)
-        .order('start_time', { ascending: false })
-
-      setActivities((acts ?? []) as ActivitySummary[])
+      await loadDashboardData(user.id)
       setLoading(false)
     }
     load()
   }, [router])
+
+  const handleSyncNow = async () => {
+    if (syncing) return
+    setSyncing(true)
+    setSyncMessage('Triggering sync…')
+    try {
+      const res = await fetch('/api/integrations/garmin/sync', { method: 'POST' })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        setSyncMessage(body.error ?? `Sync failed (${res.status})`)
+        setSyncing(false)
+        return
+      }
+
+      // Poll provider_connections.status until it flips back from "syncing"
+      const { data: auth } = await supabase.auth.getSession()
+      const userId = auth.session?.user.id
+      if (!userId) { setSyncing(false); return }
+
+      setSyncMessage('Syncing with Garmin… this usually takes about a minute.')
+      const startedAt = Date.now()
+      const poll = async (): Promise<void> => {
+        const { data: conn } = await supabase
+          .from('provider_connections')
+          .select('status, last_successful_sync_at, last_error')
+          .eq('user_id', userId)
+          .eq('provider_type', 'garmin')
+          .maybeSingle()
+
+        if (conn?.last_error) {
+          setSyncMessage(`Sync error: ${conn.last_error}`)
+          setSyncing(false)
+          return
+        }
+        if (conn?.status === 'connected' && conn.last_successful_sync_at) {
+          const finishedAt = new Date(conn.last_successful_sync_at).getTime()
+          if (finishedAt >= startedAt - 2000) {
+            await loadDashboardData(userId)
+            setSyncMessage('Synced.')
+            setSyncing(false)
+            setTimeout(() => setSyncMessage(null), 4000)
+            return
+          }
+        }
+        if (Date.now() - startedAt > 5 * 60_000) {
+          setSyncMessage('Still syncing — data will appear shortly.')
+          setSyncing(false)
+          return
+        }
+        setTimeout(poll, 4000)
+      }
+      setTimeout(poll, 5000)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Sync failed'
+      setSyncMessage(msg)
+      setSyncing(false)
+    }
+  }
 
   if (loading) {
     return (
@@ -325,6 +389,7 @@ export default function DashboardPage() {
             readinessScore,
             readinessLabel: readinessLbl,
             date: today,
+            localHour: new Date().getHours(),
           },
           activities: recentActs,
         }),
@@ -383,6 +448,19 @@ export default function DashboardPage() {
             </h1>
           </div>
           <div className="flex gap-2">
+            <button
+              onClick={handleSyncNow}
+              disabled={syncing}
+              className="text-xs bg-orange-600 hover:bg-orange-500 disabled:bg-gray-700 disabled:text-gray-500 text-white px-3 py-1.5 rounded-lg flex items-center gap-1.5"
+            >
+              {syncing && (
+                <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                  <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" opacity="0.25" />
+                  <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+                </svg>
+              )}
+              {syncing ? 'Syncing…' : 'Sync now'}
+            </button>
             <a href="/activities" className="text-xs bg-gray-800 text-gray-300 px-3 py-1.5 rounded-lg">
               Activities
             </a>
@@ -394,6 +472,9 @@ export default function DashboardPage() {
             </button>
           </div>
         </div>
+        {syncMessage && (
+          <p className="text-xs text-gray-400 -mt-2">{syncMessage}</p>
+        )}
 
         {/* Readiness card */}
         <div className="bg-gray-900 rounded-3xl p-6">
