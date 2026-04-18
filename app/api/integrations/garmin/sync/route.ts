@@ -1,7 +1,16 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { randomUUID } from "node:crypto";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
-async function dispatchGarminWorkflow(userId: string, reason: string) {
+type DispatchInputs = {
+  user_id: string;
+  reason: string;
+  run_id?: string;
+  days_back?: string;
+  request_delay?: string;
+};
+
+async function dispatchGarminWorkflow(inputs: DispatchInputs) {
   const owner = process.env.GITHUB_OWNER;
   const repo = process.env.GITHUB_REPO;
   const workflowFile = process.env.GITHUB_WORKFLOW_FILE || "garmin-sync.yml";
@@ -31,10 +40,7 @@ async function dispatchGarminWorkflow(userId: string, reason: string) {
       },
       body: JSON.stringify({
         ref: "main",
-        inputs: {
-          user_id: userId,
-          reason,
-        },
+        inputs,
       }),
     }
   );
@@ -46,7 +52,7 @@ async function dispatchGarminWorkflow(userId: string, reason: string) {
   }
 }
 
-export async function POST() {
+export async function POST(req: NextRequest) {
   const supabase = await createSupabaseServerClient();
 
   const {
@@ -58,6 +64,24 @@ export async function POST() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // Optional body: { days_back?: number, reason?: string, request_delay?: number }
+  let body: { days_back?: number; reason?: string; request_delay?: number } = {};
+  try {
+    if (req.headers.get("content-length") && req.headers.get("content-length") !== "0") {
+      body = await req.json();
+    }
+  } catch {
+    // body is optional; treat as default sync
+  }
+
+  const daysBackRaw = Number(body.days_back ?? 1);
+  // Cap at 365 days as a safety net — a year of history is plenty.
+  const daysBack = Number.isFinite(daysBackRaw) ? Math.max(1, Math.min(365, Math.round(daysBackRaw))) : 1;
+  const reason = body.reason ?? (daysBack > 1 ? `manual-backfill-${daysBack}d` : "manual");
+  const requestDelayRaw = Number(body.request_delay ?? (daysBack > 30 ? 1.5 : 1.0));
+  const requestDelay = Number.isFinite(requestDelayRaw) ? Math.max(0.2, Math.min(5, requestDelayRaw)) : 1.0;
+
+  const runId = randomUUID();
   const now = new Date().toISOString();
 
   const { error: upsertError } = await supabase
@@ -88,7 +112,13 @@ export async function POST() {
   }
 
   try {
-    await dispatchGarminWorkflow(user.id, "manual");
+    await dispatchGarminWorkflow({
+      user_id: user.id,
+      reason,
+      run_id: runId,
+      days_back: String(daysBack),
+      request_delay: String(requestDelay),
+    });
 
     await supabase
       .from("provider_connections")
@@ -101,9 +131,9 @@ export async function POST() {
       .eq("user_id", user.id)
       .eq("provider_type", "garmin");
 
-    return NextResponse.json({ ok: true });
-  } catch (err: any) {
-    const message = err?.message ?? "Failed to trigger sync";
+    return NextResponse.json({ ok: true, run_id: runId, days_back: daysBack });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Failed to trigger sync";
     console.error("Garmin sync trigger failed:", message);
 
     await supabase

@@ -22,12 +22,21 @@ on:
         description: "Number of days to sync (1 = today only)"
         required: false
         default: "1"
+      run_id:
+        description: "Optional sync run id (UI tails progress rows with this id)"
+        required: false
+        default: ""
+      request_delay:
+        description: "Seconds to sleep between Garmin API calls (rate-limit safety)"
+        required: false
+        default: "1.0"
 
 jobs:
   sync:
     name: Sync Garmin → Supabase
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Long enough for a 1-year backfill (~10s per day × 365 ≈ 60 min, plus head-room).
+    timeout-minutes: 90
 
     steps:
       - name: Checkout
@@ -52,5 +61,7 @@ jobs:
           SUPABASE_USER_ID: ${{ inputs.user_id || secrets.SUPABASE_USER_ID }}
           GARMIN_ACTIVITY_LIMIT: "20"
           GARMIN_DAYS_BACK: ${{ inputs.days_back || '1' }}
+          GARMIN_REQUEST_DELAY: ${{ inputs.request_delay || '1.0' }}
+          GARMIN_SYNC_RUN_ID: ${{ inputs.run_id || '' }}
           GARMINTOKENS: /tmp/garmin_tokens
         run: python garmin-sync/sync_once.py

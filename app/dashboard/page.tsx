@@ -208,6 +208,7 @@ function MetricTile({
   trend,
   trendColor = '#f97316',
   invert = false,
+  onClick,
 }: {
   label: string
   icon: string
@@ -217,10 +218,11 @@ function MetricTile({
   trend?: (number | null)[]
   trendColor?: string
   invert?: boolean
+  onClick?: () => void
 }) {
   const display = value == null || value === '' ? '—' : value
-  return (
-    <div className="bg-gray-800 rounded-2xl p-3 flex flex-col justify-between min-h-[100px]">
+  const inner = (
+    <>
       <div className="flex items-center justify-between text-gray-400 text-xs">
         <span className="flex items-center gap-1">
           <span className="text-base">{icon}</span>
@@ -241,6 +243,136 @@ function MetricTile({
           <Sparkline values={trend} color={trendColor} width={90} height={18} invert={invert} />
         </div>
       )}
+    </>
+  )
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className="bg-gray-800 hover:bg-gray-700/80 rounded-2xl p-3 flex flex-col justify-between min-h-[100px] text-left transition-colors"
+      >
+        {inner}
+      </button>
+    )
+  }
+  return (
+    <div className="bg-gray-800 rounded-2xl p-3 flex flex-col justify-between min-h-[100px]">
+      {inner}
+    </div>
+  )
+}
+
+// Reusable detail-modal overlay. Matches the Sleep modal styling.
+function DetailModal({
+  open,
+  onClose,
+  title,
+  subtitle,
+  icon,
+  gradient = 'from-gray-900 via-gray-900 to-gray-950',
+  border = 'border-gray-700/50',
+  children,
+}: {
+  open: boolean
+  onClose: () => void
+  title: string
+  subtitle?: string | null
+  icon: string
+  gradient?: string
+  border?: string
+  children: React.ReactNode
+}) {
+  if (!open) return null
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+    >
+      <div
+        className={`relative w-full max-w-lg max-h-[85vh] overflow-y-auto bg-gradient-to-br ${gradient} rounded-3xl p-6 border ${border} shadow-2xl`}
+        onClick={e => e.stopPropagation()}
+      >
+        <button
+          onClick={onClose}
+          aria-label={`Close ${title}`}
+          className="absolute top-3 right-3 w-8 h-8 rounded-full bg-gray-800/80 hover:bg-gray-700 text-gray-300 hover:text-white flex items-center justify-center transition-colors"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+        <div className="flex items-center gap-3 mb-4">
+          <span className="text-2xl">{icon}</span>
+          <div>
+            <p className="text-lg font-bold text-white">{title}</p>
+            {subtitle && <p className="text-sm text-gray-300">{subtitle}</p>}
+          </div>
+        </div>
+        {children}
+        <button
+          onClick={onClose}
+          className="mt-5 w-full bg-gray-800/80 hover:bg-gray-700 text-gray-200 text-sm py-2 rounded-xl transition-colors"
+        >
+          Back to dashboard
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// Bar chart used in the Steps modal. Each bar is colored by goal status:
+// green = met goal, red = missed, blue = current period.
+function StepsBarChart({
+  bars,
+  goal,
+  height = 140,
+}: {
+  bars: { label: string; value: number; isCurrent: boolean }[]
+  goal: number
+  height?: number
+}) {
+  if (bars.length === 0) return <p className="text-xs text-gray-500">No data.</p>
+  // Always scale against the goal so the visual threshold is consistent.
+  const max = Math.max(goal, ...bars.map(b => b.value), 1)
+  return (
+    <div>
+      <div className="flex items-end gap-1" style={{ height }}>
+        {bars.map((b, i) => {
+          const h = Math.max(2, (b.value / max) * (height - 20))
+          const met = b.value >= goal
+          const color = b.isCurrent ? '#3b82f6' : met ? '#22c55e' : '#ef4444'
+          return (
+            <div key={i} className="flex-1 flex flex-col items-center justify-end h-full">
+              <span className="text-[9px] text-gray-400 mb-0.5">
+                {b.value > 0 ? (b.value >= 1000 ? `${(b.value / 1000).toFixed(b.value >= 10000 ? 0 : 1)}k` : b.value) : ''}
+              </span>
+              <div
+                className="w-full rounded-t"
+                style={{ height: h, backgroundColor: color, opacity: b.value === 0 ? 0.3 : 1 }}
+                title={`${b.label}: ${b.value.toLocaleString()} steps`}
+              />
+            </div>
+          )
+        })}
+      </div>
+      <div className="flex gap-1 mt-1">
+        {bars.map((b, i) => (
+          <div key={i} className="flex-1 text-center text-[9px] text-gray-500 truncate">{b.label}</div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// Small two-column row used inside DetailModal cards.
+function DetailRow({ label, value, color = 'text-white' }: { label: string; value: React.ReactNode; color?: string }) {
+  return (
+    <div className="flex items-center justify-between py-2 border-b border-gray-700/60 last:border-0">
+      <span className="text-sm text-gray-200">{label}</span>
+      <span className={`text-base font-bold ${color}`}>{value ?? '—'}</span>
     </div>
   )
 }
@@ -397,6 +529,33 @@ export default function DashboardPage() {
   const [syncMessage, setSyncMessage] = useState<string | null>(null)
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(null)
   const [sleepDetailOpen, setSleepDetailOpen] = useState(false)
+  type DetailKey =
+    | 'bodyBattery' | 'stress' | 'restingHr' | 'steps'
+    | 'hrv' | 'spo2' | 'intensity' | 'readiness' | 'hydration'
+  const [openDetail, setOpenDetail] = useState<DetailKey | null>(null)
+  const closeDetail = () => setOpenDetail(null)
+  const [stepsHistory, setStepsHistory] = useState<{ step_date: string; total_steps: number | null }[]>([])
+  const [hourlySteps, setHourlySteps] = useState<Record<string, number> | null>(null)
+  const [stepsTab, setStepsTab] = useState<'day' | 'week' | 'month' | 'year'>('day')
+
+  // Settings + one-time backfill state
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [backfillOpen, setBackfillOpen] = useState(false)
+  const [backfillRunId, setBackfillRunId] = useState<string | null>(null)
+  const [backfillDays, setBackfillDays] = useState<number>(365)
+  const [backfillStatus, setBackfillStatus] = useState<'idle' | 'starting' | 'running' | 'done' | 'error'>('idle')
+  type ProgressRow = {
+    id: number
+    ts: string
+    level: string
+    stage: string | null
+    message: string
+    percent: number | null
+    days_total: number | null
+    day_index: number | null
+  }
+  const [progressRows, setProgressRows] = useState<ProgressRow[]>([])
+  const [backfillError, setBackfillError] = useState<string | null>(null)
   const [trends, setTrends] = useState<{
     hrv: (number | null)[]
     sleep: (number | null)[]
@@ -436,7 +595,7 @@ export default function DashboardPage() {
     // Garmin sometimes returns an empty placeholder row for the current day before
     // overnight sleep is recorded; skip those (sleep_score AND duration both null).
     const sevenAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0]
-    const { data: sleepRows } = await supabase
+    const { data: sleepRows, error: sleepErr } = await supabase
       .from('garmin_sleep_data')
       .select(`sleep_date, sleep_duration_seconds, sleep_score, sleep_quality_score,
         awake_seconds, light_sleep_seconds, deep_sleep_seconds, rem_sleep_seconds,
@@ -447,10 +606,43 @@ export default function DashboardPage() {
       .order('sleep_date', { ascending: false })
       .limit(7)
 
-    const firstRealSleep = (sleepRows ?? []).find(
-      r => r.sleep_score != null || (r.sleep_duration_seconds != null && r.sleep_duration_seconds > 0)
-    )
+    // Pick the most complete recent row. Garmin sometimes writes partial rows
+    // (score only, no stages / HR / SpO2) for the current day; prefer a full row
+    // from an earlier night over a skeletal current-day row.
+    const scoreCompleteness = (r: Record<string, unknown>) => {
+      const fields = [
+        'sleep_score', 'sleep_duration_seconds',
+        'deep_sleep_seconds', 'light_sleep_seconds', 'rem_sleep_seconds', 'awake_seconds',
+        'avg_heart_rate_bpm', 'max_heart_rate_bpm', 'avg_spo2', 'min_spo2',
+        'avg_respiration_bpm', 'sleep_stress_score', 'sleep_start', 'sleep_end',
+      ]
+      return fields.reduce((acc, k) => {
+        const v = r[k]
+        return acc + (v != null && v !== 0 ? 1 : 0)
+      }, 0)
+    }
+    // Rank every candidate; prefer completeness but never return null if any
+    // row has at least a score or duration — a partial row beats "Most recent night"
+    // with no data at all.
+    const scored = (sleepRows ?? [])
+      .map(r => ({ r, score: scoreCompleteness(r as Record<string, unknown>) }))
+      .filter(x => x.score >= 1)
+      .sort((a, b) => b.score - a.score || (a.r.sleep_date > b.r.sleep_date ? -1 : 1))
+    const ranked = scored.filter(x => x.score >= 3)
+    const firstRealSleep = ranked[0]?.r ?? scored[0]?.r ?? null
     setSleepData((firstRealSleep ?? null) as SleepData | null)
+    if (typeof window !== 'undefined') {
+      console.log('[dashboard] sleep query', {
+        userId,
+        sevenAgo,
+        err: sleepErr?.message,
+        rowCount: sleepRows?.length ?? 0,
+        dates: (sleepRows ?? []).map(r => r.sleep_date),
+        ranked: ranked.map(x => ({ date: x.r.sleep_date, score: x.score })),
+        firstReal: firstRealSleep?.sleep_date,
+        firstRealScore: firstRealSleep?.sleep_score,
+      })
+    }
 
     // Load extended daily health metrics
     const { data: health } = await supabase
@@ -467,12 +659,64 @@ export default function DashboardPage() {
     // Load daily steps
     const { data: steps } = await supabase
       .from('garmin_daily_steps')
-      .select(`step_date, total_steps, total_distance_meters, total_calories, active_minutes`)
+      .select(`step_date, total_steps, total_distance_meters, total_calories, active_minutes, hourly_steps`)
       .eq('user_id', userId)
       .eq('step_date', today)
       .maybeSingle()
 
     setDailySteps(steps as DailySteps | null)
+    // Parse hourly steps (may be array of {hour,steps} or object {hour:steps})
+    if (steps && (steps as { hourly_steps?: unknown }).hourly_steps) {
+      const raw = (steps as { hourly_steps: unknown }).hourly_steps
+      const map: Record<string, number> = {}
+      if (Array.isArray(raw)) {
+        for (const r of raw as { hour?: number | string; steps?: number; total?: number }[]) {
+          if (r && r.hour != null) map[String(r.hour)] = Number(r.steps ?? r.total ?? 0)
+        }
+      } else if (raw && typeof raw === 'object') {
+        for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+          map[k] = Number(v) || 0
+        }
+      }
+      setHourlySteps(map)
+    } else {
+      setHourlySteps(null)
+    }
+
+    // 365-day step history for the Steps modal (Day/Week/Month/Year tabs).
+    // Pull from both garmin_daily_steps AND the legacy daily_health_metrics.steps
+    // so older days still show up even if the v2 table wasn't populated back then.
+    const yearAgo = new Date(Date.now() - 365 * 86400000).toISOString().split('T')[0]
+    const [primary, legacy] = await Promise.all([
+      supabase
+        .from('garmin_daily_steps')
+        .select('step_date, total_steps')
+        .eq('user_id', userId)
+        .gte('step_date', yearAgo)
+        .order('step_date', { ascending: true }),
+      supabase
+        .from('daily_health_metrics')
+        .select('metric_date, steps')
+        .eq('user_id', userId)
+        .gte('metric_date', yearAgo)
+        .order('metric_date', { ascending: true }),
+    ])
+    const merged = new Map<string, number | null>()
+    for (const r of (legacy.data ?? []) as { metric_date: string; steps: number | null }[]) {
+      if (r.metric_date && r.steps != null) merged.set(r.metric_date, r.steps)
+    }
+    // garmin_daily_steps takes precedence when both exist
+    for (const r of (primary.data ?? []) as { step_date: string; total_steps: number | null }[]) {
+      if (r.step_date && r.total_steps != null) merged.set(r.step_date, r.total_steps)
+    }
+    const history = Array.from(merged.entries())
+      .map(([step_date, total_steps]) => ({ step_date, total_steps }))
+      .sort((a, b) => a.step_date.localeCompare(b.step_date))
+    setStepsHistory(history)
+    if (typeof window !== 'undefined') {
+      console.log('[dashboard] steps history loaded:', history.length, 'days',
+        'primary:', primary.data?.length ?? 0, 'legacy:', legacy.data?.length ?? 0)
+    }
 
     const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString()
     const { data: acts } = await supabase
@@ -612,6 +856,88 @@ export default function DashboardPage() {
     }
   }
 
+  // One-time backfill: dispatches the sync workflow with a large days_back and
+  // streams progress rows from garmin_sync_progress while it runs.
+  const handleBackfill = async (days: number) => {
+    setBackfillDays(days)
+    setBackfillStatus('starting')
+    setBackfillError(null)
+    setProgressRows([])
+    setSettingsOpen(false)
+    setBackfillOpen(true)
+    try {
+      const res = await fetch('/api/integrations/garmin/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          days_back: days,
+          // Stay polite on long backfills.
+          request_delay: days > 30 ? 1.5 : 1.0,
+          reason: `manual-backfill-${days}d`,
+        }),
+      })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setBackfillError(body.error ?? `Sync failed (${res.status})`)
+        setBackfillStatus('error')
+        return
+      }
+      if (body.run_id) {
+        setBackfillRunId(body.run_id)
+        setBackfillStatus('running')
+      } else {
+        setBackfillError('No run_id returned')
+        setBackfillStatus('error')
+      }
+    } catch (err) {
+      setBackfillError(err instanceof Error ? err.message : 'Sync failed to start')
+      setBackfillStatus('error')
+    }
+  }
+
+  // Poll garmin_sync_progress for the active run id every 2s.
+  useEffect(() => {
+    if (!backfillRunId || backfillStatus !== 'running') return
+    let cancelled = false
+    let lastId = 0
+    const tick = async () => {
+      const { data } = await supabase
+        .from('garmin_sync_progress')
+        .select('id, ts, level, stage, message, percent, days_total, day_index')
+        .eq('run_id', backfillRunId)
+        .gt('id', lastId)
+        .order('id', { ascending: true })
+        .limit(200)
+      if (cancelled) return
+      if (data && data.length > 0) {
+        lastId = data[data.length - 1].id as number
+        setProgressRows(prev => [...prev, ...(data as ProgressRow[])])
+        const last = data[data.length - 1] as ProgressRow
+        if (last.level === 'done' || last.stage === 'complete') {
+          setBackfillStatus('done')
+          // Refresh dashboard data so the new history is reflected.
+          const { data: auth } = await supabase.auth.getSession()
+          const userId = auth.session?.user.id
+          if (userId) {
+            await Promise.all([loadDashboardData(userId), loadLastSync(userId)])
+          }
+          return
+        }
+        if (last.level === 'error') {
+          setBackfillError(last.message)
+          setBackfillStatus('error')
+          return
+        }
+      }
+      if (!cancelled) setTimeout(tick, 2000)
+    }
+    tick()
+    return () => { cancelled = true }
+  }, [backfillRunId, backfillStatus])
+
+  // Latest progress row drives the headline + percent in the modal.
+  const latestProgress = progressRows[progressRows.length - 1] ?? null
+
   if (loading) {
     return (
       <main className="min-h-screen bg-gray-950 flex items-center justify-center">
@@ -715,7 +1041,7 @@ export default function DashboardPage() {
   const exerciseStr = scores?.exerciseMin ? `${scores.exerciseMin} min` : '—'
 
   return (
-    <main className="min-h-screen bg-gray-950 p-4 md:p-8 pb-24">
+    <main className="min-h-screen bg-gray-950 p-4 md:p-8 pb-32">
       {/* AI Insights Modal Overlay */}
       {aiExpanded && (
         <div
@@ -829,11 +1155,11 @@ export default function DashboardPage() {
             {/* Score + Duration + Quality */}
             <div className="grid grid-cols-3 gap-2 mb-4">
               <div className="bg-gray-800/80 rounded-xl p-3 text-center">
-                <p className="text-[10px] text-gray-500 uppercase tracking-wider">Score</p>
+                <p className="text-[10px] text-gray-300 uppercase tracking-wider font-semibold">Score</p>
                 <p className="text-2xl font-bold text-white mt-0.5">{sleepData?.sleep_score ?? metrics?.garmin_sleep_score ?? '—'}</p>
               </div>
               <div className="bg-gray-800/80 rounded-xl p-3 text-center">
-                <p className="text-[10px] text-gray-500 uppercase tracking-wider">Duration</p>
+                <p className="text-[10px] text-gray-300 uppercase tracking-wider font-semibold">Duration</p>
                 <p className="text-2xl font-bold text-white mt-0.5">
                   {(() => {
                     const sec = sleepData?.sleep_duration_seconds ?? (metrics?.sleep_minutes != null ? metrics.sleep_minutes * 60 : null)
@@ -842,7 +1168,7 @@ export default function DashboardPage() {
                 </p>
               </div>
               <div className="bg-gray-800/80 rounded-xl p-3 text-center">
-                <p className="text-[10px] text-gray-500 uppercase tracking-wider">Quality</p>
+                <p className="text-[10px] text-gray-300 uppercase tracking-wider font-semibold">Quality</p>
                 <p className="text-2xl font-bold text-white mt-0.5">{sleepData?.sleep_quality_score ?? '—'}</p>
               </div>
             </div>
@@ -850,7 +1176,7 @@ export default function DashboardPage() {
             {/* Sleep Stages bar chart */}
             {sleepData && (sleepData.awake_seconds != null || sleepData.light_sleep_seconds != null || sleepData.deep_sleep_seconds != null || sleepData.rem_sleep_seconds != null) ? (
               <div className="mb-4">
-                <p className="text-xs text-gray-500 uppercase tracking-wider mb-2">Sleep Stages</p>
+                <p className="text-xs text-gray-300 uppercase tracking-wider font-semibold mb-2">Sleep Stages</p>
                 <div className="flex h-4 rounded-full overflow-hidden bg-gray-800">
                   {sleepData.deep_sleep_seconds != null && sleepData.deep_sleep_seconds > 0 && (
                     <div className="bg-purple-600" style={{ width: `${(sleepData.deep_sleep_seconds / (sleepData.sleep_duration_seconds || 1)) * 100}%` }} title={`Deep ${Math.round(sleepData.deep_sleep_seconds / 60)}m`} />
@@ -881,7 +1207,7 @@ export default function DashboardPage() {
             )}
 
             {/* Sleep Timeline Metrics */}
-            <p className="text-xs text-gray-500 uppercase tracking-wider mb-2 mt-4">Sleep Timeline Metrics</p>
+            <p className="text-xs text-gray-300 uppercase tracking-wider font-semibold mb-2 mt-4">Sleep Timeline Metrics</p>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               <SleepStat label="Avg Overnight HR" value={sleepData?.sleep_hr_avg ?? sleepData?.avg_heart_rate_bpm} unit="bpm" color="text-orange-300" />
               <SleepStat label="Max Overnight HR" value={sleepData?.sleep_hr_max ?? sleepData?.max_heart_rate_bpm} unit="bpm" color="text-red-400" />
@@ -905,6 +1231,792 @@ export default function DashboardPage() {
             >
               Back to dashboard
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Body Battery detail */}
+      <DetailModal
+        open={openDetail === 'bodyBattery'}
+        onClose={closeDetail}
+        title="Body Battery"
+        subtitle="Energy reservoir across the day"
+        icon="⚡"
+        gradient="from-blue-950/90 via-gray-900 to-gray-950"
+        border="border-blue-500/30"
+      >
+        {(() => {
+          // Fallback chain: dailyHealth (v2) → metrics (legacy). Some Garmin payloads
+          // only expose high/low, so infer start/peak when those are missing.
+          const start = dailyHealth?.body_battery_start ?? metrics?.garmin_body_battery_high ?? null
+          const peak = dailyHealth?.body_battery_peak ?? metrics?.garmin_body_battery_high ?? null
+          const low = dailyHealth?.body_battery_low ?? null
+          const end = dailyHealth?.body_battery_end ?? metrics?.garmin_body_battery_eod ?? null
+          const drain = peak != null && low != null ? peak - low : null
+          const recovery = start != null && peak != null && peak >= start ? peak - start : null
+          return (
+            <>
+              <div className="grid grid-cols-3 gap-2 mb-4">
+                <div className="bg-gray-800/80 rounded-xl p-3 text-center">
+                  <p className="text-[10px] text-gray-300 uppercase font-semibold">Start</p>
+                  <p className="text-2xl font-bold text-green-400 mt-0.5">{start ?? '—'}</p>
+                </div>
+                <div className="bg-gray-800/80 rounded-xl p-3 text-center">
+                  <p className="text-[10px] text-gray-300 uppercase font-semibold">Peak</p>
+                  <p className="text-2xl font-bold text-blue-400 mt-0.5">{peak ?? '—'}</p>
+                </div>
+                <div className="bg-gray-800/80 rounded-xl p-3 text-center">
+                  <p className="text-[10px] text-gray-300 uppercase font-semibold">Low</p>
+                  <p className="text-2xl font-bold text-red-400 mt-0.5">{low ?? '—'}</p>
+                </div>
+              </div>
+              <div className="bg-gray-800/40 rounded-xl p-3 space-y-1">
+                <DetailRow label="End of day" value={end ?? '—'} color="text-blue-300" />
+                <DetailRow label="Total drain" value={drain != null ? drain : '—'} />
+                <DetailRow label="Recovery (start→peak)" value={recovery != null ? `+${recovery}` : '—'} color="text-green-400" />
+              </div>
+            </>
+          )
+        })()}
+        <p className="text-xs text-gray-300 uppercase tracking-wider font-semibold mt-4 mb-2">7-day trend</p>
+        <div className="bg-gray-800/40 rounded-xl p-3"><Sparkline values={trends.bodyBattery} color="#60a5fa" width={420} height={48} /></div>
+        <p className="text-xs text-gray-300 mt-3 leading-snug">
+          Body Battery climbs with rest and good sleep, drains with stress and activity. A higher end-of-day value means you have reserves left for tomorrow.
+        </p>
+      </DetailModal>
+
+      {/* Stress detail */}
+      <DetailModal
+        open={openDetail === 'stress'}
+        onClose={closeDetail}
+        title="Stress Levels"
+        subtitle="All-day autonomic stress score"
+        icon="😌"
+        gradient="from-yellow-950/90 via-gray-900 to-gray-950"
+        border="border-yellow-500/30"
+      >
+        <div className="grid grid-cols-2 gap-2 mb-4">
+          <div className="bg-gray-800/80 rounded-xl p-3 text-center">
+            <p className="text-[10px] text-gray-300 uppercase font-semibold">Avg</p>
+            <p className="text-2xl font-bold text-yellow-300 mt-0.5">{dailyHealth?.stress_avg ?? metrics?.garmin_stress_avg ?? '—'}</p>
+          </div>
+          <div className="bg-gray-800/80 rounded-xl p-3 text-center">
+            <p className="text-[10px] text-gray-300 uppercase font-semibold">Max</p>
+            <p className="text-2xl font-bold text-red-400 mt-0.5">{dailyHealth?.stress_max ?? '—'}</p>
+          </div>
+        </div>
+        <div className="bg-gray-800/40 rounded-xl p-3 space-y-1">
+          <DetailRow label="Status" value={
+            (() => {
+              const v = dailyHealth?.stress_avg ?? metrics?.garmin_stress_avg ?? null
+              if (v == null) return '—'
+              if (v < 26) return 'Rest'
+              if (v < 51) return 'Low'
+              if (v < 76) return 'Medium'
+              return 'High'
+            })()
+          } />
+          <DetailRow label="HRV avg (overnight)" value={
+            (dailyHealth?.hrv_avg ?? metrics?.garmin_hrv_nightly_avg) != null
+              ? `${dailyHealth?.hrv_avg ?? metrics?.garmin_hrv_nightly_avg} ms`
+              : '—'
+          } color="text-green-400" />
+        </div>
+        <p className="text-xs text-gray-300 uppercase tracking-wider font-semibold mt-4 mb-2">7-day stress trend</p>
+        <div className="bg-gray-800/40 rounded-xl p-3"><Sparkline values={trends.stress} color="#fbbf24" width={420} height={48} invert /></div>
+        <p className="text-xs text-gray-300 mt-3 leading-snug">
+          0–25 rest, 26–50 low, 51–75 medium, 76–100 high. Persistently elevated stress suggests you need more recovery — sleep, easy days, or a rest day.
+        </p>
+      </DetailModal>
+
+      {/* Resting HR detail */}
+      <DetailModal
+        open={openDetail === 'restingHr'}
+        onClose={closeDetail}
+        title="Resting Heart Rate"
+        subtitle="Lowest stable heart rate while asleep"
+        icon="❤️"
+        gradient="from-red-950/90 via-gray-900 to-gray-950"
+        border="border-red-500/30"
+      >
+        {(() => {
+          const cur = metrics?.resting_hr ?? metrics?.resting_heart_rate_bpm ?? null
+          const series = trends.restingHr.filter((v): v is number => v != null)
+          const avg = series.length ? Math.round(series.reduce((a, b) => a + b, 0) / series.length) : null
+          const min = series.length ? Math.min(...series) : null
+          const max = series.length ? Math.max(...series) : null
+          return (
+            <>
+              <div className="grid grid-cols-3 gap-2 mb-4">
+                <div className="bg-gray-800/80 rounded-xl p-3 text-center">
+                  <p className="text-[10px] text-gray-300 uppercase font-semibold">Today</p>
+                  <p className="text-2xl font-bold text-red-300 mt-0.5">{cur ?? '—'}<span className="text-xs text-gray-500 ml-0.5">bpm</span></p>
+                </div>
+                <div className="bg-gray-800/80 rounded-xl p-3 text-center">
+                  <p className="text-[10px] text-gray-300 uppercase font-semibold">7-day avg</p>
+                  <p className="text-2xl font-bold text-white mt-0.5">{avg ?? '—'}</p>
+                </div>
+                <div className="bg-gray-800/80 rounded-xl p-3 text-center">
+                  <p className="text-[10px] text-gray-300 uppercase font-semibold">Range</p>
+                  <p className="text-2xl font-bold text-white mt-0.5">{min != null ? `${min}-${max}` : '—'}</p>
+                </div>
+              </div>
+              <p className="text-xs text-gray-300 uppercase tracking-wider font-semibold mb-2">7-day RHR</p>
+              <div className="bg-gray-800/40 rounded-xl p-3"><Sparkline values={trends.restingHr} color="#ef4444" width={420} height={48} invert /></div>
+              <p className="text-xs text-gray-300 mt-3 leading-snug">
+                A lower RHR usually means better cardio fitness or recovery. A spike of 5+ bpm above your baseline often signals stress, illness, alcohol, or insufficient recovery.
+              </p>
+            </>
+          )
+        })()}
+      </DetailModal>
+
+      {/* Steps detail — tabbed: Day / Week / Month / Year */}
+      <DetailModal
+        open={openDetail === 'steps'}
+        onClose={closeDetail}
+        title="Daily Steps"
+        subtitle="Day · Week · Month · Year"
+        icon="🦶"
+        gradient="from-orange-950/90 via-gray-900 to-gray-950"
+        border="border-orange-500/30"
+      >
+        {(() => {
+          const DAILY_GOAL = 10000
+          const WEEKLY_GOAL = DAILY_GOAL * 7
+          const totalSteps = dailySteps?.total_steps ?? metrics?.steps ?? 0
+          const distKm = dailySteps?.total_distance_meters
+            ? (dailySteps.total_distance_meters / 1000).toFixed(2)
+            : metrics?.distance_m ? (metrics.distance_m / 1000).toFixed(2) : '—'
+          const activeMin = dailySteps?.active_minutes ?? null
+
+          // Index history by date for quick lookup
+          const byDate = new Map<string, number>()
+          for (const r of stepsHistory) {
+            byDate.set(r.step_date, r.total_steps ?? 0)
+          }
+          // Ensure today's value is reflected (history query might not include today yet)
+          const todayStr = new Date().toISOString().split('T')[0]
+          if (!byDate.has(todayStr)) byDate.set(todayStr, totalSteps)
+
+          // ---- Day view: intraday hourly sparkline + cumulative line ----
+          const renderDay = () => {
+            const hours = Array.from({ length: 24 }, (_, h) => hourlySteps?.[String(h)] ?? 0)
+            const cumulative: number[] = []
+            let acc = 0
+            for (const v of hours) { acc += v; cumulative.push(acc) }
+            const hasIntraday = hourlySteps && Object.keys(hourlySteps).length > 0
+            const pct = Math.min(100, (totalSteps / DAILY_GOAL) * 100)
+            const goalColor = totalSteps >= DAILY_GOAL ? '#22c55e' : '#f97316'
+            return (
+              <>
+                <div className="grid grid-cols-3 gap-2 mb-4">
+                  <div className="bg-gray-800/80 rounded-xl p-3 text-center">
+                    <p className="text-[10px] text-gray-300 uppercase font-semibold">Today</p>
+                    <p className="text-2xl font-bold text-orange-300 mt-0.5">{totalSteps.toLocaleString()}</p>
+                  </div>
+                  <div className="bg-gray-800/80 rounded-xl p-3 text-center">
+                    <p className="text-[10px] text-gray-300 uppercase font-semibold">Distance</p>
+                    <p className="text-2xl font-bold text-white mt-0.5">{distKm}<span className="text-xs text-gray-500 ml-0.5">km</span></p>
+                  </div>
+                  <div className="bg-gray-800/80 rounded-xl p-3 text-center">
+                    <p className="text-[10px] text-gray-300 uppercase font-semibold">Active</p>
+                    <p className="text-2xl font-bold text-white mt-0.5">{activeMin ?? '—'}<span className="text-xs text-gray-500 ml-0.5">min</span></p>
+                  </div>
+                </div>
+                <p className="text-xs text-gray-300 uppercase tracking-wider font-semibold mb-2">Progress to 10,000 goal</p>
+                <div className="w-full bg-gray-800 rounded-full h-3 mb-3">
+                  <div className="h-3 rounded-full transition-all" style={{ width: `${pct}%`, backgroundColor: goalColor }} />
+                </div>
+                <p className="text-xs text-gray-300 uppercase tracking-wider font-semibold mb-2">Cumulative today (0 → 10k)</p>
+                <div className="bg-gray-800/40 rounded-xl p-3">
+                  <Sparkline values={cumulative} color={goalColor} width={420} height={56} />
+                  <div className="flex justify-between text-[10px] text-gray-500 mt-1">
+                    <span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>23:59</span>
+                  </div>
+                </div>
+                {!hasIntraday && (
+                  <p className="text-xs text-gray-400 mt-2 italic">Intraday breakdown not in last sync — line shows projected accumulation at total.</p>
+                )}
+              </>
+            )
+          }
+
+          // ---- Week view: 7 daily bars ----
+          const renderWeek = () => {
+            // Week starts Monday
+            const now = new Date()
+            const jsDay = now.getDay() // 0=Sun
+            const mondayOffset = (jsDay + 6) % 7
+            const monday = new Date(now)
+            monday.setDate(now.getDate() - mondayOffset)
+            const days: { label: string; value: number; isCurrent: boolean }[] = []
+            for (let i = 0; i < 7; i++) {
+              const d = new Date(monday)
+              d.setDate(monday.getDate() + i)
+              const key = d.toISOString().split('T')[0]
+              days.push({
+                label: ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][i],
+                value: byDate.get(key) ?? 0,
+                isCurrent: key === todayStr,
+              })
+            }
+            const totalWeek = days.reduce((s, d) => s + d.value, 0)
+            const daysMet = days.filter(d => d.value >= DAILY_GOAL).length
+            return (
+              <>
+                <div className="grid grid-cols-3 gap-2 mb-4">
+                  <div className="bg-gray-800/80 rounded-xl p-3 text-center">
+                    <p className="text-[10px] text-gray-300 uppercase font-semibold">Week total</p>
+                    <p className="text-xl font-bold text-orange-300 mt-0.5">{totalWeek.toLocaleString()}</p>
+                  </div>
+                  <div className="bg-gray-800/80 rounded-xl p-3 text-center">
+                    <p className="text-[10px] text-gray-300 uppercase font-semibold">Days met</p>
+                    <p className="text-xl font-bold text-green-400 mt-0.5">{daysMet}/7</p>
+                  </div>
+                  <div className="bg-gray-800/80 rounded-xl p-3 text-center">
+                    <p className="text-[10px] text-gray-300 uppercase font-semibold">Avg / day</p>
+                    <p className="text-xl font-bold text-white mt-0.5">{Math.round(totalWeek / 7).toLocaleString()}</p>
+                  </div>
+                </div>
+                <div className="bg-gray-800/40 rounded-xl p-3">
+                  <StepsBarChart bars={days} goal={DAILY_GOAL} height={140} />
+                </div>
+              </>
+            )
+          }
+
+          // ---- Month view: weeks in current calendar month ----
+          const renderMonth = () => {
+            const now = new Date()
+            const y = now.getFullYear(), mo = now.getMonth()
+            const firstOfMonth = new Date(y, mo, 1)
+            const lastOfMonth = new Date(y, mo + 1, 0)
+            // Build weeks starting Monday
+            const weeks: { start: Date; end: Date; total: number; isCurrent: boolean; label: string }[] = []
+            const cursor = new Date(firstOfMonth)
+            // back up to the Monday of the first week
+            cursor.setDate(cursor.getDate() - ((cursor.getDay() + 6) % 7))
+            while (cursor <= lastOfMonth) {
+              const weekStart = new Date(cursor)
+              const weekEnd = new Date(cursor)
+              weekEnd.setDate(weekEnd.getDate() + 6)
+              let total = 0
+              let isCurrent = false
+              for (let i = 0; i < 7; i++) {
+                const d = new Date(weekStart)
+                d.setDate(d.getDate() + i)
+                if (d.getMonth() !== mo) continue
+                const key = d.toISOString().split('T')[0]
+                total += byDate.get(key) ?? 0
+                if (key === todayStr) isCurrent = true
+              }
+              weeks.push({
+                start: weekStart,
+                end: weekEnd,
+                total,
+                isCurrent,
+                label: `W${weeks.length + 1}`,
+              })
+              cursor.setDate(cursor.getDate() + 7)
+            }
+            const monthName = now.toLocaleString(undefined, { month: 'long', year: 'numeric' })
+            const totalMonth = weeks.reduce((s, w) => s + w.total, 0)
+            const weeksMet = weeks.filter(w => w.total >= WEEKLY_GOAL).length
+            return (
+              <>
+                <p className="text-xs text-gray-400 mb-2">{monthName}</p>
+                <div className="grid grid-cols-3 gap-2 mb-4">
+                  <div className="bg-gray-800/80 rounded-xl p-3 text-center">
+                    <p className="text-[10px] text-gray-300 uppercase font-semibold">Month total</p>
+                    <p className="text-xl font-bold text-orange-300 mt-0.5">{totalMonth.toLocaleString()}</p>
+                  </div>
+                  <div className="bg-gray-800/80 rounded-xl p-3 text-center">
+                    <p className="text-[10px] text-gray-300 uppercase font-semibold">Weeks met</p>
+                    <p className="text-xl font-bold text-green-400 mt-0.5">{weeksMet}/{weeks.length}</p>
+                  </div>
+                  <div className="bg-gray-800/80 rounded-xl p-3 text-center">
+                    <p className="text-[10px] text-gray-300 uppercase font-semibold">Avg / week</p>
+                    <p className="text-xl font-bold text-white mt-0.5">{weeks.length ? Math.round(totalMonth / weeks.length).toLocaleString() : '—'}</p>
+                  </div>
+                </div>
+                <div className="bg-gray-800/40 rounded-xl p-3">
+                  <StepsBarChart
+                    bars={weeks.map(w => ({ label: w.label, value: w.total, isCurrent: w.isCurrent }))}
+                    goal={WEEKLY_GOAL}
+                    height={140}
+                  />
+                  <p className="text-[10px] text-gray-500 mt-2 text-center">Weekly goal: 70,000 steps</p>
+                </div>
+              </>
+            )
+          }
+
+          // ---- Year view: 12 months ----
+          const renderYear = () => {
+            const now = new Date()
+            const y = now.getFullYear()
+            const months: { label: string; value: number; isCurrent: boolean }[] = []
+            const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+            for (let mo = 0; mo < 12; mo++) {
+              const last = new Date(y, mo + 1, 0)
+              let total = 0
+              for (let day = 1; day <= last.getDate(); day++) {
+                const key = new Date(y, mo, day).toISOString().split('T')[0]
+                total += byDate.get(key) ?? 0
+              }
+              months.push({
+                label: MONTH_NAMES[mo],
+                value: total,
+                isCurrent: mo === now.getMonth(),
+              })
+            }
+            // Monthly goal varies by days in month; use 10k × days.
+            const monthGoal = (m: number) => new Date(y, m + 1, 0).getDate() * DAILY_GOAL
+            const totalYear = months.reduce((s, m) => s + m.value, 0)
+            const monthsMet = months.filter((m, idx) => m.value >= monthGoal(idx)).length
+            // Use max monthly goal (~31 × 10k = 310k) as visual threshold
+            const maxGoal = 31 * DAILY_GOAL
+            return (
+              <>
+                <p className="text-xs text-gray-400 mb-2">{y}</p>
+                <div className="grid grid-cols-3 gap-2 mb-4">
+                  <div className="bg-gray-800/80 rounded-xl p-3 text-center">
+                    <p className="text-[10px] text-gray-300 uppercase font-semibold">Year total</p>
+                    <p className="text-xl font-bold text-orange-300 mt-0.5">{(totalYear / 1000).toFixed(0)}k</p>
+                  </div>
+                  <div className="bg-gray-800/80 rounded-xl p-3 text-center">
+                    <p className="text-[10px] text-gray-300 uppercase font-semibold">Months met</p>
+                    <p className="text-xl font-bold text-green-400 mt-0.5">{monthsMet}/12</p>
+                  </div>
+                  <div className="bg-gray-800/80 rounded-xl p-3 text-center">
+                    <p className="text-[10px] text-gray-300 uppercase font-semibold">Avg / month</p>
+                    <p className="text-xl font-bold text-white mt-0.5">{Math.round(totalYear / 12 / 1000)}k</p>
+                  </div>
+                </div>
+                <div className="bg-gray-800/40 rounded-xl p-3">
+                  <StepsBarChart bars={months} goal={maxGoal} height={140} />
+                  <p className="text-[10px] text-gray-500 mt-2 text-center">Target ≈ 10k × days in month</p>
+                </div>
+              </>
+            )
+          }
+
+          const tabBtn = (key: typeof stepsTab, label: string) => (
+            <button
+              type="button"
+              onClick={() => setStepsTab(key)}
+              className={`flex-1 text-xs py-1.5 rounded-lg transition-colors ${
+                stepsTab === key
+                  ? 'bg-orange-500 text-white font-semibold'
+                  : 'bg-gray-800/60 text-gray-400 hover:bg-gray-800'
+              }`}
+            >
+              {label}
+            </button>
+          )
+
+          return (
+            <>
+              <div className="flex gap-1 mb-4 bg-gray-900/50 rounded-xl p-1">
+                {tabBtn('day', 'Day')}
+                {tabBtn('week', 'Week')}
+                {tabBtn('month', 'Month')}
+                {tabBtn('year', 'Year')}
+              </div>
+              {stepsTab === 'day' && renderDay()}
+              {stepsTab === 'week' && renderWeek()}
+              {stepsTab === 'month' && renderMonth()}
+              {stepsTab === 'year' && renderYear()}
+              <div className="flex items-center justify-center gap-4 mt-4 text-[10px] text-gray-500">
+                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded bg-green-500 inline-block" />Met</span>
+                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded bg-red-500 inline-block" />Missed</span>
+                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded bg-blue-500 inline-block" />Current</span>
+              </div>
+            </>
+          )
+        })()}
+      </DetailModal>
+
+      {/* HRV detail */}
+      <DetailModal
+        open={openDetail === 'hrv'}
+        onClose={closeDetail}
+        title="Heart Rate Variability"
+        subtitle="Last night, RMSSD overnight average"
+        icon="💚"
+        gradient="from-green-950/90 via-gray-900 to-gray-950"
+        border="border-green-500/30"
+      >
+        {(() => {
+          const cur = dailyHealth?.hrv_avg ?? metrics?.garmin_hrv_nightly_avg ?? null
+          const series = trends.hrv.filter((v): v is number => v != null)
+          const avg = series.length ? Math.round(series.reduce((a, b) => a + b, 0) / series.length) : null
+          const status = metrics?.garmin_hrv_status ?? null
+          return (
+            <>
+              <div className="grid grid-cols-3 gap-2 mb-4">
+                <div className="bg-gray-800/80 rounded-xl p-3 text-center">
+                  <p className="text-[10px] text-gray-300 uppercase font-semibold">Last night</p>
+                  <p className="text-2xl font-bold text-green-300 mt-0.5">{cur ?? '—'}<span className="text-xs text-gray-500 ml-0.5">ms</span></p>
+                </div>
+                <div className="bg-gray-800/80 rounded-xl p-3 text-center">
+                  <p className="text-[10px] text-gray-300 uppercase font-semibold">7-day avg</p>
+                  <p className="text-2xl font-bold text-white mt-0.5">{avg ?? '—'}</p>
+                </div>
+                <div className="bg-gray-800/80 rounded-xl p-3 text-center">
+                  <p className="text-[10px] text-gray-300 uppercase font-semibold">Status</p>
+                  <p className="text-base font-bold text-white mt-1 capitalize">{status ?? '—'}</p>
+                </div>
+              </div>
+              <p className="text-xs text-gray-300 uppercase tracking-wider font-semibold mb-2">7-day HRV</p>
+              <div className="bg-gray-800/40 rounded-xl p-3"><Sparkline values={trends.hrv} color="#22c55e" width={420} height={48} /></div>
+              <p className="text-xs text-gray-300 mt-3 leading-snug">
+                HRV is the variation between heartbeats. Higher within your personal baseline = better recovery and parasympathetic balance. Garmin compares last night to your 3-week baseline to label it Balanced / Unbalanced / Low.
+              </p>
+            </>
+          )
+        })()}
+      </DetailModal>
+
+      {/* SpO2 detail */}
+      <DetailModal
+        open={openDetail === 'spo2'}
+        onClose={closeDetail}
+        title="Pulse Oximetry (SpO2)"
+        subtitle="Blood oxygen saturation"
+        icon="🩸"
+        gradient="from-cyan-950/90 via-gray-900 to-gray-950"
+        border="border-cyan-500/30"
+      >
+        {(() => {
+          const avg = dailyHealth?.spo2_avg ?? metrics?.garmin_spo2_avg ?? metrics?.pulse_ox ?? null
+          // Overnight SpO2 lives on the sleep row; fall back to the daily avg if
+          // the sleep sample hasn't populated those columns yet.
+          const sleepAvg = sleepData?.avg_spo2 ?? dailyHealth?.spo2_avg ?? metrics?.garmin_spo2_avg ?? null
+          const sleepMin = sleepData?.min_spo2 ?? null
+          return (
+            <>
+              <div className="grid grid-cols-3 gap-2 mb-4">
+                <div className="bg-gray-800/80 rounded-xl p-3 text-center">
+                  <p className="text-[10px] text-gray-300 uppercase font-semibold">Today avg</p>
+                  <p className="text-2xl font-bold text-cyan-300 mt-0.5">{avg ?? '—'}<span className="text-xs text-gray-500 ml-0.5">%</span></p>
+                </div>
+                <div className="bg-gray-800/80 rounded-xl p-3 text-center">
+                  <p className="text-[10px] text-gray-300 uppercase font-semibold">Sleep avg</p>
+                  <p className="text-2xl font-bold text-white mt-0.5">{sleepAvg ?? '—'}<span className="text-xs text-gray-500 ml-0.5">%</span></p>
+                </div>
+                <div className="bg-gray-800/80 rounded-xl p-3 text-center">
+                  <p className="text-[10px] text-gray-300 uppercase font-semibold">Sleep low</p>
+                  <p className="text-2xl font-bold text-cyan-400 mt-0.5">{sleepMin ?? '—'}<span className="text-xs text-gray-500 ml-0.5">%</span></p>
+                </div>
+              </div>
+              <p className="text-[11px] text-gray-500 leading-snug">
+                Healthy SpO2 sits 95–100%. Sustained dips below 90% during sleep can indicate altitude acclimation, congestion, or sleep-disordered breathing — see a clinician if it persists.
+              </p>
+            </>
+          )
+        })()}
+      </DetailModal>
+
+      {/* Intensity Minutes detail */}
+      <DetailModal
+        open={openDetail === 'intensity'}
+        onClose={closeDetail}
+        title="Intensity Minutes"
+        subtitle="Weekly cardio target"
+        icon="🔥"
+        gradient="from-orange-950/90 via-gray-900 to-gray-950"
+        border="border-orange-500/30"
+      >
+        {(() => {
+          const today = dailySteps?.active_minutes ?? null
+          // Estimate weekly from steps trend (active min not in trends; use steps as proxy)
+          return (
+            <>
+              <div className="grid grid-cols-2 gap-2 mb-4">
+                <div className="bg-gray-800/80 rounded-xl p-3 text-center">
+                  <p className="text-[10px] text-gray-300 uppercase font-semibold">Today</p>
+                  <p className="text-2xl font-bold text-orange-300 mt-0.5">{today ?? '—'}<span className="text-xs text-gray-500 ml-0.5">min</span></p>
+                </div>
+                <div className="bg-gray-800/80 rounded-xl p-3 text-center">
+                  <p className="text-[10px] text-gray-300 uppercase font-semibold">Weekly goal</p>
+                  <p className="text-2xl font-bold text-white mt-0.5">150<span className="text-xs text-gray-500 ml-0.5">min</span></p>
+                </div>
+              </div>
+              <p className="text-[11px] text-gray-500 leading-snug">
+                The WHO recommends 150 min/week of moderate or 75 min/week of vigorous activity. Garmin counts moderate minutes 1× and vigorous 2× toward this goal. Activity is detected when your heart rate stays above your moderate-intensity zone for 10+ minutes.
+              </p>
+            </>
+          )
+        })()}
+      </DetailModal>
+
+      {/* Training Readiness detail */}
+      <DetailModal
+        open={openDetail === 'readiness'}
+        onClose={closeDetail}
+        title="Training Readiness"
+        subtitle="Composite score from your recovery signals"
+        icon="🎯"
+        gradient="from-purple-950/90 via-gray-900 to-gray-950"
+        border="border-purple-500/30"
+      >
+        {scores ? (
+          <>
+            <div className="bg-gray-800/80 rounded-xl p-4 text-center mb-4">
+              <p className="text-[10px] text-gray-300 uppercase font-semibold">Today</p>
+              <p className="text-4xl font-bold text-white mt-1">{readiness ?? '—'}<span className="text-base text-gray-500 ml-1">/100</span></p>
+              <p className="text-sm text-purple-300 mt-1">{readiness != null ? readinessLabel(readiness) : ''}</p>
+            </div>
+            <p className="text-xs text-gray-300 uppercase tracking-wider font-semibold mb-2">Score breakdown</p>
+            <div className="bg-gray-800/40 rounded-xl p-3 space-y-1">
+              <DetailRow label="Sleep" value={`${scores.radar.sleep}/100`} color="text-purple-300" />
+              <DetailRow label="HRV" value={`${scores.radar.hrv}/100`} color="text-green-400" />
+              <DetailRow label="Resting HR" value={`${scores.radar.heartRate}/100`} color="text-red-400" />
+              <DetailRow label="SpO2" value={`${scores.radar.spo2}/100`} color="text-cyan-300" />
+              <DetailRow label="Load adjust" value={`${scores.radar.load}/100`} color="text-yellow-300" />
+              <DetailRow label="Today's load" value={scores.exerciseMin ? `${scores.exerciseMin} min` : '0 min'} />
+              {scores.keyFactor && <DetailRow label="Key factor" value={scores.keyFactor} color="text-orange-300" />}
+            </div>
+            <p className="text-xs text-gray-300 mt-3 leading-snug">
+              The composite weighs sleep, HRV, resting HR, SpO2 and acute training load. Lowest sub-score is shown as the &quot;key factor&quot; — it&apos;s the lever holding back your readiness today.
+            </p>
+          </>
+        ) : (
+          <p className="text-sm text-gray-400">Not enough data to compute readiness yet — sync your Garmin and try again.</p>
+        )}
+      </DetailModal>
+
+      {/* Hydration detail */}
+      <DetailModal
+        open={openDetail === 'hydration'}
+        onClose={closeDetail}
+        title="Hydration"
+        subtitle="Daily water intake"
+        icon="💧"
+        gradient="from-blue-950/90 via-gray-900 to-gray-950"
+        border="border-blue-500/30"
+      >
+        {(() => {
+          const intake = dailyHealth?.hydration_intake_ml ?? 0
+          const goal = dailyHealth?.hydration_goal_ml ?? 0
+          const remaining = dailyHealth?.hydration_remaining_ml ?? Math.max(0, goal - intake)
+          const pct = goal ? Math.min(100, (intake / goal) * 100) : 0
+          return (
+            <>
+              <div className="grid grid-cols-3 gap-2 mb-4">
+                <div className="bg-gray-800/80 rounded-xl p-3 text-center">
+                  <p className="text-[10px] text-gray-300 uppercase font-semibold">Intake</p>
+                  <p className="text-2xl font-bold text-blue-300 mt-0.5">{(intake / 1000).toFixed(1)}<span className="text-xs text-gray-500 ml-0.5">L</span></p>
+                </div>
+                <div className="bg-gray-800/80 rounded-xl p-3 text-center">
+                  <p className="text-[10px] text-gray-300 uppercase font-semibold">Goal</p>
+                  <p className="text-2xl font-bold text-white mt-0.5">{(goal / 1000).toFixed(1)}<span className="text-xs text-gray-500 ml-0.5">L</span></p>
+                </div>
+                <div className="bg-gray-800/80 rounded-xl p-3 text-center">
+                  <p className="text-[10px] text-gray-300 uppercase font-semibold">Left</p>
+                  <p className="text-2xl font-bold text-cyan-300 mt-0.5">{(remaining / 1000).toFixed(1)}<span className="text-xs text-gray-500 ml-0.5">L</span></p>
+                </div>
+              </div>
+              <div className="w-full bg-gray-800 rounded-full h-3 mb-1">
+                <div className="bg-blue-500 h-3 rounded-full transition-all" style={{ width: `${pct}%` }} />
+              </div>
+              <p className="text-xs text-gray-300 mt-3 leading-snug">
+                Garmin sets your daily goal from age, weight, and activity. Add ~500 ml per hour of intense exercise. Log intake from the Garmin Connect app to keep this in sync.
+              </p>
+            </>
+          )
+        })()}
+      </DetailModal>
+
+      {/* Settings modal */}
+      <DetailModal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        title="Settings"
+        subtitle="Sync, account & data tools"
+        icon="⚙️"
+        gradient="from-gray-900 via-gray-900 to-gray-950"
+        border="border-gray-700/50"
+      >
+        <div className="space-y-4">
+          <div className="bg-gray-800/40 rounded-xl p-4">
+            <p className="text-sm font-semibold text-white">One-time Garmin backfill</p>
+            <p className="text-sm text-gray-200 mt-1 leading-snug">
+              Pulls every day of historical data from your Garmin account once. The hourly cron then keeps
+              just today fresh, so we don&apos;t hammer Garmin&apos;s servers.
+            </p>
+            <p className="text-xs text-gray-400 mt-2">
+              A 1-year backfill takes ~10 minutes and uses ~1.5s spacing between requests for politeness.
+            </p>
+            <div className="grid grid-cols-3 gap-2 mt-3">
+              <button
+                onClick={() => handleBackfill(30)}
+                disabled={backfillStatus === 'starting' || backfillStatus === 'running'}
+                className="text-xs bg-gray-800 hover:bg-gray-700 disabled:opacity-50 text-white py-2 rounded-lg"
+              >
+                30 days
+              </button>
+              <button
+                onClick={() => handleBackfill(90)}
+                disabled={backfillStatus === 'starting' || backfillStatus === 'running'}
+                className="text-xs bg-gray-800 hover:bg-gray-700 disabled:opacity-50 text-white py-2 rounded-lg"
+              >
+                90 days
+              </button>
+              <button
+                onClick={() => handleBackfill(365)}
+                disabled={backfillStatus === 'starting' || backfillStatus === 'running'}
+                className="text-xs bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-white py-2 rounded-lg font-semibold"
+              >
+                Sync all (1 yr)
+              </button>
+            </div>
+          </div>
+
+          <div className="bg-gray-800/40 rounded-xl p-4">
+            <p className="text-sm font-semibold text-white">Account</p>
+            <p className="text-xs text-gray-400 mt-1">{displayName || 'Signed in'}</p>
+            <button
+              onClick={async () => {
+                setSettingsOpen(false)
+                await supabase.auth.signOut()
+                router.push('/login')
+              }}
+              className="text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 px-3 py-1.5 rounded-lg mt-2"
+            >
+              Sign out
+            </button>
+          </div>
+        </div>
+      </DetailModal>
+
+      {/* Backfill progress modal */}
+      {backfillOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="relative w-full max-w-lg max-h-[85vh] overflow-y-auto bg-gradient-to-br from-orange-950/80 via-gray-900 to-gray-950 rounded-3xl p-6 border border-orange-500/30 shadow-2xl">
+            {(backfillStatus === 'done' || backfillStatus === 'error') && (
+              <button
+                onClick={() => {
+                  setBackfillOpen(false)
+                  setBackfillStatus('idle')
+                  setProgressRows([])
+                  setBackfillRunId(null)
+                }}
+                aria-label="Close"
+                className="absolute top-3 right-3 w-8 h-8 rounded-full bg-gray-800/80 hover:bg-gray-700 text-gray-300 hover:text-white flex items-center justify-center"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
+
+            <div className="flex items-center gap-3 mb-3">
+              <span className="text-2xl">
+                {backfillStatus === 'done' ? '✅' : backfillStatus === 'error' ? '⚠️' : '🔄'}
+              </span>
+              <div>
+                <p className="text-base font-bold text-white">
+                  {backfillStatus === 'done'
+                    ? 'Sync complete'
+                    : backfillStatus === 'error'
+                    ? 'Sync failed'
+                    : `Syncing ${backfillDays} days from Garmin`}
+                </p>
+                <p className="text-xs text-gray-400">
+                  {backfillStatus === 'starting' && 'Dispatching workflow…'}
+                  {backfillStatus === 'running' && (latestProgress?.message ?? 'Waiting for first update…')}
+                  {backfillStatus === 'done' && 'Your dashboard has been refreshed.'}
+                  {backfillStatus === 'error' && (backfillError ?? 'Something went wrong.')}
+                </p>
+              </div>
+            </div>
+
+            {/* Progress bar */}
+            <div className="w-full bg-gray-800 rounded-full h-2 mb-3">
+              <div
+                className="h-2 rounded-full transition-all duration-500"
+                style={{
+                  width: `${
+                    backfillStatus === 'done'
+                      ? 100
+                      : backfillStatus === 'error'
+                      ? 100
+                      : latestProgress?.percent ?? (backfillStatus === 'starting' ? 2 : 5)
+                  }%`,
+                  backgroundColor:
+                    backfillStatus === 'error' ? '#ef4444' :
+                    backfillStatus === 'done' ? '#22c55e' : '#f97316',
+                }}
+              />
+            </div>
+            {latestProgress?.days_total && latestProgress?.day_index && (
+              <p className="text-[11px] text-gray-500 mb-3">
+                Day {latestProgress.day_index} of {latestProgress.days_total}
+              </p>
+            )}
+
+            {/* Live log */}
+            <p className="text-[10px] text-gray-300 uppercase tracking-wider font-semibold mb-1">Live log</p>
+            <div
+              className="bg-black/60 rounded-lg p-3 font-mono text-[11px] text-gray-300 max-h-72 overflow-y-auto whitespace-pre-wrap"
+              ref={el => {
+                // auto-scroll to bottom when new lines arrive
+                if (el) el.scrollTop = el.scrollHeight
+              }}
+            >
+              {progressRows.length === 0 ? (
+                <p className="text-gray-600 italic">Waiting for the worker to start (this can take ~10s)…</p>
+              ) : (
+                progressRows.slice(-200).map(r => {
+                  const t = new Date(r.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                  const color =
+                    r.level === 'error' ? 'text-red-400' :
+                    r.level === 'done' ? 'text-green-400' :
+                    r.level === 'warn' ? 'text-yellow-400' : 'text-gray-300'
+                  return (
+                    <div key={r.id} className={color}>
+                      <span className="text-gray-600">{t}</span>{' '}
+                      {r.stage && <span className="text-gray-500">[{r.stage}]</span>}{' '}
+                      {r.message}
+                    </div>
+                  )
+                })
+              )}
+            </div>
+
+            {(backfillStatus === 'starting' || backfillStatus === 'running') && (
+              <p className="text-[10px] text-gray-500 mt-3 italic">
+                You can close this window — the sync continues on GitHub Actions in the background. Re-open Settings any time.
+              </p>
+            )}
+            {(backfillStatus === 'done' || backfillStatus === 'error') && (
+              <button
+                onClick={() => {
+                  setBackfillOpen(false)
+                  setBackfillStatus('idle')
+                  setProgressRows([])
+                  setBackfillRunId(null)
+                }}
+                className="mt-4 w-full bg-gray-800/80 hover:bg-gray-700 text-gray-200 text-sm py-2 rounded-xl"
+              >
+                Back to dashboard
+              </button>
+            )}
+            {(backfillStatus === 'starting' || backfillStatus === 'running') && (
+              <button
+                onClick={() => setBackfillOpen(false)}
+                className="mt-4 w-full bg-gray-800/60 hover:bg-gray-800 text-gray-400 text-sm py-2 rounded-xl"
+              >
+                Hide window (sync keeps running)
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -936,6 +2048,17 @@ export default function DashboardPage() {
             <a href="/activities" className="text-xs bg-gray-800 text-gray-300 px-3 py-1.5 rounded-lg">
               Activities
             </a>
+            <button
+              onClick={() => setSettingsOpen(true)}
+              aria-label="Settings"
+              title="Settings"
+              className="text-xs bg-gray-800 text-gray-300 hover:bg-gray-700 px-2.5 py-1.5 rounded-lg"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+            </button>
             <button
               onClick={async () => { await supabase.auth.signOut(); router.push('/login') }}
               className="text-xs bg-gray-800 text-gray-400 px-3 py-1.5 rounded-lg"
@@ -1001,11 +2124,16 @@ export default function DashboardPage() {
               : null
             const pct = Math.min(100, (totalSteps / 10000) * 100)
             return (
-              <div className="bg-gray-900 rounded-3xl p-4">
+              <button
+                type="button"
+                onClick={() => setOpenDetail('steps')}
+                className="bg-gray-900 hover:bg-gray-900/80 rounded-3xl p-4 text-left w-full transition-colors"
+              >
                 <div className="flex items-start justify-between mb-2">
                   <div>
-                    <p className="text-xs text-gray-500 uppercase tracking-wider flex items-center gap-1">
+                    <p className="text-xs text-gray-300 uppercase tracking-wider font-semibold flex items-center gap-1">
                       Daily Steps <InfoTooltip text={METRIC_INFO.steps} />
+                      <span className="text-[10px] text-orange-400/80 ml-1 uppercase">Tap</span>
                     </p>
                     <p className="text-3xl font-bold text-white mt-1">
                       {totalSteps.toLocaleString()}
@@ -1034,7 +2162,7 @@ export default function DashboardPage() {
                     <span>{dailySteps.active_minutes} active min</span>
                   )}
                 </div>
-              </div>
+              </button>
             )
           })() : (
             <div className="bg-gray-900 rounded-3xl p-4 flex items-center justify-center">
@@ -1070,7 +2198,14 @@ export default function DashboardPage() {
 
             {/* Label + key factor */}
             <div>
-              <p className="text-xs text-gray-500 uppercase tracking-wider mb-1 flex items-center gap-1">Readiness <InfoTooltip text={METRIC_INFO.readiness} /></p>
+              <button
+                type="button"
+                onClick={() => setOpenDetail('readiness')}
+                className="text-xs text-gray-300 uppercase tracking-wider font-semibold mb-1 flex items-center gap-1 hover:text-gray-300 transition-colors"
+              >
+                Readiness <InfoTooltip text={METRIC_INFO.readiness} />
+                <span className="text-[10px] text-orange-400/80 ml-1 normal-case">Tap for breakdown</span>
+              </button>
               <p className="text-2xl font-bold text-white">
                 {readiness != null ? readinessLabel(readiness) : 'No data'}
               </p>
@@ -1098,14 +2233,14 @@ export default function DashboardPage() {
             const loadMin = scores.exerciseMin
             return (
               <div className="mt-6">
-                <p className="text-xs text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-1">
+                <p className="text-xs text-gray-300 uppercase tracking-wider font-semibold mb-3 flex items-center gap-1">
                   Today&apos;s Vitals <InfoTooltip text="Live readings from Garmin at your last sync. Sparklines show the 7-day trend." />
                 </p>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                  <MetricTile label="HRV" icon="💚" value={hrvVal} unit="ms" tooltip={METRIC_INFO.hrv} trend={trends.hrv} trendColor="#22c55e" />
-                  <MetricTile label="Resting HR" icon="❤️" value={rhrVal} unit="bpm" tooltip={METRIC_INFO.restingHr} trend={trends.restingHr} trendColor="#ef4444" invert />
-                  <MetricTile label="SpO2" icon="🩸" value={spo2Val} unit="%" tooltip={METRIC_INFO.spo2} />
-                  <MetricTile label="Stress" icon="😌" value={dailyHealth?.stress_avg ?? metrics?.garmin_stress_avg ?? null} tooltip={METRIC_INFO.stress} trend={trends.stress} trendColor="#fbbf24" invert />
+                  <MetricTile label="HRV" icon="💚" value={hrvVal} unit="ms" tooltip={METRIC_INFO.hrv} trend={trends.hrv} trendColor="#22c55e" onClick={() => setOpenDetail('hrv')} />
+                  <MetricTile label="Resting HR" icon="❤️" value={rhrVal} unit="bpm" tooltip={METRIC_INFO.restingHr} trend={trends.restingHr} trendColor="#ef4444" invert onClick={() => setOpenDetail('restingHr')} />
+                  <MetricTile label="SpO2" icon="🩸" value={spo2Val} unit="%" tooltip={METRIC_INFO.spo2} onClick={() => setOpenDetail('spo2')} />
+                  <MetricTile label="Stress" icon="😌" value={dailyHealth?.stress_avg ?? metrics?.garmin_stress_avg ?? null} tooltip={METRIC_INFO.stress} trend={trends.stress} trendColor="#fbbf24" invert onClick={() => setOpenDetail('stress')} />
                   <MetricTile
                     label="Intensity Min"
                     icon="🔥"
@@ -1116,6 +2251,7 @@ export default function DashboardPage() {
                     })()}
                     unit="min"
                     tooltip="Garmin weekly goal is 150 min. Moderate activity counts 1×, vigorous counts 2×."
+                    onClick={() => setOpenDetail('intensity')}
                   />
                   <MetricTile
                     label="Training Readiness"
@@ -1123,6 +2259,7 @@ export default function DashboardPage() {
                     value={readiness}
                     unit="/100"
                     tooltip="Composite readiness score from HRV, sleep, resting HR, SpO2 and today's load. 85+ Excellent, 70+ Good."
+                    onClick={() => setOpenDetail('readiness')}
                   />
                 </div>
                 <p className="text-[10px] text-gray-600 mt-2">
@@ -1137,10 +2274,17 @@ export default function DashboardPage() {
 
         {/* Body Battery - Extended */}
         {(metrics?.garmin_body_battery_high != null || dailyHealth?.body_battery_start != null) && (
-          <div className="bg-gray-900 rounded-2xl p-4">
+          <button
+            type="button"
+            onClick={() => setOpenDetail('bodyBattery')}
+            className="bg-gray-900 hover:bg-gray-900/80 rounded-2xl p-4 text-left w-full transition-colors"
+          >
             <div className="flex items-center justify-between mb-3">
               <div>
-                <p className="text-xs text-gray-500 uppercase tracking-wider flex items-center gap-1">Body Battery <InfoTooltip text={METRIC_INFO.bodyBattery} /></p>
+                <p className="text-xs text-gray-300 uppercase tracking-wider font-semibold flex items-center gap-1">
+                  Body Battery <InfoTooltip text={METRIC_INFO.bodyBattery} />
+                  <span className="text-[10px] text-blue-400/80 ml-1 uppercase">Tap</span>
+                </p>
                 <p className="text-3xl font-bold text-white mt-1">
                   {dailyHealth?.body_battery_end ?? metrics?.garmin_body_battery_eod ?? metrics?.garmin_body_battery_high}
                 </p>
@@ -1164,7 +2308,7 @@ export default function DashboardPage() {
                 <p className="text-lg font-bold text-red-400">{dailyHealth?.body_battery_low ?? '—'}</p>
               </div>
             </div>
-          </div>
+          </button>
         )}
 
         {/* Sleep Analysis — compact clickable card. Modal holds all detail. */}
@@ -1180,7 +2324,7 @@ export default function DashboardPage() {
           if (!hasAny) {
             return (
               <div className="bg-gray-900 rounded-2xl p-4">
-                <p className="text-xs text-gray-500 uppercase tracking-wider flex items-center gap-1">
+                <p className="text-xs text-gray-300 uppercase tracking-wider font-semibold flex items-center gap-1">
                   Sleep Analysis <InfoTooltip text={METRIC_INFO.sleep} />
                 </p>
                 <p className="text-gray-500 text-sm mt-2">
@@ -1198,7 +2342,7 @@ export default function DashboardPage() {
             >
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-xs text-gray-500 uppercase tracking-wider flex items-center gap-1">
+                  <p className="text-xs text-gray-300 uppercase tracking-wider font-semibold flex items-center gap-1">
                     Sleep Analysis <InfoTooltip text={METRIC_INFO.sleep} />
                     <span className="text-[10px] text-purple-400/80 ml-1 uppercase">Tap to open</span>
                   </p>
@@ -1221,10 +2365,17 @@ export default function DashboardPage() {
 
         {/* Stress - Extended */}
         {(metrics?.garmin_stress_avg != null || dailyHealth?.stress_avg != null) && (
-          <div className="bg-gray-900 rounded-2xl p-4">
+          <button
+            type="button"
+            onClick={() => setOpenDetail('stress')}
+            className="bg-gray-900 hover:bg-gray-900/80 rounded-2xl p-4 text-left w-full transition-colors"
+          >
             <div className="flex items-center justify-between mb-3">
               <div>
-                <p className="text-xs text-gray-500 uppercase tracking-wider flex items-center gap-1">Stress Levels <InfoTooltip text={METRIC_INFO.stress} /></p>
+                <p className="text-xs text-gray-300 uppercase tracking-wider font-semibold flex items-center gap-1">
+                  Stress Levels <InfoTooltip text={METRIC_INFO.stress} />
+                  <span className="text-[10px] text-yellow-400/80 ml-1 uppercase">Tap</span>
+                </p>
                 <p className="text-3xl font-bold text-white mt-1">
                   {dailyHealth?.stress_avg ?? metrics?.garmin_stress_avg}
                 </p>
@@ -1254,16 +2405,23 @@ export default function DashboardPage() {
                 <div className="mt-1 flex justify-center"><Sparkline values={trends.hrv} color="#22c55e" width={70} height={18} /></div>
               </div>
             </div>
-          </div>
+          </button>
         )}
 
 
         {/* Resting HR trend */}
         {(metrics?.resting_hr != null || metrics?.resting_heart_rate_bpm != null) && (
-          <div className="bg-gray-900 rounded-2xl p-4">
+          <button
+            type="button"
+            onClick={() => setOpenDetail('restingHr')}
+            className="bg-gray-900 hover:bg-gray-900/80 rounded-2xl p-4 text-left w-full transition-colors"
+          >
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-xs text-gray-500 uppercase tracking-wider flex items-center gap-1">Resting Heart Rate <InfoTooltip text={METRIC_INFO.restingHr} /></p>
+                <p className="text-xs text-gray-300 uppercase tracking-wider font-semibold flex items-center gap-1">
+                  Resting Heart Rate <InfoTooltip text={METRIC_INFO.restingHr} />
+                  <span className="text-[10px] text-red-400/80 ml-1 uppercase">Tap</span>
+                </p>
                 <p className="text-3xl font-bold text-white mt-1">
                   {metrics.resting_hr ?? metrics.resting_heart_rate_bpm}
                   <span className="text-sm text-gray-500 font-normal ml-1">bpm</span>
@@ -1274,15 +2432,22 @@ export default function DashboardPage() {
                 <Sparkline values={trends.restingHr} color="#ef4444" invert />
               </div>
             </div>
-          </div>
+          </button>
         )}
 
         {/* Hydration */}
         {dailyHealth?.hydration_goal_ml != null && (
-          <div className="bg-gray-900 rounded-2xl p-4">
+          <button
+            type="button"
+            onClick={() => setOpenDetail('hydration')}
+            className="bg-gray-900 hover:bg-gray-900/80 rounded-2xl p-4 text-left w-full transition-colors"
+          >
             <div className="flex items-center justify-between mb-3">
               <div>
-                <p className="text-xs text-gray-500 uppercase tracking-wider flex items-center gap-1">Hydration <InfoTooltip text={METRIC_INFO.hydration} /></p>
+                <p className="text-xs text-gray-300 uppercase tracking-wider font-semibold flex items-center gap-1">
+                  Hydration <InfoTooltip text={METRIC_INFO.hydration} />
+                  <span className="text-[10px] text-blue-400/80 ml-1 uppercase">Tap</span>
+                </p>
                 <p className="text-3xl font-bold text-white mt-1">
                   {dailyHealth.hydration_intake_ml
                     ? `${(dailyHealth.hydration_intake_ml / 1000).toFixed(1)}L`
@@ -1307,7 +2472,7 @@ export default function DashboardPage() {
                 </div>
               </div>
             )}
-          </div>
+          </button>
         )}
 
         {/* No data state */}
@@ -1323,7 +2488,7 @@ export default function DashboardPage() {
         {/* Recent activity */}
         {todayActivities.length > 0 && (
           <div className="bg-gray-900 rounded-2xl p-4">
-            <p className="text-xs text-gray-500 uppercase tracking-wider mb-3">Today&apos;s Activities</p>
+            <p className="text-xs text-gray-300 uppercase tracking-wider font-semibold mb-3">Today&apos;s Activities</p>
             <div className="space-y-2">
               {todayActivities.map((a, i) => (
                 <div key={i} className="flex items-center justify-between">
@@ -1342,6 +2507,8 @@ export default function DashboardPage() {
           </div>
         )}
 
+        {/* Spacer so the last card never butts up against the BottomNav. */}
+        <div aria-hidden="true" className="h-8" />
       </div>
       <BottomNav />
     </main>

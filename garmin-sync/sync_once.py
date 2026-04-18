@@ -30,6 +30,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -51,6 +52,11 @@ GARMIN_PASSWORD = os.getenv("GARMIN_PASSWORD", "").strip()
 TOKENS_DIR = Path(os.getenv("GARMINTOKENS", "./tokens")).expanduser()
 ACTIVITY_LIMIT = int(os.getenv("GARMIN_ACTIVITY_LIMIT", "10"))
 DAYS_BACK = int(os.getenv("GARMIN_DAYS_BACK", "1"))
+# Polite throttle between Garmin API calls to avoid tripping rate limiting on a
+# long backfill. Default 1.0s; set higher for very long runs.
+SYNC_DELAY_SECONDS = float(os.getenv("GARMIN_REQUEST_DELAY", "1.0"))
+# Optional run id; when set, the script writes progress rows the dashboard tails.
+SYNC_RUN_ID = os.getenv("GARMIN_SYNC_RUN_ID", "").strip()
 
 SUPABASE_URL = (os.getenv("SUPABASE_URL") or os.getenv("NEXT_PUBLIC_SUPABASE_URL") or "").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
@@ -72,6 +78,50 @@ SESSION.headers.update(
         "Prefer": "resolution=merge-duplicates,return=representation",
     }
 )
+
+
+# ---------------------------------------------------------------------------
+# Progress streaming + rate limiting
+# ---------------------------------------------------------------------------
+
+def progress(
+    message: str,
+    *,
+    level: str = "info",
+    stage: Optional[str] = None,
+    percent: Optional[int] = None,
+    days_total: Optional[int] = None,
+    day_index: Optional[int] = None,
+) -> None:
+    """Print to stdout AND (when SYNC_RUN_ID is set) write a row to
+    garmin_sync_progress so the dashboard can tail the sync live."""
+    print(f"[{level}] {message}", flush=True)
+    if not SYNC_RUN_ID:
+        return
+    payload = {
+        "user_id": SUPABASE_USER_ID,
+        "run_id": SYNC_RUN_ID,
+        "level": level,
+        "stage": stage,
+        "message": message,
+        "percent": percent,
+        "days_total": days_total,
+        "day_index": day_index,
+    }
+    try:
+        SESSION.post(
+            f"{SUPABASE_URL}/rest/v1/garmin_sync_progress",
+            json=payload,
+            timeout=10,
+        )
+    except Exception as exc:  # never let logging break the sync
+        print(f"  (progress write failed: {exc})", flush=True)
+
+
+def throttle() -> None:
+    """Sleep between Garmin API calls. Cheap insurance against rate limits."""
+    if SYNC_DELAY_SECONDS > 0:
+        time.sleep(SYNC_DELAY_SECONDS)
 
 
 # ---------------------------------------------------------------------------
@@ -1094,9 +1144,13 @@ def sync_recent_garmin_activities(api: Garmin, user_id: str, connection_id: str)
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    print("Starting Garmin sync...")
+    progress(
+        f"Starting Garmin sync (days_back={DAYS_BACK}, delay={SYNC_DELAY_SECONDS}s)",
+        stage="login",
+    )
 
     api = login_garmin()
+    progress("Logged in to Garmin", stage="login")
 
     # Save refreshed tokens back to Supabase after every successful login
     save_tokens_to_supabase(SUPABASE_USER_ID, api.client.dumps())
@@ -1122,15 +1176,41 @@ def main() -> None:
         for i in range(DAYS_BACK)
     ]
 
-    for date_iso in dates_to_sync:
-        print(f"\nSyncing {date_iso}...")
+    total = len(dates_to_sync)
+    # Iterate oldest-to-newest so the UI feels like it's progressing forward in time.
+    for idx, date_iso in enumerate(reversed(dates_to_sync), start=1):
+        pct = int((idx / total) * 95)  # leave room for activities at the end
+        progress(
+            f"Syncing {date_iso} ({idx}/{total})",
+            stage="day",
+            percent=pct,
+            days_total=total,
+            day_index=idx,
+        )
 
+        progress(f"  daily summary {date_iso}", stage="daily", days_total=total, day_index=idx)
         daily = get_daily_summary(api, date_iso)
+        throttle()
+
+        progress(f"  HRV {date_iso}", stage="hrv", days_total=total, day_index=idx)
         hrv = get_hrv_data(api, date_iso)
+        throttle()
+
+        progress(f"  sleep {date_iso}", stage="sleep", days_total=total, day_index=idx)
         sleep = get_sleep_data(api, date_iso)
+        throttle()
+
+        progress(f"  body battery {date_iso}", stage="body_battery", days_total=total, day_index=idx)
         bb = get_body_battery(api, date_iso)
+        throttle()
+
+        progress(f"  steps {date_iso}", stage="steps", days_total=total, day_index=idx)
         steps_buckets = get_steps_data(api, date_iso)
+        throttle()
+
+        progress(f"  SpO2 {date_iso}", stage="spo2", days_total=total, day_index=idx)
         spo2 = get_spo2_data(api, date_iso)
+        throttle()
 
         summary = daily.get("summary") or {}
         hydration = daily.get("hydration")
@@ -1144,6 +1224,7 @@ def main() -> None:
         )
         upsert_daily_steps(SUPABASE_USER_ID, connection_id, date_iso, summary, steps_buckets)
 
+    progress("Syncing recent activities", stage="activities", percent=97)
     activity_count = sync_recent_garmin_activities(api, SUPABASE_USER_ID, connection_id)
 
     update_connection_status(
@@ -1157,10 +1238,13 @@ def main() -> None:
         last_error=None,
     )
 
-    print(f"\nSync complete.")
+    progress(
+        f"Sync complete. Days: {len(dates_to_sync)}, activities: {activity_count}",
+        level="done",
+        stage="complete",
+        percent=100,
+    )
     print(f"  User: {full_name or 'unknown'}")
-    print(f"  Days synced: {len(dates_to_sync)}")
-    print(f"  Activities synced: {activity_count}")
 
 
 if __name__ == "__main__":
