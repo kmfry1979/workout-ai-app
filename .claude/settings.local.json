@@ -5,7 +5,12 @@
       "Bash(gh pr create --title 'Upgrade garminconnect to v0.3.x \\(JWT auth, bypass rate-limited SSO\\)' --body ':*)",
       "Bash(pip install:*)",
       "Bash(python garmin_sync_documentation.py)",
-      "Bash(find \"C:\\\\Users\\\\Kelv\\\\workout-ai-app\" -name \"*.sql\" -type f -exec wc -l {} \\\\;)"
+      "Bash(find \"C:\\\\Users\\\\Kelv\\\\workout-ai-app\" -name \"*.sql\" -type f -exec wc -l {} \\\\;)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('garmin-sync/sync_once.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(npx tsc:*)",
+      "Bash(npx eslint:*)",
+      "Bash(npm run *)",
+      "Bash(taskkill //PID 8856 //F)"
     ]
   }
 }
