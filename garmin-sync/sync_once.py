@@ -965,6 +965,18 @@ def upsert_sleep_data(
 
     extracted = extract_sleep_session_data(sleep_data, date_iso)
 
+    # Skip empty placeholder responses (Garmin returns these for the current day
+    # before a sleep session has been recorded). Don't pollute the table with
+    # rows where every meaningful field is null/zero.
+    has_score = extracted.get("sleep_score") is not None
+    has_duration = (extracted.get("sleep_duration_seconds") or 0) > 0
+    has_stages = any((extracted.get(k) or 0) > 0 for k in (
+        "deep_sleep_seconds", "light_sleep_seconds", "rem_sleep_seconds"
+    ))
+    if not (has_score or has_duration or has_stages):
+        print(f"  Skipping empty sleep payload for {date_iso}")
+        return
+
     payload = {
         "user_id": user_id,
         "connection_id": connection_id,
