@@ -2310,9 +2310,7 @@ export default function DashboardPage() {
               : null
             const pct = Math.min(100, (totalSteps / stepGoal) * 100)
             const goalMet = totalSteps >= stepGoal
-            // Count days in last 7 where goal was met
-            const last7 = stepsHistory.slice(-7)
-            const daysMetThisWeek = last7.filter(r => (r.total_steps ?? 0) >= stepGoal).length
+            const totalDaysMet = stepsHistory.filter(r => (r.total_steps ?? 0) >= stepGoal).length
             const goalStr = stepGoal >= 1000 ? `${(stepGoal / 1000).toFixed(stepGoal % 1000 === 0 ? 0 : 1)}k` : String(stepGoal)
             return (
               <button
@@ -2352,7 +2350,9 @@ export default function DashboardPage() {
                   <span style={{ color: goalMet ? '#22c55e' : undefined }}>
                     {Math.round(pct)}% of {goalStr} goal{goalMet ? ' ✓' : ''}
                   </span>
-                  <span>{daysMetThisWeek}/7 days this week</span>
+                  {totalDaysMet > 0 && (
+                    <span className="text-gray-400">{totalDaysMet} days goal hit</span>
+                  )}
                 </div>
               </button>
             )
