@@ -667,7 +667,7 @@ export default function DashboardPage() {
     // Load daily steps
     const { data: steps } = await supabase
       .from('garmin_daily_steps')
-      .select(`step_date, total_steps, total_distance_meters, total_calories, active_minutes, moderate_intensity_minutes, vigorous_intensity_minutes, intensity_minutes_goal, hourly_steps`)
+      .select(`step_date, total_steps, total_distance_meters, total_calories, active_minutes, moderate_intensity_minutes, vigorous_intensity_minutes, intensity_minutes_goal`)
       .eq('user_id', userId)
       .eq('step_date', today)
       .maybeSingle()
