@@ -13,6 +13,7 @@ export default function ProfilePage() {
   const [savingProvider, setSavingProvider] = useState(false)
   const [tab, setTab] = useState<Tab>('profile')
   const [displayName, setDisplayName] = useState('')
+  const [dateOfBirth, setDateOfBirth] = useState('')
   const [selectedProvider, setSelectedProvider] = useState('')
 
   useEffect(() => {
@@ -27,7 +28,7 @@ export default function ProfilePage() {
 
       const { data, error } = await supabase
         .from('profiles')
-        .select('display_name, name, workout_provider')
+        .select('display_name, name, workout_provider, date_of_birth')
         .eq('user_id', user.id)
         .maybeSingle()
 
@@ -40,6 +41,7 @@ export default function ProfilePage() {
       if (data) {
         setDisplayName(data.display_name ?? data.name ?? '')
         setSelectedProvider(data.workout_provider ?? '')
+        setDateOfBirth((data as { date_of_birth?: string | null }).date_of_birth ?? '')
       }
 
       setLoading(false)
@@ -84,10 +86,11 @@ export default function ProfilePage() {
       return
     }
 
-    const payload = {
+    const payload: Record<string, string> = {
       display_name: trimmedName,
       name: trimmedName,
     }
+    if (dateOfBirth) payload.date_of_birth = dateOfBirth
 
     if (existingProfile) {
       const { error } = await supabase
@@ -206,6 +209,13 @@ export default function ProfilePage() {
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
               placeholder="Your name"
+            />
+            <label className="block text-sm font-medium mb-2">Date of Birth <span className="text-gray-400 font-normal">(used for Bio Age calculation)</span></label>
+            <input
+              type="date"
+              className="w-full rounded-lg border p-3 mb-4"
+              value={dateOfBirth}
+              onChange={(e) => setDateOfBirth(e.target.value)}
             />
 
             <button

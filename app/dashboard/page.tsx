@@ -546,6 +546,10 @@ export default function DashboardPage() {
   const [stepsMonthOffset, setStepsMonthOffset] = useState(0) // 0 = current month
   const [stepsYearOffset, setStepsYearOffset] = useState(0) // 0 = current year
 
+  const [stepGoal, setStepGoal] = useState(10000)
+  const [stepGoalInput, setStepGoalInput] = useState('10000')
+  const [savingGoal, setSavingGoal] = useState(false)
+
   // Settings + one-time backfill state
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [backfillOpen, setBackfillOpen] = useState(false)
@@ -794,16 +798,32 @@ export default function DashboardPage() {
 
       const { data: profile } = await supabase
         .from('profiles')
-        .select('display_name, name')
+        .select('display_name, name, step_goal')
         .eq('user_id', user.id)
         .maybeSingle()
       setDisplayName(profile?.display_name ?? profile?.name ?? user.email ?? '')
+      const loadedGoal = (profile as { step_goal?: number | null } | null)?.step_goal ?? 10000
+      setStepGoal(loadedGoal)
+      setStepGoalInput(String(loadedGoal))
 
       await Promise.all([loadDashboardData(user.id), loadLastSync(user.id)])
       setLoading(false)
     }
     load()
   }, [router])
+
+  const saveStepGoal = async () => {
+    const val = parseInt(stepGoalInput, 10)
+    if (isNaN(val) || val < 100 || val > 100000) return
+    setSavingGoal(true)
+    const { data: sessionData } = await supabase.auth.getSession()
+    const user = sessionData.session?.user
+    if (user) {
+      await supabase.from('profiles').update({ step_goal: val }).eq('user_id', user.id)
+      setStepGoal(val)
+    }
+    setSavingGoal(false)
+  }
 
   const handleSyncNow = async () => {
     if (syncing) return
@@ -1903,6 +1923,41 @@ export default function DashboardPage() {
       >
         <div className="space-y-4">
           <div className="bg-gray-800/40 rounded-xl p-4">
+            <p className="text-sm font-semibold text-white">Daily Step Goal</p>
+            <p className="text-xs text-gray-400 mt-1 mb-3">Set your daily step target. Shown on the steps tile and used to track goal days.</p>
+            <div className="flex gap-2 items-center">
+              <input
+                type="number"
+                min={1000}
+                max={100000}
+                step={500}
+                value={stepGoalInput}
+                onChange={e => setStepGoalInput(e.target.value)}
+                className="flex-1 bg-gray-700 text-white text-sm rounded-lg px-3 py-2 border border-gray-600 focus:border-orange-500 focus:outline-none"
+                placeholder="10000"
+              />
+              <button
+                onClick={saveStepGoal}
+                disabled={savingGoal}
+                className="text-sm bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-white px-4 py-2 rounded-lg font-semibold"
+              >
+                {savingGoal ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+            <div className="flex gap-2 mt-2 flex-wrap">
+              {[5000, 7500, 10000, 12500, 15000].map(n => (
+                <button
+                  key={n}
+                  onClick={() => setStepGoalInput(String(n))}
+                  className={`text-xs px-2.5 py-1 rounded-lg border transition-colors ${stepGoal === n ? 'border-orange-500 text-orange-400' : 'border-gray-600 text-gray-400 hover:border-gray-400'}`}
+                >
+                  {(n / 1000).toFixed(n % 1000 === 0 ? 0 : 1)}k
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="bg-gray-800/40 rounded-xl p-4">
             <p className="text-sm font-semibold text-white">One-time Garmin backfill</p>
             <p className="text-sm text-gray-200 mt-1 leading-snug">
               Pulls every day of historical data from your Garmin account once. The hourly cron then keeps
@@ -2135,74 +2190,71 @@ export default function DashboardPage() {
           {syncMessage && <span className="text-gray-400">{syncMessage}</span>}
         </div>
 
-        {/* Recovery / Strain — Whoop-style dual ring */}
-        {(dailyHealth?.body_battery_end != null || metrics?.garmin_body_battery_eod != null || dailyHealth?.stress_avg != null || metrics?.garmin_stress_avg != null) && (() => {
-          const recovery = dailyHealth?.body_battery_end ?? metrics?.garmin_body_battery_eod ?? null
-          const stressVal = dailyHealth?.stress_avg ?? metrics?.garmin_stress_avg ?? null
+        {/* Recovery / Strain — combined ring mirroring Health Engine page */}
+        {(() => {
+          const clampV = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
+          const hrv = dailyHealth?.hrv_avg ?? metrics?.garmin_hrv_nightly_avg ?? null
+          const sleepScore = sleepData?.sleep_score ?? metrics?.garmin_sleep_score ?? null
+          const rhr = metrics?.resting_hr ?? metrics?.resting_heart_rate_bpm ?? null
+          let recScore = 0, recWeight = 0
+          if (hrv != null) { recScore += ((clampV(hrv, 20, 120) - 20) / 100) * 100 * 0.45; recWeight += 0.45 }
+          if (sleepScore != null) { recScore += sleepScore * 0.35; recWeight += 0.35 }
+          if (rhr != null) { recScore += (100 - ((clampV(rhr, 40, 80) - 40) / 40) * 100) * 0.20; recWeight += 0.20 }
+          const recovery = recWeight > 0 ? Math.round(recScore / recWeight) : null
+          const modMin = dailySteps?.moderate_intensity_minutes ?? null
+          const vigMin = dailySteps?.vigorous_intensity_minutes ?? null
+          const activeMin = dailySteps?.active_minutes ?? null
+          const intensityMin = modMin != null || vigMin != null ? (modMin ?? 0) + (vigMin ?? 0) * 2 : (activeMin ?? 0) * 0.6
+          const strain = Math.min(21, 21 * Math.log10(1 + intensityMin) / Math.log10(301))
+          const color = recovery == null ? '#6b7280' : recovery >= 67 ? '#21FF00' : recovery >= 34 ? '#f97316' : '#FF0000'
+          const recLabel = recovery == null ? '—' : recovery >= 67 ? 'High' : recovery >= 34 ? 'Moderate' : 'Low'
+          const cx = 100, cy = 100
+          const rOuter = 76, rInner = 58, swOuter = 9, swInner = 13
+          const circumOuter = 2 * Math.PI * rOuter
+          const circumInner = 2 * Math.PI * rInner
+          const recPct = recovery != null ? clampV(recovery, 0, 100) / 100 : 0
+          const strainPct = clampV(strain, 0, 21) / 21
           const bbStart = dailyHealth?.body_battery_start ?? metrics?.garmin_body_battery_high ?? null
-          const recoveryColor = recovery == null ? '#6b7280' : recovery >= 67 ? '#22c55e' : recovery >= 33 ? '#eab308' : '#ef4444'
-          const recoveryLabel = recovery == null ? '—' : recovery >= 67 ? 'High' : recovery >= 33 ? 'Moderate' : 'Low'
-          // Strain: stress 0–100, low stress = low strain (good)
-          const strainPct = stressVal != null ? Math.min(100, stressVal) : null
-          const strainColor = strainPct == null ? '#6b7280' : strainPct < 26 ? '#22c55e' : strainPct < 51 ? '#eab308' : '#ef4444'
-          const strainLabel = strainPct == null ? '—' : strainPct < 26 ? 'Low' : strainPct < 51 ? 'Moderate' : 'High'
-          const r = 36, circ = 2 * Math.PI * r
+          const bbEnd = dailyHealth?.body_battery_end ?? metrics?.garmin_body_battery_eod ?? null
+          const bbDelta = bbStart != null && bbEnd != null ? bbEnd - bbStart : null
           return (
             <div className="bg-gray-900 rounded-3xl p-5">
               <p className="text-xs text-gray-400 uppercase tracking-wider font-semibold mb-4 text-center">Recovery &amp; Strain</p>
-              <div className="flex items-center justify-around">
-                {/* Recovery ring */}
-                <button type="button" onClick={() => setOpenDetail('bodyBattery')} className="flex flex-col items-center gap-2 hover:opacity-80 transition-opacity">
-                  <div className="relative">
-                    <svg width="90" height="90" viewBox="0 0 90 90">
-                      <circle cx="45" cy="45" r={r} fill="none" stroke="#374151" strokeWidth="7" />
-                      {recovery != null && (
-                        <circle cx="45" cy="45" r={r} fill="none" stroke={recoveryColor} strokeWidth="7"
-                          strokeLinecap="round"
-                          strokeDasharray={`${(recovery / 100) * circ} ${circ}`}
-                          transform="rotate(-90 45 45)"
-                        />
-                      )}
-                      <text x="45" y="41" textAnchor="middle" fill="white" fontSize="20" fontWeight="bold">{recovery ?? '—'}</text>
-                      <text x="45" y="56" textAnchor="middle" fill="#9ca3af" fontSize="8">BODY BAT.</text>
-                    </svg>
-                  </div>
+              <div className="flex flex-col items-center">
+                <svg viewBox="0 0 200 200" className="w-40 h-40">
+                  <circle cx={cx} cy={cy} r={rOuter} fill="none" stroke="#1f2937" strokeWidth={swOuter} />
+                  <circle cx={cx} cy={cy} r={rInner} fill="none" stroke="#1f2937" strokeWidth={swInner} />
+                  <circle cx={cx} cy={cy} r={rOuter} fill="none" stroke={color} strokeWidth={swOuter} strokeLinecap="round"
+                    strokeDasharray={`${recPct * circumOuter} ${circumOuter}`} transform={`rotate(-90 ${cx} ${cy})`} />
+                  <circle cx={cx} cy={cy} r={rInner} fill="none" stroke="#3b82f6" strokeWidth={swInner} strokeLinecap="round"
+                    strokeDasharray={`${strainPct * circumInner} ${circumInner}`} transform={`rotate(-90 ${cx} ${cy})`} />
+                  <text x={cx} y={cy - 8} textAnchor="middle" fill="white" fontSize="30" fontWeight="bold" fontFamily="system-ui,sans-serif">
+                    {recovery ?? '—'}
+                  </text>
+                  <text x={cx} y={cy + 10} textAnchor="middle" fill="#9ca3af" fontSize="9" fontFamily="system-ui,sans-serif" letterSpacing="2">
+                    RECOVERY
+                  </text>
+                  <text x={cx} y={cy + 24} textAnchor="middle" fill="#3b82f6" fontSize="9" fontFamily="system-ui,sans-serif" letterSpacing="1">
+                    {strain.toFixed(1)} STRAIN
+                  </text>
+                </svg>
+                <div className="flex gap-10 mt-3">
                   <div className="text-center">
-                    <p className="text-[10px] text-gray-400 uppercase tracking-wider">Recovery</p>
-                    <p className="text-sm font-bold mt-0.5" style={{ color: recoveryColor }}>{recoveryLabel}</p>
-                    {bbStart != null && recovery != null && (
-                      <p className="text-[10px] text-gray-500 mt-0.5">{bbStart > recovery ? `↓${bbStart - recovery} drained` : `↑${recovery - bbStart} gained`}</p>
+                    <p className="text-lg font-bold" style={{ color }}>{recovery != null ? `${recovery}%` : '—'}</p>
+                    <p className="text-[10px] text-gray-500 uppercase tracking-wider">{recLabel}</p>
+                    {bbDelta != null && (
+                      <p className="text-[10px] text-gray-500 mt-0.5">{bbDelta >= 0 ? `+${bbDelta} gained` : `${bbDelta} drained`}</p>
                     )}
                   </div>
-                </button>
-
-                {/* Divider */}
-                <div className="w-px h-20 bg-gray-700" />
-
-                {/* Strain ring */}
-                <button type="button" onClick={() => setOpenDetail('stress')} className="flex flex-col items-center gap-2 hover:opacity-80 transition-opacity">
-                  <div className="relative">
-                    <svg width="90" height="90" viewBox="0 0 90 90">
-                      <circle cx="45" cy="45" r={r} fill="none" stroke="#374151" strokeWidth="7" />
-                      {strainPct != null && (
-                        <circle cx="45" cy="45" r={r} fill="none" stroke={strainColor} strokeWidth="7"
-                          strokeLinecap="round"
-                          strokeDasharray={`${(strainPct / 100) * circ} ${circ}`}
-                          transform="rotate(-90 45 45)"
-                        />
-                      )}
-                      <text x="45" y="41" textAnchor="middle" fill="white" fontSize="20" fontWeight="bold">{stressVal ?? '—'}</text>
-                      <text x="45" y="56" textAnchor="middle" fill="#9ca3af" fontSize="8">STRESS</text>
-                    </svg>
-                  </div>
+                  <div className="w-px bg-gray-700" />
                   <div className="text-center">
-                    <p className="text-[10px] text-gray-400 uppercase tracking-wider">Strain</p>
-                    <p className="text-sm font-bold mt-0.5" style={{ color: strainColor }}>{strainLabel}</p>
-                    {metrics?.garmin_hrv_status && (
-                      <p className="text-[10px] text-gray-500 mt-0.5">HRV {metrics.garmin_hrv_status}</p>
+                    <p className="text-lg font-bold text-blue-400">{strain.toFixed(1)}</p>
+                    <p className="text-[10px] text-gray-500 uppercase tracking-wider">Strain / 21</p>
+                    {(metrics?.garmin_hrv_status ?? dailyHealth?.hrv_status) && (
+                      <p className="text-[10px] text-gray-500 mt-0.5">HRV {metrics?.garmin_hrv_status ?? dailyHealth?.hrv_status}</p>
                     )}
                   </div>
-                </button>
+                </div>
               </div>
             </div>
           )
@@ -2248,7 +2300,7 @@ export default function DashboardPage() {
             )
           })()}
 
-          {/* Daily Steps with progress bar (half-width) */}
+          {/* Daily Steps with progress bar */}
           {(dailySteps?.total_steps != null || metrics?.steps != null) ? (() => {
             const totalSteps = dailySteps?.total_steps ?? metrics?.steps ?? 0
             const distKmSteps = dailySteps?.total_distance_meters
@@ -2256,7 +2308,10 @@ export default function DashboardPage() {
               : metrics?.distance_m
               ? (metrics.distance_m / 1000).toFixed(1)
               : null
-            const pct = Math.min(100, (totalSteps / 10000) * 100)
+            const pct = Math.min(100, (totalSteps / stepGoal) * 100)
+            const goalMet = totalSteps >= stepGoal
+            const totalDaysMet = stepsHistory.filter(r => (r.total_steps ?? 0) >= stepGoal).length
+            const goalStr = stepGoal >= 1000 ? `${(stepGoal / 1000).toFixed(stepGoal % 1000 === 0 ? 0 : 1)}k` : String(stepGoal)
             return (
               <button
                 type="button"
@@ -2272,9 +2327,10 @@ export default function DashboardPage() {
                     <p className="text-3xl font-bold text-white mt-1">
                       {totalSteps.toLocaleString()}
                     </p>
-                    {distKmSteps && (
-                      <p className="text-[11px] text-gray-500 mt-0.5">{distKmSteps} km covered</p>
-                    )}
+                    <p className="text-[11px] text-gray-500 mt-0.5">
+                      Goal: {stepGoal.toLocaleString()} steps
+                      {distKmSteps ? ` · ${distKmSteps} km` : ''}
+                    </p>
                   </div>
                   <div className="flex flex-col items-end gap-1">
                     <div className="text-4xl">🦶</div>
@@ -2286,14 +2342,16 @@ export default function DashboardPage() {
                     className="h-2 rounded-full transition-all duration-500"
                     style={{
                       width: `${pct}%`,
-                      backgroundColor: totalSteps >= 10000 ? '#22c55e' : '#f97316',
+                      backgroundColor: goalMet ? '#22c55e' : '#f97316',
                     }}
                   />
                 </div>
                 <div className="flex justify-between text-[11px] text-gray-500 mt-1">
-                  <span>{Math.round(pct)}% of 10k goal</span>
-                  {dailySteps?.active_minutes != null && (
-                    <span>{dailySteps.active_minutes} active min</span>
+                  <span style={{ color: goalMet ? '#22c55e' : undefined }}>
+                    {Math.round(pct)}% of {goalStr} goal{goalMet ? ' ✓' : ''}
+                  </span>
+                  {totalDaysMet > 0 && (
+                    <span className="text-gray-400">{totalDaysMet} days goal hit</span>
                   )}
                 </div>
               </button>
