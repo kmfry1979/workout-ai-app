@@ -667,13 +667,28 @@ export default function DashboardPage() {
     // Load daily steps
     const { data: steps } = await supabase
       .from('garmin_daily_steps')
-      .select(`step_date, total_steps, total_distance_meters, total_calories, active_minutes, moderate_intensity_minutes, vigorous_intensity_minutes, intensity_minutes_goal`)
+      .select(`step_date, total_steps, total_distance_meters, total_calories, active_minutes, moderate_intensity_minutes, vigorous_intensity_minutes, intensity_minutes_goal, hourly_steps`)
       .eq('user_id', userId)
       .eq('step_date', today)
       .maybeSingle()
 
     setDailySteps(steps as DailySteps | null)
-    setHourlySteps(null)
+    const rawHourly = (steps as unknown as { hourly_steps?: unknown } | null)?.hourly_steps
+    if (rawHourly) {
+      const map: Record<string, number> = {}
+      if (Array.isArray(rawHourly)) {
+        for (const r of rawHourly as { hour?: number | string; steps?: number; total?: number }[]) {
+          if (r && r.hour != null) map[String(r.hour)] = Number(r.steps ?? r.total ?? 0)
+        }
+      } else if (typeof rawHourly === 'object') {
+        for (const [k, v] of Object.entries(rawHourly as Record<string, unknown>)) {
+          map[k] = Number(v) || 0
+        }
+      }
+      setHourlySteps(map)
+    } else {
+      setHourlySteps(null)
+    }
 
     // 365-day step history for the Steps modal (Day/Week/Month/Year tabs).
     // Pull from both garmin_daily_steps AND the legacy daily_health_metrics.steps
