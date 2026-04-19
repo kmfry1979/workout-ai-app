@@ -96,7 +96,6 @@ export async function POST(req: NextRequest) {
         oauth_refresh_token_enc: null,
         token_expires_at: null,
         last_sync_at: now,
-        last_successful_sync_at: null,
         sync_cursor: null,
         backfill_start_date: null,
         backfill_complete: false,
@@ -104,7 +103,10 @@ export async function POST(req: NextRequest) {
         updated_at: now,
         created_at: now,
       },
-      { onConflict: "user_id,provider_type" }
+      {
+        onConflict: "user_id,provider_type",
+        ignoreDuplicates: false,
+      }
     );
 
   if (upsertError) {

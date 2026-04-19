@@ -848,7 +848,7 @@ export default function DashboardPage() {
             return
           }
         }
-        if (Date.now() - startedAt > 5 * 60_000) {
+        if (Date.now() - startedAt > 12 * 60_000) {
           setSyncMessage('Still syncing — data will appear shortly.')
           setSyncing(false)
           return
