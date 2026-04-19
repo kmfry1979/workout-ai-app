@@ -1526,7 +1526,6 @@ export default function DashboardPage() {
               for (let i = 0; i < 7; i++) {
                 const d = new Date(weekStart)
                 d.setDate(d.getDate() + i)
-                if (d.getMonth() !== mo) continue
                 const key = d.toISOString().split('T')[0]
                 total += byDate.get(key) ?? 0
                 if (key === todayStr) isCurrent = true
@@ -1542,19 +1541,7 @@ export default function DashboardPage() {
             }
             const monthName = base.toLocaleString(undefined, { month: 'long', year: 'numeric' })
             const totalMonth = weeks.reduce((s, w) => s + w.total, 0)
-            // Proportional goal per week: only count days that fall within the month.
-            // Partial first/last weeks (e.g. 5-day week) get a 50k goal not 70k.
-            const weekDayCounts = weeks.map(w => {
-              let count = 0
-              for (let i = 0; i < 7; i++) {
-                const d = new Date(w.start)
-                d.setDate(d.getDate() + i)
-                if (d.getMonth() === mo) count++
-              }
-              return count
-            })
-            const weekGoals = weekDayCounts.map(d => d * DAILY_GOAL)
-            const weeksMet = weeks.filter((w, idx) => w.total >= weekGoals[idx]).length
+            const weeksMet = weeks.filter(w => w.total >= WEEKLY_GOAL).length
             const isCurrentMonth = stepsMonthOffset === 0
             return (
               <>
@@ -1581,10 +1568,9 @@ export default function DashboardPage() {
                   <StepsBarChart
                     bars={weeks.map(w => ({ label: w.label, value: w.total, isCurrent: w.isCurrent }))}
                     goal={WEEKLY_GOAL}
-                    goals={weekGoals}
                     height={140}
                   />
-                  <p className="text-[10px] text-gray-500 mt-2 text-center">Goal: 10k/day · partial weeks use proportional target</p>
+                  <p className="text-[10px] text-gray-500 mt-2 text-center">Weekly goal: 70,000 steps</p>
                 </div>
               </>
             )
