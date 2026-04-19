@@ -210,7 +210,7 @@ type PRsByType = Record<string, PR[]>
 function calcPersonalRecords(activities: ActivityDetail[]): PRsByType {
   const byType: Record<string, ActivityDetail[]> = {}
   for (const a of activities) {
-    const t = a.activity_type ?? 'Other'
+    const t = friendlyActivityType(a.activity_type)
     if (!byType[t]) byType[t] = []
     byType[t].push(a)
   }
@@ -276,6 +276,28 @@ function calcWeeklySummary(stepsHistory28: { date: string; load: number }[], sle
     hrv: { this: avg(thisWeekHRV), last: avg(lastWeekHRV) },
     activities: { this: thisWeekActs, last: lastWeekActs },
   }
+}
+
+function friendlyActivityType(raw: string | null): string {
+  if (!raw) return 'Other'
+  const match = raw.match(/TYPEKEY['" ]*:\s*['" ]*([A-Z_]+)/)
+  if (match) {
+    return match[1].split('_').map((w: string) => w.charAt(0) + w.slice(1).toLowerCase()).join(' ')
+  }
+  return raw
+}
+
+// ─── Info Tooltip ─────────────────────────────────────────────────────────────
+
+function InfoTip({ text }: { text: string }) {
+  return (
+    <span className="relative group inline-flex items-center ml-1 align-middle">
+      <span className="text-gray-600 hover:text-gray-400 cursor-help text-[11px] select-none">ⓘ</span>
+      <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 w-52 bg-gray-800 border border-gray-700 text-[10px] text-gray-300 rounded-xl p-2.5 shadow-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 leading-relaxed">
+        {text}
+      </span>
+    </span>
+  )
 }
 
 // ─── Chart Components ─────────────────────────────────────────────────────────
@@ -599,7 +621,10 @@ export default function HealthPage() {
             )}
 
             <div className="rounded-3xl p-6 mb-4 flex flex-col items-center" style={{ background: '#111111' }}>
-              <p className="text-xs text-gray-500 uppercase tracking-widest mb-1">Recovery & Strain</p>
+              <div className="flex items-center gap-1 mb-1">
+                <p className="text-xs text-gray-500 uppercase tracking-widest">Recovery & Strain</p>
+                <InfoTip text="Two rings showing your daily readiness and physical load. Outer ring = Recovery (how ready your body is). Inner arc = Strain (how hard you've worked today)." />
+              </div>
               <p className="text-[10px] text-gray-600 mb-4">How ready is your body vs how hard you&apos;ve worked</p>
               <RecoveryStrainRing recovery={recovery} strain={strain} />
               <div className="w-full mt-4 rounded-2xl p-4" style={{ background: '#1a1a1a' }}>
@@ -636,7 +661,10 @@ export default function HealthPage() {
 
             <div className="grid grid-cols-3 gap-3 mb-4">
               <div className="rounded-2xl p-4" style={{ background: '#111111' }}>
-                <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-2">Sleep</p>
+                <div className="flex items-center gap-0.5 mb-2">
+                <p className="text-[10px] text-gray-500 uppercase tracking-wider">Sleep</p>
+                <InfoTip text="Total sleep duration and Garmin sleep score (0–100). Score combines duration, sleep stages, and disturbances. Deep sleep % shows restorative slow-wave sleep — aim for >20%." />
+              </div>
                 <p className="text-lg font-bold text-white">{fmt(data?.sleepDurationSeconds ?? null)}</p>
                 <p className="text-[10px] text-gray-400 mt-1">Score <span className="text-white font-semibold">{data?.sleepScore ?? '—'}</span></p>
                 {data?.deepSleepSeconds != null && data.sleepDurationSeconds != null && (
@@ -644,7 +672,10 @@ export default function HealthPage() {
                 )}
               </div>
               <div className="rounded-2xl p-4" style={{ background: '#111111' }}>
-                <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-2">HRV</p>
+                <div className="flex items-center gap-0.5 mb-2">
+                <p className="text-[10px] text-gray-500 uppercase tracking-wider">HRV</p>
+                <InfoTip text="Heart Rate Variability — the variation in time between heartbeats (ms). Higher = more recovered. RHR is Resting Heart Rate; elevated RHR vs baseline is a fatigue signal." />
+              </div>
                 <p className="text-lg font-bold text-white">{data?.hrv != null ? `${data.hrv}ms` : '—'}</p>
                 <p className="text-[10px] text-gray-400 mt-1">RHR <span className="text-white font-semibold">{data?.rhr != null ? `${data.rhr}bpm` : '—'}</span></p>
                 {data?.rhrBaseline != null && data.rhr != null && (
@@ -654,7 +685,10 @@ export default function HealthPage() {
                 )}
               </div>
               <div className="rounded-2xl p-4" style={{ background: '#111111' }}>
-                <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-2">Respiration</p>
+                <div className="flex items-center gap-0.5 mb-2">
+                <p className="text-[10px] text-gray-500 uppercase tracking-wider">Respiration</p>
+                <InfoTip text="Breaths per minute (brpm). Elevated respiration rate vs your 14-day baseline can be an early sign of illness or overtraining — often shows up before you feel symptoms." />
+              </div>
                 <p className="text-lg font-bold" style={{ color: warning.triggered ? '#FF0000' : 'white' }}>
                   {data?.respiration != null ? `${data.respiration.toFixed(1)}` : data?.sleepRespiration != null ? `${data.sleepRespiration.toFixed(1)}` : '—'}
                 </p>
@@ -675,7 +709,10 @@ export default function HealthPage() {
             )}
 
             <div className="rounded-3xl p-6 mb-4" style={{ background: '#111111' }}>
-              <p className="text-xs text-gray-500 uppercase tracking-widest mb-4">Biological Age</p>
+              <div className="flex items-center gap-1 mb-4">
+                <p className="text-xs text-gray-500 uppercase tracking-widest">Biological Age</p>
+                <InfoTip text="An estimate of your body's functional age based on fitness markers. VO2 max in the top 20% for your age = −2yr. Elevated resting HR vs baseline = +1yr. Consistent deep sleep >20% = −1yr." />
+              </div>
               {bioAge ? (
                 <>
                   <div className="text-center mb-4">
@@ -713,7 +750,10 @@ export default function HealthPage() {
             </div>
 
             <div className="rounded-3xl p-6 mb-4" style={{ background: '#111111' }}>
-              <p className="text-xs text-gray-500 uppercase tracking-widest mb-3">{briefingLabel}</p>
+              <div className="flex items-center gap-1 mb-3">
+                <p className="text-xs text-gray-500 uppercase tracking-widest">{briefingLabel}</p>
+                <InfoTip text="AI coach summary generated from your recovery, strain, HRV, and sleep data. Two sentences: your current state and one specific recommendation." />
+              </div>
               {briefingLoading ? (
                 <div className="flex items-center gap-2">
                   <div className="w-4 h-4 border border-gray-600 border-t-white rounded-full animate-spin" />
@@ -745,7 +785,10 @@ export default function HealthPage() {
                 {/* HRV 30-day Trend */}
                 <div className="rounded-3xl p-5 mb-4" style={{ background: '#111111' }}>
                   <div className="flex items-start justify-between mb-1">
+                    <div className="flex items-center gap-1">
                     <p className="text-xs text-gray-500 uppercase tracking-widest">HRV 30-Day Trend</p>
+                    <InfoTip text="Daily HRV readings over the past 30 days (orange line) with a 7-day rolling average (blue). A rising trend means your body is adapting and recovering well. A falling trend suggests accumulated fatigue." />
+                  </div>
                     {hrvTrend?.trend != null && (
                       <span className="text-xs font-semibold" style={{ color: hrvTrend.trend >= 0 ? '#21FF00' : '#FF0000' }}>
                         {hrvTrend.trend >= 0 ? '↑' : '↓'}{Math.abs(hrvTrend.trend).toFixed(1)}% vs last week
@@ -770,7 +813,10 @@ export default function HealthPage() {
 
                 {/* Sleep → HRV Correlation */}
                 <div className="rounded-3xl p-5 mb-4" style={{ background: '#111111' }}>
-                  <p className="text-xs text-gray-500 uppercase tracking-widest mb-1">Sleep → Next Day HRV</p>
+                  <div className="flex items-center gap-1 mb-1">
+                    <p className="text-xs text-gray-500 uppercase tracking-widest">Sleep → Next Day HRV</p>
+                    <InfoTip text="Pearson correlation (−1 to +1) between your sleep score and your HRV the following morning. +0.5 or higher = strong link. Closer to 0 = other factors (stress, alcohol) matter more than sleep alone." />
+                  </div>
                   <p className="text-[10px] text-gray-600 mb-3">Does your sleep score predict next-day HRV?</p>
                   {sleepCorr ? (
                     <>
@@ -796,7 +842,10 @@ export default function HealthPage() {
 
                 {/* VO2 Max Context */}
                 <div className="rounded-3xl p-5 mb-4" style={{ background: '#111111' }}>
-                  <p className="text-xs text-gray-500 uppercase tracking-widest mb-1">VO2 Max</p>
+                  <div className="flex items-center gap-1 mb-1">
+                    <p className="text-xs text-gray-500 uppercase tracking-widest">VO2 Max</p>
+                    <InfoTip text="Maximum oxygen uptake in ml/kg/min — the gold standard of cardiovascular fitness. Extracted from your Garmin activity data. Higher = better aerobic capacity. Top 20% for your age = elite fitness." />
+                  </div>
                   <p className="text-[10px] text-gray-600 mb-3">Cardiovascular fitness from recent activities</p>
                   {data?.vo2max != null ? (
                     <>
@@ -832,7 +881,10 @@ export default function HealthPage() {
               <>
                 {/* ACWR */}
                 <div className="rounded-3xl p-5 mb-4" style={{ background: '#111111' }}>
-                  <p className="text-xs text-gray-500 uppercase tracking-widest mb-1">Acute:Chronic Workload Ratio</p>
+                  <div className="flex items-center gap-1 mb-1">
+                    <p className="text-xs text-gray-500 uppercase tracking-widest">Acute:Chronic Workload Ratio</p>
+                    <InfoTip text="Compares your last 7 days of training load vs your 28-day average. 0.8–1.3 is the optimal 'sweet spot' — enough stimulus to improve without injury risk. Above 1.5 significantly raises injury probability." />
+                  </div>
                   <p className="text-[10px] text-gray-600 mb-3">7-day load vs 28-day average. Sweet spot: 0.8–1.3</p>
                   {acwr ? (
                     <>
@@ -873,7 +925,10 @@ export default function HealthPage() {
                 {/* Weekly Summary */}
                 {weeklySummary && (
                   <div className="rounded-3xl p-5 mb-4" style={{ background: '#111111' }}>
-                    <p className="text-xs text-gray-500 uppercase tracking-widest mb-3">Weekly Summary</p>
+                    <div className="flex items-center gap-1 mb-3">
+                      <p className="text-xs text-gray-500 uppercase tracking-widest">Weekly Summary</p>
+                      <InfoTip text="This week vs last week comparison. Training load = intensity minutes (moderate + vigorous×2). Green = improvement, red = decline vs previous week." />
+                    </div>
                     <div className="grid grid-cols-2 gap-2">
                       {[
                         { label: 'Training load', this: weeklySummary.load.this, last: weeklySummary.load.last, unit: 'min', fmt: (v: number) => String(v) },
@@ -901,7 +956,10 @@ export default function HealthPage() {
 
                 {/* Training Zones */}
                 <div className="rounded-3xl p-5 mb-4" style={{ background: '#111111' }}>
-                  <p className="text-xs text-gray-500 uppercase tracking-widest mb-1">Training Zone Distribution</p>
+                  <div className="flex items-center gap-1 mb-1">
+                    <p className="text-xs text-gray-500 uppercase tracking-widest">Training Zone Distribution</p>
+                    <InfoTip text="Time spent in each HR zone over the last 90 days, estimated from avg HR vs your max HR (220−age). Z1 Recovery &lt;60%, Z2 Aerobic 60–70%, Z3 Tempo 70–80%, Z4 Threshold 80–90%, Z5 Max 90%+." />
+                  </div>
                   <p className="text-[10px] text-gray-600 mb-3">Last 90 days · Est. max HR: {estimatedMaxHR}bpm</p>
                   {zones.some(z => z.minutes > 0) ? (
                     <div className="space-y-3">
@@ -933,7 +991,10 @@ export default function HealthPage() {
                 {Object.keys(prs).length > 0 ? (
                   Object.entries(prs).map(([type, records]) => (
                     <div key={type} className="rounded-3xl p-5 mb-4" style={{ background: '#111111' }}>
-                      <p className="text-xs text-gray-500 uppercase tracking-widest mb-3">{type}</p>
+                      <div className="flex items-center gap-1 mb-3">
+                        <p className="text-xs text-gray-500 uppercase tracking-widest">{type}</p>
+                        <InfoTip text="Your personal bests for this activity type from the last 90 days of synced data." />
+                      </div>
                       <div className="space-y-3">
                         {records.map((pr, i) => (
                           <div key={i} className="flex justify-between items-center">
