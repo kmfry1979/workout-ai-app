@@ -546,6 +546,10 @@ export default function DashboardPage() {
   const [stepsMonthOffset, setStepsMonthOffset] = useState(0) // 0 = current month
   const [stepsYearOffset, setStepsYearOffset] = useState(0) // 0 = current year
 
+  const [stepGoal, setStepGoal] = useState(10000)
+  const [stepGoalInput, setStepGoalInput] = useState('10000')
+  const [savingGoal, setSavingGoal] = useState(false)
+
   // Settings + one-time backfill state
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [backfillOpen, setBackfillOpen] = useState(false)
@@ -794,16 +798,32 @@ export default function DashboardPage() {
 
       const { data: profile } = await supabase
         .from('profiles')
-        .select('display_name, name')
+        .select('display_name, name, step_goal')
         .eq('user_id', user.id)
         .maybeSingle()
       setDisplayName(profile?.display_name ?? profile?.name ?? user.email ?? '')
+      const loadedGoal = (profile as { step_goal?: number | null } | null)?.step_goal ?? 10000
+      setStepGoal(loadedGoal)
+      setStepGoalInput(String(loadedGoal))
 
       await Promise.all([loadDashboardData(user.id), loadLastSync(user.id)])
       setLoading(false)
     }
     load()
   }, [router])
+
+  const saveStepGoal = async () => {
+    const val = parseInt(stepGoalInput, 10)
+    if (isNaN(val) || val < 100 || val > 100000) return
+    setSavingGoal(true)
+    const { data: sessionData } = await supabase.auth.getSession()
+    const user = sessionData.session?.user
+    if (user) {
+      await supabase.from('profiles').update({ step_goal: val }).eq('user_id', user.id)
+      setStepGoal(val)
+    }
+    setSavingGoal(false)
+  }
 
   const handleSyncNow = async () => {
     if (syncing) return
@@ -1903,6 +1923,41 @@ export default function DashboardPage() {
       >
         <div className="space-y-4">
           <div className="bg-gray-800/40 rounded-xl p-4">
+            <p className="text-sm font-semibold text-white">Daily Step Goal</p>
+            <p className="text-xs text-gray-400 mt-1 mb-3">Set your daily step target. Shown on the steps tile and used to track goal days.</p>
+            <div className="flex gap-2 items-center">
+              <input
+                type="number"
+                min={1000}
+                max={100000}
+                step={500}
+                value={stepGoalInput}
+                onChange={e => setStepGoalInput(e.target.value)}
+                className="flex-1 bg-gray-700 text-white text-sm rounded-lg px-3 py-2 border border-gray-600 focus:border-orange-500 focus:outline-none"
+                placeholder="10000"
+              />
+              <button
+                onClick={saveStepGoal}
+                disabled={savingGoal}
+                className="text-sm bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-white px-4 py-2 rounded-lg font-semibold"
+              >
+                {savingGoal ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+            <div className="flex gap-2 mt-2 flex-wrap">
+              {[5000, 7500, 10000, 12500, 15000].map(n => (
+                <button
+                  key={n}
+                  onClick={() => setStepGoalInput(String(n))}
+                  className={`text-xs px-2.5 py-1 rounded-lg border transition-colors ${stepGoal === n ? 'border-orange-500 text-orange-400' : 'border-gray-600 text-gray-400 hover:border-gray-400'}`}
+                >
+                  {(n / 1000).toFixed(n % 1000 === 0 ? 0 : 1)}k
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="bg-gray-800/40 rounded-xl p-4">
             <p className="text-sm font-semibold text-white">One-time Garmin backfill</p>
             <p className="text-sm text-gray-200 mt-1 leading-snug">
               Pulls every day of historical data from your Garmin account once. The hourly cron then keeps
@@ -2245,7 +2300,7 @@ export default function DashboardPage() {
             )
           })()}
 
-          {/* Daily Steps with progress bar (half-width) */}
+          {/* Daily Steps with progress bar */}
           {(dailySteps?.total_steps != null || metrics?.steps != null) ? (() => {
             const totalSteps = dailySteps?.total_steps ?? metrics?.steps ?? 0
             const distKmSteps = dailySteps?.total_distance_meters
@@ -2253,7 +2308,12 @@ export default function DashboardPage() {
               : metrics?.distance_m
               ? (metrics.distance_m / 1000).toFixed(1)
               : null
-            const pct = Math.min(100, (totalSteps / 10000) * 100)
+            const pct = Math.min(100, (totalSteps / stepGoal) * 100)
+            const goalMet = totalSteps >= stepGoal
+            // Count days in last 7 where goal was met
+            const last7 = stepsHistory.slice(-7)
+            const daysMetThisWeek = last7.filter(r => (r.total_steps ?? 0) >= stepGoal).length
+            const goalStr = stepGoal >= 1000 ? `${(stepGoal / 1000).toFixed(stepGoal % 1000 === 0 ? 0 : 1)}k` : String(stepGoal)
             return (
               <button
                 type="button"
@@ -2269,9 +2329,10 @@ export default function DashboardPage() {
                     <p className="text-3xl font-bold text-white mt-1">
                       {totalSteps.toLocaleString()}
                     </p>
-                    {distKmSteps && (
-                      <p className="text-[11px] text-gray-500 mt-0.5">{distKmSteps} km covered</p>
-                    )}
+                    <p className="text-[11px] text-gray-500 mt-0.5">
+                      Goal: {stepGoal.toLocaleString()} steps
+                      {distKmSteps ? ` · ${distKmSteps} km` : ''}
+                    </p>
                   </div>
                   <div className="flex flex-col items-end gap-1">
                     <div className="text-4xl">🦶</div>
@@ -2283,15 +2344,15 @@ export default function DashboardPage() {
                     className="h-2 rounded-full transition-all duration-500"
                     style={{
                       width: `${pct}%`,
-                      backgroundColor: totalSteps >= 10000 ? '#22c55e' : '#f97316',
+                      backgroundColor: goalMet ? '#22c55e' : '#f97316',
                     }}
                   />
                 </div>
                 <div className="flex justify-between text-[11px] text-gray-500 mt-1">
-                  <span>{Math.round(pct)}% of 10k goal</span>
-                  {dailySteps?.active_minutes != null && (
-                    <span>{dailySteps.active_minutes} active min</span>
-                  )}
+                  <span style={{ color: goalMet ? '#22c55e' : undefined }}>
+                    {Math.round(pct)}% of {goalStr} goal{goalMet ? ' ✓' : ''}
+                  </span>
+                  <span>{daysMetThisWeek}/7 days this week</span>
                 </div>
               </button>
             )

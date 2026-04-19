@@ -280,11 +280,18 @@ function calcWeeklySummary(stepsHistory28: { date: string; load: number }[], sle
 
 function friendlyActivityType(raw: string | null): string {
   if (!raw) return 'Other'
-  const match = raw.match(/TYPEKEY['" ]*:\s*['" ]*([A-Z_]+)/)
-  if (match) {
-    return match[1].split('_').map((w: string) => w.charAt(0) + w.slice(1).toLowerCase()).join(' ')
+  // Python dict (all-caps keys): {'TYPEKEY': 'STRENGTH_TRAINING', ...}
+  // Python dict (mixed-case keys): {'TypeKey': 'Strength Training', ...}
+  const pyMatch = raw.match(/'typekey':\s*'([^']+)'/i)
+  if (pyMatch) {
+    return pyMatch[1].split('_').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ')
   }
-  return raw
+  // JSON: {"typeKey":"strength_training"}
+  const jsonMatch = raw.match(/"typeKey"\s*:\s*"([^"]+)"/i)
+  if (jsonMatch) {
+    return jsonMatch[1].split('_').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ')
+  }
+  return raw.replace(/_/g, ' ')
 }
 
 // ─── Info Tooltip ─────────────────────────────────────────────────────────────
