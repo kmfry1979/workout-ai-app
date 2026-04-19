@@ -384,19 +384,61 @@ export default function HealthPage() {
 
         {/* Recovery & Strain Ring */}
         <div className="rounded-3xl p-6 mb-4 flex flex-col items-center" style={{ background: '#111111' }}>
-          <p className="text-xs text-gray-500 uppercase tracking-widest mb-4">Recovery & Strain</p>
-          <RecoveryStrainRing recovery={recovery} strain={strain} />
-          <div className="flex gap-12 mt-4">
-            <div className="text-center">
-              <p className="text-2xl font-bold" style={{ color }}>{recovery != null ? `${Math.round(recovery)}%` : '—'}</p>
-              <p className="text-xs text-gray-500 uppercase tracking-wider mt-0.5">{label}</p>
+          <p className="text-xs text-gray-500 uppercase tracking-widest mb-1">Recovery & Strain</p>
+          <p className="text-[10px] text-gray-600 mb-4">How ready is your body vs how hard you've worked</p>
+
+          {/* Ring legend */}
+          <div className="flex gap-4 mb-3 text-[10px]">
+            <div className="flex items-center gap-1.5">
+              <div className="w-3 h-0.5 rounded-full" style={{ background: color }} />
+              <span className="text-gray-400">Outer ring = Recovery capacity</span>
             </div>
-            <div className="w-px bg-gray-800" />
-            <div className="text-center">
-              <p className="text-2xl font-bold text-blue-400">{strain.toFixed(1)}</p>
-              <p className="text-xs text-gray-500 uppercase tracking-wider mt-0.5">Strain / 21</p>
+            <div className="flex items-center gap-1.5">
+              <div className="w-3 h-1 rounded-full bg-blue-500" />
+              <span className="text-gray-400">Inner arc = Today's strain</span>
             </div>
           </div>
+
+          <RecoveryStrainRing recovery={recovery} strain={strain} />
+
+          {/* Recovery explanation */}
+          <div className="w-full mt-4 rounded-2xl p-4" style={{ background: '#1a1a1a' }}>
+            <div className="flex items-start justify-between mb-1">
+              <div>
+                <span className="text-2xl font-bold" style={{ color }}>{recovery != null ? `${Math.round(recovery)}%` : '—'}</span>
+                <span className="text-xs text-gray-500 ml-2 uppercase tracking-wider">{label}</span>
+              </div>
+              <div className="w-2 h-2 rounded-full mt-2" style={{ background: color }} />
+            </div>
+            <p className="text-[11px] text-gray-400 leading-relaxed">
+              {recovery == null
+                ? 'Not enough data to calculate recovery.'
+                : recovery >= 67
+                ? 'Your body is well recovered. Green light for a hard training session today.'
+                : recovery >= 34
+                ? 'Partially recovered. Moderate training is fine — avoid pushing to your limit.'
+                : 'Low recovery. Your body needs rest more than it needs training today.'}
+            </p>
+          </div>
+
+          {/* Strain explanation */}
+          <div className="w-full mt-2 rounded-2xl p-4" style={{ background: '#1a1a1a' }}>
+            <div className="flex items-start justify-between mb-1">
+              <div>
+                <span className="text-2xl font-bold text-blue-400">{strain.toFixed(1)}</span>
+                <span className="text-xs text-gray-500 ml-2">out of 21</span>
+              </div>
+              <div className="w-2 h-2 rounded-full mt-2 bg-blue-500" />
+            </div>
+            <p className="text-[11px] text-gray-400 leading-relaxed">
+              Strain measures today&apos;s physical load on a 0–21 scale.{' '}
+              {strain < 7 ? 'Light day — minimal physical demand on your body.' :
+               strain < 14 ? 'Moderate load — a solid training day.' :
+               'High load — your body has been pushed hard today.'}
+              {' '}Calculated from your intensity minutes (moderate + vigorous × 2).
+            </p>
+          </div>
+
           {data?.hrvStatus && (
             <p className="mt-3 text-xs text-gray-500">HRV Status: <span className="text-gray-300">{data.hrvStatus}</span></p>
           )}
