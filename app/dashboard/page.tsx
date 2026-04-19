@@ -2135,74 +2135,71 @@ export default function DashboardPage() {
           {syncMessage && <span className="text-gray-400">{syncMessage}</span>}
         </div>
 
-        {/* Recovery / Strain — Whoop-style dual ring */}
-        {(dailyHealth?.body_battery_end != null || metrics?.garmin_body_battery_eod != null || dailyHealth?.stress_avg != null || metrics?.garmin_stress_avg != null) && (() => {
-          const recovery = dailyHealth?.body_battery_end ?? metrics?.garmin_body_battery_eod ?? null
-          const stressVal = dailyHealth?.stress_avg ?? metrics?.garmin_stress_avg ?? null
+        {/* Recovery / Strain — combined ring mirroring Health Engine page */}
+        {(() => {
+          const clampV = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
+          const hrv = dailyHealth?.hrv_avg ?? metrics?.garmin_hrv_nightly_avg ?? null
+          const sleepScore = sleepData?.sleep_score ?? metrics?.garmin_sleep_score ?? null
+          const rhr = metrics?.resting_hr ?? metrics?.resting_heart_rate_bpm ?? null
+          let recScore = 0, recWeight = 0
+          if (hrv != null) { recScore += ((clampV(hrv, 20, 120) - 20) / 100) * 100 * 0.45; recWeight += 0.45 }
+          if (sleepScore != null) { recScore += sleepScore * 0.35; recWeight += 0.35 }
+          if (rhr != null) { recScore += (100 - ((clampV(rhr, 40, 80) - 40) / 40) * 100) * 0.20; recWeight += 0.20 }
+          const recovery = recWeight > 0 ? Math.round(recScore / recWeight) : null
+          const modMin = dailySteps?.moderate_intensity_minutes ?? null
+          const vigMin = dailySteps?.vigorous_intensity_minutes ?? null
+          const activeMin = dailySteps?.active_minutes ?? null
+          const intensityMin = modMin != null || vigMin != null ? (modMin ?? 0) + (vigMin ?? 0) * 2 : (activeMin ?? 0) * 0.6
+          const strain = Math.min(21, 21 * Math.log10(1 + intensityMin) / Math.log10(301))
+          const color = recovery == null ? '#6b7280' : recovery >= 67 ? '#21FF00' : recovery >= 34 ? '#f97316' : '#FF0000'
+          const recLabel = recovery == null ? '—' : recovery >= 67 ? 'High' : recovery >= 34 ? 'Moderate' : 'Low'
+          const cx = 100, cy = 100
+          const rOuter = 76, rInner = 58, swOuter = 9, swInner = 13
+          const circumOuter = 2 * Math.PI * rOuter
+          const circumInner = 2 * Math.PI * rInner
+          const recPct = recovery != null ? clampV(recovery, 0, 100) / 100 : 0
+          const strainPct = clampV(strain, 0, 21) / 21
           const bbStart = dailyHealth?.body_battery_start ?? metrics?.garmin_body_battery_high ?? null
-          const recoveryColor = recovery == null ? '#6b7280' : recovery >= 67 ? '#22c55e' : recovery >= 33 ? '#eab308' : '#ef4444'
-          const recoveryLabel = recovery == null ? '—' : recovery >= 67 ? 'High' : recovery >= 33 ? 'Moderate' : 'Low'
-          // Strain: stress 0–100, low stress = low strain (good)
-          const strainPct = stressVal != null ? Math.min(100, stressVal) : null
-          const strainColor = strainPct == null ? '#6b7280' : strainPct < 26 ? '#22c55e' : strainPct < 51 ? '#eab308' : '#ef4444'
-          const strainLabel = strainPct == null ? '—' : strainPct < 26 ? 'Low' : strainPct < 51 ? 'Moderate' : 'High'
-          const r = 36, circ = 2 * Math.PI * r
+          const bbEnd = dailyHealth?.body_battery_end ?? metrics?.garmin_body_battery_eod ?? null
+          const bbDelta = bbStart != null && bbEnd != null ? bbEnd - bbStart : null
           return (
             <div className="bg-gray-900 rounded-3xl p-5">
               <p className="text-xs text-gray-400 uppercase tracking-wider font-semibold mb-4 text-center">Recovery &amp; Strain</p>
-              <div className="flex items-center justify-around">
-                {/* Recovery ring */}
-                <button type="button" onClick={() => setOpenDetail('bodyBattery')} className="flex flex-col items-center gap-2 hover:opacity-80 transition-opacity">
-                  <div className="relative">
-                    <svg width="90" height="90" viewBox="0 0 90 90">
-                      <circle cx="45" cy="45" r={r} fill="none" stroke="#374151" strokeWidth="7" />
-                      {recovery != null && (
-                        <circle cx="45" cy="45" r={r} fill="none" stroke={recoveryColor} strokeWidth="7"
-                          strokeLinecap="round"
-                          strokeDasharray={`${(recovery / 100) * circ} ${circ}`}
-                          transform="rotate(-90 45 45)"
-                        />
-                      )}
-                      <text x="45" y="41" textAnchor="middle" fill="white" fontSize="20" fontWeight="bold">{recovery ?? '—'}</text>
-                      <text x="45" y="56" textAnchor="middle" fill="#9ca3af" fontSize="8">BODY BAT.</text>
-                    </svg>
-                  </div>
+              <div className="flex flex-col items-center">
+                <svg viewBox="0 0 200 200" className="w-40 h-40">
+                  <circle cx={cx} cy={cy} r={rOuter} fill="none" stroke="#1f2937" strokeWidth={swOuter} />
+                  <circle cx={cx} cy={cy} r={rInner} fill="none" stroke="#1f2937" strokeWidth={swInner} />
+                  <circle cx={cx} cy={cy} r={rOuter} fill="none" stroke={color} strokeWidth={swOuter} strokeLinecap="round"
+                    strokeDasharray={`${recPct * circumOuter} ${circumOuter}`} transform={`rotate(-90 ${cx} ${cy})`} />
+                  <circle cx={cx} cy={cy} r={rInner} fill="none" stroke="#3b82f6" strokeWidth={swInner} strokeLinecap="round"
+                    strokeDasharray={`${strainPct * circumInner} ${circumInner}`} transform={`rotate(-90 ${cx} ${cy})`} />
+                  <text x={cx} y={cy - 8} textAnchor="middle" fill="white" fontSize="30" fontWeight="bold" fontFamily="system-ui,sans-serif">
+                    {recovery ?? '—'}
+                  </text>
+                  <text x={cx} y={cy + 10} textAnchor="middle" fill="#9ca3af" fontSize="9" fontFamily="system-ui,sans-serif" letterSpacing="2">
+                    RECOVERY
+                  </text>
+                  <text x={cx} y={cy + 24} textAnchor="middle" fill="#3b82f6" fontSize="9" fontFamily="system-ui,sans-serif" letterSpacing="1">
+                    {strain.toFixed(1)} STRAIN
+                  </text>
+                </svg>
+                <div className="flex gap-10 mt-3">
                   <div className="text-center">
-                    <p className="text-[10px] text-gray-400 uppercase tracking-wider">Recovery</p>
-                    <p className="text-sm font-bold mt-0.5" style={{ color: recoveryColor }}>{recoveryLabel}</p>
-                    {bbStart != null && recovery != null && (
-                      <p className="text-[10px] text-gray-500 mt-0.5">{bbStart > recovery ? `↓${bbStart - recovery} drained` : `↑${recovery - bbStart} gained`}</p>
+                    <p className="text-lg font-bold" style={{ color }}>{recovery != null ? `${recovery}%` : '—'}</p>
+                    <p className="text-[10px] text-gray-500 uppercase tracking-wider">{recLabel}</p>
+                    {bbDelta != null && (
+                      <p className="text-[10px] text-gray-500 mt-0.5">{bbDelta >= 0 ? `+${bbDelta} gained` : `${bbDelta} drained`}</p>
                     )}
                   </div>
-                </button>
-
-                {/* Divider */}
-                <div className="w-px h-20 bg-gray-700" />
-
-                {/* Strain ring */}
-                <button type="button" onClick={() => setOpenDetail('stress')} className="flex flex-col items-center gap-2 hover:opacity-80 transition-opacity">
-                  <div className="relative">
-                    <svg width="90" height="90" viewBox="0 0 90 90">
-                      <circle cx="45" cy="45" r={r} fill="none" stroke="#374151" strokeWidth="7" />
-                      {strainPct != null && (
-                        <circle cx="45" cy="45" r={r} fill="none" stroke={strainColor} strokeWidth="7"
-                          strokeLinecap="round"
-                          strokeDasharray={`${(strainPct / 100) * circ} ${circ}`}
-                          transform="rotate(-90 45 45)"
-                        />
-                      )}
-                      <text x="45" y="41" textAnchor="middle" fill="white" fontSize="20" fontWeight="bold">{stressVal ?? '—'}</text>
-                      <text x="45" y="56" textAnchor="middle" fill="#9ca3af" fontSize="8">STRESS</text>
-                    </svg>
-                  </div>
+                  <div className="w-px bg-gray-700" />
                   <div className="text-center">
-                    <p className="text-[10px] text-gray-400 uppercase tracking-wider">Strain</p>
-                    <p className="text-sm font-bold mt-0.5" style={{ color: strainColor }}>{strainLabel}</p>
-                    {metrics?.garmin_hrv_status && (
-                      <p className="text-[10px] text-gray-500 mt-0.5">HRV {metrics.garmin_hrv_status}</p>
+                    <p className="text-lg font-bold text-blue-400">{strain.toFixed(1)}</p>
+                    <p className="text-[10px] text-gray-500 uppercase tracking-wider">Strain / 21</p>
+                    {(metrics?.garmin_hrv_status ?? dailyHealth?.hrv_status) && (
+                      <p className="text-[10px] text-gray-500 mt-0.5">HRV {metrics?.garmin_hrv_status ?? dailyHealth?.hrv_status}</p>
                     )}
                   </div>
-                </button>
+                </div>
               </div>
             </div>
           )
