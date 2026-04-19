@@ -871,6 +871,12 @@ def extract_daily_steps_data(
     sedentary_sec = as_int(pick_first(summary, ["sedentarySeconds"])) or 0
     sedentary_min = sedentary_sec // 60 if sedentary_sec else 0
 
+    # Garmin intensity minutes: moderate 1× + vigorous 2× toward the 150-min/week goal.
+    # These are weekly rolling totals from the summary endpoint.
+    moderate_intensity_min = as_int(pick_first(summary, ["moderateIntensityMinutes"]))
+    vigorous_intensity_min = as_int(pick_first(summary, ["vigorousIntensityMinutes"]))
+    intensity_minutes_goal = as_int(pick_first(summary, ["intensityMinutesGoal"]))
+
     hourly_steps = buckets if buckets else None
 
     return {
@@ -879,6 +885,9 @@ def extract_daily_steps_data(
         "total_calories": total_calories or 0,
         "active_minutes": active_min,
         "sedentary_minutes": sedentary_min,
+        "moderate_intensity_minutes": moderate_intensity_min,
+        "vigorous_intensity_minutes": vigorous_intensity_min,
+        "intensity_minutes_goal": intensity_minutes_goal,
         "hourly_steps": hourly_steps,
     }
 
