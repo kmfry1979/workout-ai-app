@@ -1403,8 +1403,14 @@ export default function DashboardPage() {
           for (const r of stepsHistory) {
             byDate.set(r.step_date, r.total_steps ?? 0)
           }
+          const localDateStr = (d: Date): string => {
+            const y = d.getFullYear()
+            const m = String(d.getMonth() + 1).padStart(2, '0')
+            const day = String(d.getDate()).padStart(2, '0')
+            return `${y}-${m}-${day}`
+          }
           // Ensure today's value is reflected (history query might not include today yet)
-          const todayStr = new Date().toISOString().split('T')[0]
+          const todayStr = localDateStr(new Date())
           if (!byDate.has(todayStr)) byDate.set(todayStr, totalSteps)
 
           // ---- Day view: intraday hourly sparkline + cumulative line ----
@@ -1467,7 +1473,7 @@ export default function DashboardPage() {
             for (let i = 0; i < 7; i++) {
               const d = new Date(monday)
               d.setDate(monday.getDate() + i)
-              const key = d.toISOString().split('T')[0]
+              const key = localDateStr(d)
               days.push({
                 label: ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][i],
                 value: byDate.get(key) ?? 0,
@@ -1526,7 +1532,7 @@ export default function DashboardPage() {
               for (let i = 0; i < 7; i++) {
                 const d = new Date(weekStart)
                 d.setDate(d.getDate() + i)
-                const key = d.toISOString().split('T')[0]
+                const key = localDateStr(d)
                 total += byDate.get(key) ?? 0
                 if (key === todayStr) isCurrent = true
               }
@@ -1586,7 +1592,7 @@ export default function DashboardPage() {
               const last = new Date(y, mo + 1, 0)
               let total = 0
               for (let day = 1; day <= last.getDate(); day++) {
-                const key = new Date(y, mo, day).toISOString().split('T')[0]
+                const key = localDateStr(new Date(y, mo, day))
                 total += byDate.get(key) ?? 0
               }
               months.push({
