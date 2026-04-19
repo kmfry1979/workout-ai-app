@@ -81,7 +81,7 @@ function calcStrain(modMin: number | null, vigMin: number | null, activeMin: num
 function recoveryColor(score: number | null): string {
   if (score == null) return '#4b5563'
   if (score >= 67) return '#21FF00'
-  if (score >= 34) return '#FFFF00'
+  if (score >= 34) return '#f97316'
   return '#FF0000'
 }
 
@@ -386,18 +386,6 @@ export default function HealthPage() {
         <div className="rounded-3xl p-6 mb-4 flex flex-col items-center" style={{ background: '#111111' }}>
           <p className="text-xs text-gray-500 uppercase tracking-widest mb-1">Recovery & Strain</p>
           <p className="text-[10px] text-gray-600 mb-4">How ready is your body vs how hard you've worked</p>
-
-          {/* Ring legend */}
-          <div className="flex gap-4 mb-3 text-[10px]">
-            <div className="flex items-center gap-1.5">
-              <div className="w-3 h-0.5 rounded-full" style={{ background: color }} />
-              <span className="text-gray-400">Outer ring = Recovery capacity</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <div className="w-3 h-1 rounded-full bg-blue-500" />
-              <span className="text-gray-400">Inner arc = Today's strain</span>
-            </div>
-          </div>
 
           <RecoveryStrainRing recovery={recovery} strain={strain} />
 
