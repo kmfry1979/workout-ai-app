@@ -673,23 +673,7 @@ export default function DashboardPage() {
       .maybeSingle()
 
     setDailySteps(steps as DailySteps | null)
-    // Parse hourly steps (may be array of {hour,steps} or object {hour:steps})
-    if (steps && (steps as { hourly_steps?: unknown }).hourly_steps) {
-      const raw = (steps as { hourly_steps: unknown }).hourly_steps
-      const map: Record<string, number> = {}
-      if (Array.isArray(raw)) {
-        for (const r of raw as { hour?: number | string; steps?: number; total?: number }[]) {
-          if (r && r.hour != null) map[String(r.hour)] = Number(r.steps ?? r.total ?? 0)
-        }
-      } else if (raw && typeof raw === 'object') {
-        for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-          map[k] = Number(v) || 0
-        }
-      }
-      setHourlySteps(map)
-    } else {
-      setHourlySteps(null)
-    }
+    setHourlySteps(null)
 
     // 365-day step history for the Steps modal (Day/Week/Month/Year tabs).
     // Pull from both garmin_daily_steps AND the legacy daily_health_metrics.steps
