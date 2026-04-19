@@ -3,6 +3,17 @@ import { NextRequest, NextResponse } from 'next/server'
 const GROQ_API_KEY = process.env.GROQ_API_KEY
 const GROQ_MODEL = process.env.GROQ_MODEL ?? 'llama-3.3-70b-versatile'
 
+type HealthEngineRequest = {
+  mode: 'health-engine'
+  recovery: number | null
+  strain: number | null
+  hrv: number | null
+  sleepScore: number | null
+  respiration: number | null
+  respirationBaseline: number | null
+  hour: number
+}
+
 type SnapshotRequest = {
   metrics: {
     hrv: number | null
@@ -171,19 +182,36 @@ One sentence risk or focus area.
 Be direct, warm, and non-preachy. Reference specific numbers. Never prescribe a hard workout later than the current time of day. Total response under 240 words.`
 }
 
+function buildHealthEnginePrompt(body: HealthEngineRequest): string {
+  const { recovery, strain, hrv, sleepScore, respiration, respirationBaseline, hour } = body
+  const timeLabel = hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : 'evening'
+  const lines = [
+    recovery != null ? `Recovery score: ${Math.round(recovery)}/100` : null,
+    strain != null ? `Strain score: ${strain.toFixed(1)}/21` : null,
+    hrv != null ? `HRV: ${hrv}ms` : null,
+    sleepScore != null ? `Sleep score: ${sleepScore}/100` : null,
+    respiration != null ? `Respiration: ${respiration} brpm${respirationBaseline ? ` (baseline ${respirationBaseline.toFixed(1)})` : ''}` : null,
+  ].filter(Boolean).join('\n')
+
+  return `You are a world-class human performance coach. It is the ${timeLabel}. Give EXACTLY 2 sentences as a coach speaking directly to the athlete. First sentence: describe their current recovery/readiness state with a specific number. Second sentence: one concrete, specific recommendation (training or recovery). Be direct, warm, and human. No bullet points, no headers, no labels.\n\nMetrics:\n${lines}`
+}
+
 export async function POST(req: NextRequest) {
   if (!GROQ_API_KEY) {
     return NextResponse.json({ error: 'GROQ_API_KEY not configured' }, { status: 503 })
   }
 
-  let body: SnapshotRequest
+  let rawBody: Record<string, unknown>
   try {
-    body = await req.json()
+    rawBody = await req.json()
   } catch {
     return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
   }
 
-  const systemPrompt = buildPrompt(body)
+  const isHealthEngine = rawBody.mode === 'health-engine'
+  const systemPrompt = isHealthEngine
+    ? buildHealthEnginePrompt(rawBody as unknown as HealthEngineRequest)
+    : buildPrompt(rawBody as unknown as SnapshotRequest)
 
   let groqRes: Response
   try {
