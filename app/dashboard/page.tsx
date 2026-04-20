@@ -540,7 +540,7 @@ export default function DashboardPage() {
     | 'hrv' | 'spo2' | 'intensity' | 'readiness' | 'hydration'
   const [openDetail, setOpenDetail] = useState<DetailKey | null>(null)
   const closeDetail = () => setOpenDetail(null)
-  const [openTile, setOpenTile] = useState<'reserve' | 'vitals' | null>(null)
+  const [openTile, setOpenTile] = useState<'reserve' | 'vitals' | 'battery' | null>(null)
   const [stepsHistory, setStepsHistory] = useState<{ step_date: string; total_steps: number | null }[]>([])
   const [hourlySteps, setHourlySteps] = useState<Record<string, number> | null>(null)
   const [stepsTab, setStepsTab] = useState<'day' | 'week' | 'month' | 'year'>('day')
@@ -2141,12 +2141,8 @@ export default function DashboardPage() {
           {syncMessage && <span className="text-gray-400">{syncMessage}</span>}
         </div>
 
-        {/* Dual metric tiles — half width each */}
-        <div className="flex items-center justify-between px-1">
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest">Metrics</p>
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest">Vitals</p>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
+        {/* Three metric tiles */}
+        <div className="grid grid-cols-3 gap-2">
           {/* Tile 1: Power Reserve + Load */}
           {(() => {
             const clampV = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
@@ -2180,13 +2176,13 @@ export default function DashboardPage() {
             return (
               <>
                 <button type="button" onClick={() => setOpenTile('reserve')}
-                  className="rounded-3xl p-4 flex flex-col items-center w-full text-left transition-opacity hover:opacity-90 active:opacity-75"
+                  className="rounded-2xl p-3 flex flex-col items-center w-full transition-opacity hover:opacity-90 active:opacity-75"
                   style={{ background: 'linear-gradient(160deg,#0f1629 0%,#0a0f1e 100%)', border: '1px solid #1e293b' }}>
-                  <div className="flex items-center justify-center gap-1.5 mb-3">
-                    <p className="text-[11px] font-bold tracking-[0.2em]" style={{ color: reserveColor }}>POWER RESERVE</p>
-                    <span className="text-[10px] text-slate-600 cursor-pointer" title="Tap for details">ⓘ</span>
+                  <div className="flex items-center justify-center gap-1 mb-2">
+                    <p className="text-[9px] font-bold tracking-[0.15em]" style={{ color: reserveColor }}>READINESS INDEX</p>
+                    <span className="text-[9px] text-slate-600">ⓘ</span>
                   </div>
-                  <svg viewBox="0 0 180 180" className="w-36 h-36">
+                  <svg viewBox="0 0 180 180" className="w-28 h-28">
                     <defs>
                       <filter id="glowReserve" x="-50%" y="-50%" width="200%" height="200%">
                         <feGaussianBlur stdDeviation="3.5" result="blur" />
@@ -2205,21 +2201,21 @@ export default function DashboardPage() {
                     <circle cx={cx} cy={cy} r={rInner} fill="none" stroke={loadColor} strokeWidth={swInner} strokeLinecap="round"
                       strokeDasharray={`${loadPct * circumInner} ${circumInner}`} transform={`rotate(-90 ${cx} ${cy})`}
                       filter="url(#glowLoad)" />
-                    <text x={cx} y={cy - 6} textAnchor="middle" fill="white" fontSize="30" fontWeight="800" fontFamily="system-ui,sans-serif">
+                    <text x={cx} y={cy - 4} textAnchor="middle" fill="white" fontSize="26" fontWeight="800" fontFamily="system-ui,sans-serif">
                       {reserve ?? '—'}
                     </text>
-                    <text x={cx} y={cy + 13} textAnchor="middle" fontSize="9" fontFamily="system-ui,sans-serif" letterSpacing="1.5" fill="#94a3b8">RESERVE</text>
-                    <text x={cx} y={cy + 26} textAnchor="middle" fontSize="9" fontFamily="system-ui,sans-serif" letterSpacing="1.5" fill={loadColor}>{load.toFixed(1)} LOAD</text>
+                    <text x={cx} y={cy + 11} textAnchor="middle" fontSize="7.5" fontFamily="system-ui,sans-serif" letterSpacing="1" fill="#94a3b8">RESERVE</text>
+                    <text x={cx} y={cy + 23} textAnchor="middle" fontSize="7.5" fontFamily="system-ui,sans-serif" letterSpacing="1" fill={loadColor}>{load.toFixed(1)} LOAD</text>
                   </svg>
-                  <div className="flex gap-4 mt-2 w-full justify-center">
+                  <div className="flex gap-3 mt-1.5 w-full justify-center">
                     <div className="text-center">
-                      <p className="text-base font-bold tabular-nums" style={{ color: reserveColor }}>{reserve ?? '—'}</p>
-                      <p className="text-[10px] uppercase tracking-wider mt-0.5" style={{ color: '#475569' }}>{reserveLabel}</p>
+                      <p className="text-sm font-extrabold tabular-nums" style={{ color: reserveColor }}>{reserve ?? '—'}</p>
+                      <p className="text-[9px] font-bold uppercase tracking-wide mt-0.5" style={{ color: '#64748b' }}>Power Reserve</p>
                     </div>
                     <div className="w-px" style={{ background: '#1e293b' }} />
                     <div className="text-center">
-                      <p className="text-base font-bold tabular-nums" style={{ color: loadColor }}>{load.toFixed(1)}</p>
-                      <p className="text-[10px] uppercase tracking-wider mt-0.5" style={{ color: '#475569' }}>Load / 21</p>
+                      <p className="text-sm font-extrabold tabular-nums" style={{ color: loadColor }}>{load.toFixed(1)}</p>
+                      <p className="text-[9px] font-bold uppercase tracking-wide mt-0.5" style={{ color: '#64748b' }}>Load / 21</p>
                     </div>
                   </div>
                 </button>
@@ -2295,13 +2291,13 @@ export default function DashboardPage() {
             return (
               <>
                 <button type="button" onClick={() => setOpenTile('vitals')}
-                  className="rounded-3xl p-4 flex flex-col items-center w-full text-left transition-opacity hover:opacity-90 active:opacity-75"
+                  className="rounded-2xl p-3 flex flex-col items-center w-full transition-opacity hover:opacity-90 active:opacity-75"
                   style={{ background: 'linear-gradient(160deg,#0f1629 0%,#0a0f1e 100%)', border: '1px solid #1e293b' }}>
-                  <div className="flex items-center justify-center gap-1.5 mb-3">
-                    <p className="text-[11px] font-bold tracking-[0.2em]" style={{ color: '#22d3ee' }}>VITALS</p>
-                    <span className="text-[10px] text-slate-600 cursor-pointer" title="Tap for details">ⓘ</span>
+                  <div className="flex items-center justify-center gap-1 mb-2">
+                    <p className="text-[9px] font-bold tracking-[0.15em]" style={{ color: '#22d3ee' }}>VITALS</p>
+                    <span className="text-[9px] text-slate-600">ⓘ</span>
                   </div>
-                  <svg viewBox="0 0 180 180" className="w-36 h-36">
+                  <svg viewBox="0 0 180 180" className="w-28 h-28">
                     <defs>
                       <filter id="glowCyan" x="-50%" y="-50%" width="200%" height="200%">
                         <feGaussianBlur stdDeviation="3.5" result="blur" />
@@ -2320,31 +2316,22 @@ export default function DashboardPage() {
                     <circle cx={cx} cy={cy} r={rInner} fill="none" stroke={sleepColor} strokeWidth={swInner} strokeLinecap="round"
                       strokeDasharray={`${sleepPct * circumInner} ${circumInner}`} transform={`rotate(-90 ${cx} ${cy})`}
                       filter="url(#glowIndigo)" />
-                    <text x={cx} y={cy - 6} textAnchor="middle" fill="white" fontSize="30" fontWeight="800" fontFamily="system-ui,sans-serif">
+                    <text x={cx} y={cy - 4} textAnchor="middle" fill="white" fontSize="26" fontWeight="800" fontFamily="system-ui,sans-serif">
                       {bb ?? '—'}
                     </text>
-                    <text x={cx} y={cy + 13} textAnchor="middle" fontSize="9" fontFamily="system-ui,sans-serif" letterSpacing="1.5" fill="#94a3b8">BATTERY</text>
-                    <text x={cx} y={cy + 26} textAnchor="middle" fontSize="9" fontFamily="system-ui,sans-serif" letterSpacing="1.5" fill={sleepColor}>{sleep ?? '—'} SLEEP</text>
+                    <text x={cx} y={cy + 11} textAnchor="middle" fontSize="7.5" fontFamily="system-ui,sans-serif" letterSpacing="1" fill="#94a3b8">BATTERY</text>
+                    <text x={cx} y={cy + 23} textAnchor="middle" fontSize="7.5" fontFamily="system-ui,sans-serif" letterSpacing="1" fill={sleepColor}>{sleep ?? '—'} SLEEP</text>
                   </svg>
-                  <div className="flex gap-4 mt-2 w-full justify-center">
+                  <div className="flex gap-3 mt-1.5 w-full justify-center">
                     <div className="text-center">
-                      <p className="text-base font-bold tabular-nums" style={{ color: bbColor }}>{bb ?? '—'}</p>
-                      <p className="text-[10px] uppercase tracking-wider mt-0.5" style={{ color: '#475569' }}>{bbLabel}</p>
+                      <p className="text-sm font-extrabold tabular-nums" style={{ color: bbColor }}>{bb ?? '—'}</p>
+                      <p className="text-[9px] font-bold uppercase tracking-wide mt-0.5" style={{ color: '#64748b' }}>{bbLabel}</p>
                     </div>
                     <div className="w-px" style={{ background: '#1e293b' }} />
                     <div className="text-center">
-                      <p className="text-base font-bold tabular-nums" style={{ color: sleepColor }}>{sleep ?? '—'}</p>
-                      <p className="text-[10px] uppercase tracking-wider mt-0.5" style={{ color: '#475569' }}>Sleep</p>
+                      <p className="text-sm font-extrabold tabular-nums" style={{ color: sleepColor }}>{sleep ?? '—'}</p>
+                      <p className="text-[9px] font-bold uppercase tracking-wide mt-0.5" style={{ color: '#64748b' }}>Sleep</p>
                     </div>
-                    {stress != null && (
-                      <>
-                        <div className="w-px" style={{ background: '#1e293b' }} />
-                        <div className="text-center">
-                          <p className="text-base font-bold tabular-nums text-slate-400">{Math.round(stress)}</p>
-                          <p className="text-[10px] uppercase tracking-wider mt-0.5" style={{ color: '#475569' }}>Stress</p>
-                        </div>
-                      </>
-                    )}
                   </div>
                 </button>
 
@@ -2384,6 +2371,118 @@ export default function DashboardPage() {
                           <p className="text-gray-400 text-xs leading-relaxed">Measured via HRV variability throughout the day. Above 50 indicates high physiological stress — this will accelerate Battery drain even without exercise.</p>
                         </div>
                       )}
+                    </div>
+                  </div>
+                </DetailModal>
+              </>
+            )
+          })()}
+
+          {/* Tile 3: Bio Battery */}
+          {(() => {
+            const clampV = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
+            const lerpHex = (c1: string, c2: string, t: number) => {
+              const r1 = parseInt(c1.slice(1,3),16), g1 = parseInt(c1.slice(3,5),16), b1 = parseInt(c1.slice(5,7),16)
+              const r2 = parseInt(c2.slice(1,3),16), g2 = parseInt(c2.slice(3,5),16), b2 = parseInt(c2.slice(5,7),16)
+              return `#${Math.round(r1+(r2-r1)*t).toString(16).padStart(2,'0')}${Math.round(g1+(g2-g1)*t).toString(16).padStart(2,'0')}${Math.round(b1+(b2-b1)*t).toString(16).padStart(2,'0')}`
+            }
+            const bb = dailyHealth?.body_battery_end ?? metrics?.garmin_body_battery_eod ?? null
+            const bbStart = dailyHealth?.body_battery_start ?? metrics?.garmin_body_battery_high ?? null
+            const bbPeak = dailyHealth?.body_battery_peak ?? metrics?.garmin_body_battery_high ?? null
+            const stress = dailyHealth?.stress_avg ?? metrics?.garmin_stress_avg ?? null
+            const pct = bb != null ? clampV(bb, 0, 100) / 100 : 0
+            // Green (#22c55e) full → Red (#ef4444) depleted
+            const fillColor = bb != null ? lerpHex('#22c55e', '#ef4444', 1 - pct) : '#374151'
+            const bbLabel = bb == null ? '—' : bb >= 70 ? 'Charged' : bb >= 40 ? 'Draining' : 'Depleted'
+            // Battery SVG dimensions
+            const bW = 36, bH = 68, bX = 22, bY = 16, bR = 6
+            const nubW = 16, nubH = 7
+            const fillMaxH = bH - 8
+            const fillH = Math.round(fillMaxH * pct)
+            const fillY = bY + (bH - fillH) - 4
+            return (
+              <>
+                <button type="button" onClick={() => setOpenTile('battery')}
+                  className="rounded-2xl p-3 flex flex-col items-center w-full transition-opacity hover:opacity-90 active:opacity-75"
+                  style={{ background: 'linear-gradient(160deg,#0f1629 0%,#0a0f1e 100%)', border: '1px solid #1e293b' }}>
+                  <div className="flex items-center justify-center gap-1 mb-2">
+                    <p className="text-[9px] font-bold tracking-[0.15em]" style={{ color: fillColor }}>BIO BATTERY</p>
+                    <span className="text-[9px] text-slate-600">ⓘ</span>
+                  </div>
+                  <svg viewBox="0 0 80 100" className="w-16 h-20">
+                    <defs>
+                      <filter id="glowBattery" x="-50%" y="-50%" width="200%" height="200%">
+                        <feGaussianBlur stdDeviation="2.5" result="blur" />
+                        <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+                      </filter>
+                      <linearGradient id="battGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#22c55e" />
+                        <stop offset="50%" stopColor="#f97316" />
+                        <stop offset="100%" stopColor="#ef4444" />
+                      </linearGradient>
+                      <clipPath id="battFill">
+                        <rect x={bX + 3} y={fillY} width={bW - 6} height={fillH} rx={4} />
+                      </clipPath>
+                    </defs>
+                    {/* Nub */}
+                    <rect x={(80 - nubW) / 2} y={bY - nubH} width={nubW} height={nubH + 2} rx={3} fill="#1e293b" />
+                    {/* Body outline */}
+                    <rect x={bX} y={bY} width={bW} height={bH} rx={bR} fill="#0f172a" stroke="#1e293b" strokeWidth={2.5} />
+                    {/* Gradient fill rectangle clipped to fill level */}
+                    <rect x={bX + 3} y={bY + 4} width={bW - 6} height={bH - 8} rx={4}
+                      fill="url(#battGrad)" clipPath="url(#battFill)"
+                      filter={bb != null && bb > 20 ? 'url(#glowBattery)' : undefined} />
+                    {/* Percentage text inside battery */}
+                    <text x={bX + bW / 2} y={bY + bH / 2 + 5} textAnchor="middle" fill="white"
+                      fontSize="15" fontWeight="800" fontFamily="system-ui,sans-serif">{bb ?? '—'}</text>
+                  </svg>
+                  <div className="mt-1.5 text-center">
+                    <p className="text-sm font-extrabold tabular-nums" style={{ color: fillColor }}>{bb ?? '—'}</p>
+                    <p className="text-[9px] font-bold uppercase tracking-wide mt-0.5" style={{ color: '#64748b' }}>{bbLabel}</p>
+                  </div>
+                </button>
+
+                <DetailModal open={openTile === 'battery'} onClose={() => setOpenTile(null)}
+                  title="Bio Battery" subtitle={bbLabel} icon="🔋"
+                  gradient="from-green-950/50 via-gray-900 to-gray-950" border="border-green-800/30">
+                  <div className="space-y-4 text-sm">
+                    <p className="text-gray-300 leading-relaxed">
+                      Bio Battery is Garmin&apos;s estimate of your available energy reserve — like a phone battery for your body. It charges overnight while you sleep and depletes through activity, stress, and effort throughout the day.
+                    </p>
+                    <div className="bg-gray-800/60 rounded-2xl p-4 space-y-3">
+                      <p className="text-xs text-gray-400 uppercase tracking-wider font-semibold">Today&apos;s Readings</p>
+                      <div className="grid grid-cols-2 gap-3">
+                        {[
+                          { label: 'End of Day', value: bb, unit: '' },
+                          { label: 'Morning Start', value: bbStart, unit: '' },
+                          { label: 'Peak Today', value: bbPeak, unit: '' },
+                          { label: 'Avg Stress', value: stress != null ? Math.round(stress) : null, unit: '/100' },
+                        ].map(({ label, value, unit }) => (
+                          <div key={label} className="bg-gray-700/40 rounded-xl p-3 text-center">
+                            <p className="text-lg font-bold text-white tabular-nums">{value ?? '—'}{value != null ? unit : ''}</p>
+                            <p className="text-[10px] text-gray-500 mt-0.5">{label}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="bg-gray-800/60 rounded-2xl p-4 space-y-2">
+                      <p className="text-xs text-gray-400 uppercase tracking-wider font-semibold">Battery Levels</p>
+                      <div className="space-y-2 text-xs">
+                        {[
+                          { range: '70–100', label: 'Charged', desc: 'Full capacity — ready for intense training', color: '#22c55e' },
+                          { range: '40–69', label: 'Draining', desc: 'Moderate sessions fine, avoid long efforts', color: '#f97316' },
+                          { range: '0–39', label: 'Depleted', desc: 'Rest or light movement only — recharge needed', color: '#ef4444' },
+                        ].map(({ range, label, desc, color }) => (
+                          <div key={label} className="flex items-start gap-2">
+                            <span className="font-bold w-14 shrink-0 tabular-nums" style={{ color }}>{range}</span>
+                            <div><p className="font-medium text-white">{label}</p><p className="text-gray-500">{desc}</p></div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="bg-gray-800/60 rounded-2xl p-3">
+                      <p className="text-xs text-gray-400 mb-1">How to recharge faster</p>
+                      <p className="text-gray-300 text-xs leading-relaxed">Quality sleep is the #1 charger. Reducing stress, avoiding late meals, and limiting alcohol all accelerate overnight recharge rate. A battery that doesn&apos;t recover overnight despite sleep suggests high HRV suppression.</p>
                     </div>
                   </div>
                 </DetailModal>
