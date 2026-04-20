@@ -548,6 +548,9 @@ export default function DashboardPage() {
   const [histBB, setHistBB] = useState<{ metric_date: string; body_battery_peak: number | null; body_battery_low: number | null }[]>([])
   const [bbChartTab, setBbChartTab] = useState<'1day' | '7days' | '4weeks'>('1day')
   const [hoveredBBIdx, setHoveredBBIdx] = useState<number | null>(null)
+  const [bbChartOffset, setBbChartOffset] = useState(0)
+  const [navIntradayBB, setNavIntradayBB] = useState<{ recorded_at: string; level: number }[]>([])
+  const [navIntradayLoading, setNavIntradayLoading] = useState(false)
   const [userId, setUserId] = useState<string | null>(null)
   const [stepsHistory, setStepsHistory] = useState<{ step_date: string; total_steps: number | null }[]>([])
   const [hourlySteps, setHourlySteps] = useState<Record<string, number> | null>(null)
@@ -587,19 +590,30 @@ export default function DashboardPage() {
     steps: (number | null)[]
   }>({ hrv: [], sleep: [], bodyBattery: [], restingHr: [], stress: [], steps: [] })
 
-  const loadIntradayBB = async (userId: string) => {
+  const loadIntradayForDate = async (uid: string, date: string) => {
+    setNavIntradayLoading(true)
+    const { data } = await supabase
+      .from('garmin_intraday_body_battery')
+      .select('recorded_at, level')
+      .eq('user_id', uid).eq('metric_date', date)
+      .order('recorded_at', { ascending: true })
+    setNavIntradayBB((data ?? []) as { recorded_at: string; level: number }[])
+    setNavIntradayLoading(false)
+  }
+
+  const loadIntradayBB = async (uid: string) => {
     if (intradayLoading || intradayBB.length > 0) return
     setIntradayLoading(true)
     const today = new Date().toISOString().split('T')[0]
-    const ago28 = new Date(Date.now() - 27 * 86400000).toISOString().split('T')[0]
+    const ago56 = new Date(Date.now() - 55 * 86400000).toISOString().split('T')[0]
     const [intradayRes, histRes] = await Promise.all([
       supabase.from('garmin_intraday_body_battery')
         .select('recorded_at, level')
-        .eq('user_id', userId).eq('metric_date', today)
+        .eq('user_id', uid).eq('metric_date', today)
         .order('recorded_at', { ascending: true }),
       supabase.from('garmin_daily_health_metrics')
         .select('metric_date, body_battery_peak, body_battery_low')
-        .eq('user_id', userId).gte('metric_date', ago28)
+        .eq('user_id', uid).gte('metric_date', ago56)
         .order('metric_date', { ascending: true }),
     ])
     setIntradayBB((intradayRes.data ?? []) as { recorded_at: string; level: number }[])
@@ -2549,17 +2563,78 @@ export default function DashboardPage() {
                         {/* ── Chart with tabs ── */}
                         <div className="bg-gray-800/50 rounded-2xl p-4">
                           {/* Tab bar */}
-                          <div className="flex items-center gap-1 mb-4 bg-gray-900/60 rounded-xl p-1">
+                          <div className="flex items-center gap-1 mb-3 bg-gray-900/60 rounded-xl p-1">
                             {(['1day', '7days', '4weeks'] as const).map(tab => (
                               <button key={tab} type="button"
-                                onClick={() => setBbChartTab(tab)}
+                                onClick={() => { setBbChartTab(tab); setBbChartOffset(0); setNavIntradayBB([]) }}
                                 className={`flex-1 text-xs py-1.5 rounded-lg font-semibold transition-colors ${bbChartTab === tab ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-gray-300'}`}>
                                 {tab === '1day' ? '1 Day' : tab === '7days' ? '7 Days' : '4 Weeks'}
                               </button>
                             ))}
                           </div>
 
-                          {intradayLoading && (
+                          {/* Navigation row */}
+                          {(() => {
+                            const periodDays = bbChartTab === '1day' ? 1 : bbChartTab === '7days' ? 7 : 28
+                            const canBack = bbChartTab === '1day'
+                              ? bbChartOffset < 55
+                              : (bbChartOffset + 1) * periodDays < histBB.length
+                            const canFwd = bbChartOffset > 0
+                            // Date range label
+                            let rangeLabel = ''
+                            const fmt = (d: string) => new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+                            if (bbChartTab === '1day') {
+                              const d = new Date(Date.now() - bbChartOffset * 86400000)
+                              rangeLabel = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+                            } else {
+                              const end = histBB.length - bbChartOffset * periodDays
+                              const start = Math.max(0, end - periodDays)
+                              const sl = histBB.slice(start, end)
+                              if (sl.length) rangeLabel = `${fmt(sl[0].metric_date)} – ${fmt(sl[sl.length - 1].metric_date)}`
+                            }
+                            const goBack = () => {
+                              const n = bbChartOffset + 1
+                              setBbChartOffset(n)
+                              setHoveredBBIdx(null)
+                              if (bbChartTab === '1day' && userId) {
+                                const date = new Date(Date.now() - n * 86400000).toISOString().split('T')[0]
+                                loadIntradayForDate(userId, date)
+                              }
+                            }
+                            const goFwd = () => {
+                              const n = Math.max(0, bbChartOffset - 1)
+                              setBbChartOffset(n)
+                              setHoveredBBIdx(null)
+                              if (bbChartTab === '1day') {
+                                if (n === 0) setNavIntradayBB([])
+                                else if (userId) {
+                                  const date = new Date(Date.now() - n * 86400000).toISOString().split('T')[0]
+                                  loadIntradayForDate(userId, date)
+                                }
+                              }
+                            }
+                            return (
+                              <div className="flex items-center gap-2 mb-3">
+                                <button type="button" onClick={goBack} disabled={!canBack}
+                                  className="w-7 h-7 rounded-full flex items-center justify-center bg-gray-700/60 disabled:opacity-30 hover:bg-gray-600 transition-colors">
+                                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} className="w-3.5 h-3.5 text-gray-300">
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+                                  </svg>
+                                </button>
+                                <button type="button" onClick={goFwd} disabled={!canFwd}
+                                  className="w-7 h-7 rounded-full flex items-center justify-center bg-gray-700/60 disabled:opacity-30 hover:bg-gray-600 transition-colors">
+                                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} className="w-3.5 h-3.5 text-gray-300">
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                                  </svg>
+                                </button>
+                                {rangeLabel && (
+                                  <span className="text-xs text-gray-400 font-medium">{rangeLabel}</span>
+                                )}
+                              </div>
+                            )
+                          })()}
+
+                          {(intradayLoading || navIntradayLoading) && (
                             <div className="flex items-center gap-2 text-gray-500 text-xs py-6 justify-center">
                               <span className="w-3 h-3 border border-gray-400 border-t-transparent rounded-full animate-spin" />
                               Loading…
@@ -2567,8 +2642,9 @@ export default function DashboardPage() {
                           )}
 
                           {/* 1 Day — intraday line chart */}
-                          {!intradayLoading && bbChartTab === '1day' && (() => {
-                            if (intradayBB.length < 2) return (
+                          {!intradayLoading && !navIntradayLoading && bbChartTab === '1day' && (() => {
+                            const active = bbChartOffset === 0 ? intradayBB : navIntradayBB
+                            if (active.length < 2) return (
                               <div className="text-center py-4 space-y-1">
                                 <p className="text-gray-400 text-xs">Intraday data not available yet</p>
                                 <p className="text-gray-600 text-xs">Run a sync after creating the garmin_intraday_body_battery table</p>
@@ -2611,7 +2687,9 @@ export default function DashboardPage() {
                           {/* 7 Days / 4 Weeks — dumbbell chart */}
                           {!intradayLoading && (bbChartTab === '7days' || bbChartTab === '4weeks') && (() => {
                             const days = bbChartTab === '7days' ? 7 : 28
-                            const slice = histBB.slice(-days)
+                            const end = histBB.length - bbChartOffset * days
+                            const start = Math.max(0, end - days)
+                            const slice = histBB.slice(start, end)
                             if (slice.length === 0) return (
                               <div className="text-center py-4">
                                 <p className="text-gray-500 text-xs">No historical data available</p>
