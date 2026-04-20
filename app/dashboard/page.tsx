@@ -2443,48 +2443,132 @@ export default function DashboardPage() {
                 </button>
 
                 <DetailModal open={openTile === 'battery'} onClose={() => setOpenTile(null)}
-                  title="Bio Battery" subtitle={bbLabel} icon="🔋"
-                  gradient="from-green-950/50 via-gray-900 to-gray-950" border="border-green-800/30">
-                  <div className="space-y-4 text-sm">
-                    <p className="text-gray-300 leading-relaxed">
-                      Bio Battery is Garmin&apos;s estimate of your available energy reserve — like a phone battery for your body. It charges overnight while you sleep and depletes through activity, stress, and effort throughout the day.
-                    </p>
-                    <div className="bg-gray-800/60 rounded-2xl p-4 space-y-3">
-                      <p className="text-xs text-gray-400 uppercase tracking-wider font-semibold">Today&apos;s Readings</p>
-                      <div className="grid grid-cols-2 gap-3">
-                        {[
-                          { label: 'End of Day', value: bb, unit: '' },
-                          { label: 'Morning Start', value: bbStart, unit: '' },
-                          { label: 'Peak Today', value: bbPeak, unit: '' },
-                          { label: 'Avg Stress', value: stress != null ? Math.round(stress) : null, unit: '/100' },
-                        ].map(({ label, value, unit }) => (
-                          <div key={label} className="bg-gray-700/40 rounded-xl p-3 text-center">
-                            <p className="text-lg font-bold text-white tabular-nums">{value ?? '—'}{value != null ? unit : ''}</p>
-                            <p className="text-[10px] text-gray-500 mt-0.5">{label}</p>
+                  title="Bio Battery" subtitle={null} icon="🔋"
+                  gradient="from-slate-900 via-gray-900 to-gray-950" border="border-slate-700/40">
+                  {(() => {
+                    const charged = bbPeak != null && bbStart != null ? Math.max(0, bbPeak - bbStart) : bbPeak ?? null
+                    const drained = bbPeak != null && bb != null ? Math.max(0, bbPeak - bb) : null
+                    const todayStr = new Date().toISOString().split('T')[0]
+                    const todayActs = activities.filter(a => {
+                      try { return new Date(a.start_time as string).toISOString().split('T')[0] === todayStr } catch { return false }
+                    })
+                    const statusMsg = stress != null && stress > 50
+                      ? { title: 'Stressful day', body: 'Your stress has been elevated today. Try to find time to rest and relax to help recharge your battery.' }
+                      : bb != null && bb < 40
+                      ? { title: 'Battery low', body: 'Your body battery is depleted. Prioritise rest, avoid hard training, and focus on recovery tonight.' }
+                      : bb != null && bb >= 70
+                      ? { title: 'Well charged', body: 'Your battery is in great shape. You have plenty of energy available for training or a demanding day.' }
+                      : { title: 'Moderate charge', body: 'You have a reasonable amount of energy available. Keep activity moderate and prioritise a good night\'s sleep.' }
+                    // Mini ring SVG for summary
+                    const rr = 38, sw = 7, circ = 2 * Math.PI * rr
+                    const ringPct = bb != null ? clampV(bb, 0, 100) / 100 : 0
+                    return (
+                      <div className="space-y-4 text-sm">
+                        {/* Summary row — ring + charged/drained */}
+                        <div className="flex items-center gap-5">
+                          <svg viewBox="0 0 100 100" className="w-24 h-24 shrink-0">
+                            <circle cx={50} cy={50} r={rr} fill="none" stroke="#1e293b" strokeWidth={sw} />
+                            <circle cx={50} cy={50} r={rr} fill="none" stroke={fillColor} strokeWidth={sw} strokeLinecap="round"
+                              strokeDasharray={`${ringPct * circ} ${circ}`} transform="rotate(-90 50 50)" />
+                            <text x={50} y={46} textAnchor="middle" fill="white" fontSize="22" fontWeight="800" fontFamily="system-ui,sans-serif">{bb ?? '—'}</text>
+                            <text x={50} y={60} textAnchor="middle" fill="#64748b" fontSize="9" fontFamily="system-ui,sans-serif">/ 100</text>
+                          </svg>
+                          <div className="space-y-3 flex-1">
+                            {charged != null && (
+                              <div className="flex items-center gap-2">
+                                <span className="text-xl font-bold tabular-nums text-emerald-400">+{charged}</span>
+                                <span className="text-xs text-gray-500">Charged overnight</span>
+                              </div>
+                            )}
+                            {drained != null && (
+                              <div className="flex items-center gap-2">
+                                <span className="text-xl font-bold tabular-nums text-rose-400">−{drained}</span>
+                                <span className="text-xs text-gray-500">Drained today</span>
+                              </div>
+                            )}
+                            {bbPeak != null && (
+                              <div className="flex items-center gap-2">
+                                <span className="text-base font-semibold tabular-nums text-gray-300">{bbPeak}</span>
+                                <span className="text-xs text-gray-500">Peak today</span>
+                              </div>
+                            )}
                           </div>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="bg-gray-800/60 rounded-2xl p-4 space-y-2">
-                      <p className="text-xs text-gray-400 uppercase tracking-wider font-semibold">Battery Levels</p>
-                      <div className="space-y-2 text-xs">
-                        {[
-                          { range: '70–100', label: 'Charged', desc: 'Full capacity — ready for intense training', color: '#22c55e' },
-                          { range: '40–69', label: 'Draining', desc: 'Moderate sessions fine, avoid long efforts', color: '#f97316' },
-                          { range: '0–39', label: 'Depleted', desc: 'Rest or light movement only — recharge needed', color: '#ef4444' },
-                        ].map(({ range, label, desc, color }) => (
-                          <div key={label} className="flex items-start gap-2">
-                            <span className="font-bold w-14 shrink-0 tabular-nums" style={{ color }}>{range}</span>
-                            <div><p className="font-medium text-white">{label}</p><p className="text-gray-500">{desc}</p></div>
+                        </div>
+
+                        {/* Status message */}
+                        <div className="bg-gray-800/60 rounded-2xl p-4">
+                          <p className="font-semibold text-white mb-1">{statusMsg.title}</p>
+                          <p className="text-gray-400 text-xs leading-relaxed">{statusMsg.body}</p>
+                        </div>
+
+                        {/* Stress indicator */}
+                        {stress != null && (
+                          <div className="bg-gray-800/60 rounded-2xl p-4">
+                            <div className="flex justify-between items-center mb-2">
+                              <p className="text-xs text-gray-400 uppercase tracking-wider font-semibold">Average Stress</p>
+                              <p className="font-bold text-white tabular-nums">{Math.round(stress)}<span className="text-gray-500 text-xs font-normal"> / 100</span></p>
+                            </div>
+                            <div className="h-2 bg-gray-700 rounded-full overflow-hidden">
+                              <div className="h-full rounded-full transition-all"
+                                style={{ width: `${Math.round(stress)}%`, background: stress > 60 ? '#ef4444' : stress > 35 ? '#f97316' : '#22c55e' }} />
+                            </div>
+                            <div className="flex justify-between text-[10px] text-gray-600 mt-1">
+                              <span>Rest</span><span>Low</span><span>Medium</span><span>High</span>
+                            </div>
                           </div>
-                        ))}
+                        )}
+
+                        {/* Factors */}
+                        <div className="bg-gray-800/60 rounded-2xl p-4 space-y-1">
+                          <p className="text-xs text-gray-400 uppercase tracking-wider font-semibold mb-3">Factors</p>
+                          {/* Sleep as a charge factor */}
+                          {charged != null && charged > 0 && (
+                            <div className="flex items-center justify-between py-2 border-b border-gray-700/50">
+                              <div>
+                                <p className="text-white font-medium text-sm">Sleep</p>
+                                {sleepData?.sleep_duration_seconds != null && (
+                                  <p className="text-gray-500 text-xs">{Math.floor(sleepData.sleep_duration_seconds / 3600)}h {Math.floor((sleepData.sleep_duration_seconds % 3600) / 60)}m</p>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-emerald-400 font-bold tabular-nums">+{charged}</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="#34d399" strokeWidth={2.5} className="w-4 h-4">
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 15l7-7 7 7" />
+                                </svg>
+                              </div>
+                            </div>
+                          )}
+                          {/* Today's activities as drain factors */}
+                          {todayActs.length > 0 ? todayActs.map((a, i) => {
+                            const raw = (a.raw_payload ?? {}) as Record<string, unknown>
+                            const typeKey = ((raw.activityType as Record<string, unknown> | undefined)?.typeKey as string | undefined)
+                              ?? String(a.activity_type ?? '')
+                            const name = (raw.activityName as string | undefined) ?? typeKey.replace(/_/g, ' ')
+                            const durMin = a.duration_sec ? Math.round(Number(a.duration_sec) / 60) : null
+                            const est = a.calories ? Math.round(Number(a.calories) / 15) : durMin ? Math.round(durMin / 4) : null
+                            return (
+                              <div key={i} className="flex items-center justify-between py-2 border-b border-gray-700/50 last:border-0">
+                                <div>
+                                  <p className="text-white font-medium text-sm capitalize">{name.toLowerCase().replace(/_/g, ' ')}</p>
+                                  {durMin && <p className="text-gray-500 text-xs">{durMin}m</p>}
+                                </div>
+                                {est != null && (
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="text-rose-400 font-bold tabular-nums">−{est}</span>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="#f87171" strokeWidth={2.5} className="w-4 h-4">
+                                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                                    </svg>
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          }) : (
+                            <p className="text-gray-600 text-xs py-2">No activities recorded today</p>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                    <div className="bg-gray-800/60 rounded-2xl p-3">
-                      <p className="text-xs text-gray-400 mb-1">How to recharge faster</p>
-                      <p className="text-gray-300 text-xs leading-relaxed">Quality sleep is the #1 charger. Reducing stress, avoiding late meals, and limiting alcohol all accelerate overnight recharge rate. A battery that doesn&apos;t recover overnight despite sleep suggests high HRV suppression.</p>
-                    </div>
-                  </div>
+                    )
+                  })()}
                 </DetailModal>
               </>
             )
