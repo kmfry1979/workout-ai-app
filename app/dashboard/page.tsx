@@ -527,9 +527,10 @@ export default function DashboardPage() {
   const [dailyHealth, setDailyHealth] = useState<DailyHealthMetrics | null>(null)
   const [dailySteps, setDailySteps] = useState<DailySteps | null>(null)
   const [activities, setActivities] = useState<ActivitySummary[]>([])
-  const [aiExpanded, setAiExpanded] = useState(false)
-  const [aiLoading, setAiLoading] = useState(false)
-  const [aiInsight, setAiInsight] = useState<string | null>(null)
+  type DailyBriefing = { text: string; generatedAt: string; session: string; read: boolean }
+  const [briefing, setBriefing] = useState<DailyBriefing | null>(null)
+  const [briefingLoading, setBriefingLoading] = useState(false)
+  const [briefingExpanded, setBriefingExpanded] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [syncMessage, setSyncMessage] = useState<string | null>(null)
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(null)
@@ -965,22 +966,31 @@ export default function DashboardPage() {
   // Latest progress row drives the headline + percent in the modal.
   const latestProgress = progressRows[progressRows.length - 1] ?? null
 
-  if (loading) {
-    return (
-      <main className="min-h-screen bg-gray-950 flex items-center justify-center">
-        <p className="text-gray-400">Loading...</p>
-      </main>
-    )
-  }
+  const getDaySession = (h: number) => h < 12 ? 'morning' : h < 17 ? 'afternoon' : 'evening'
+  const sessionLabel = (s: string) => s === 'morning' ? '🌅 Morning Briefing' : s === 'afternoon' ? '☀️ Afternoon Check-in' : '🌙 Evening Report'
 
-  const fetchAIInsight = async () => {
-    if (aiInsight || aiLoading) return
-    setAiLoading(true)
+  const fetchDailyBriefing = async () => {
+    if (briefingLoading) return
+    const now = new Date()
+    const today = now.toISOString().split('T')[0]
+    const session = getDaySession(now.getHours())
+    const storageKey = `daily_briefing_${today}_${session}`
+    // Check cache
     try {
-      const today = new Date().toISOString().split('T')[0]
+      const cached = localStorage.getItem(storageKey)
+      if (cached) {
+        const parsed = JSON.parse(cached) as DailyBriefing
+        setBriefing(parsed)
+        setBriefingExpanded(parsed.read)
+        return
+      }
+    } catch { /* ignore */ }
+    setBriefingLoading(true)
+    try {
       const stepsVal = dailySteps?.total_steps ?? metrics?.steps ?? null
       const bodyBatteryEnd = dailyHealth?.body_battery_end ?? metrics?.garmin_body_battery_eod ?? null
-
+      const readinessScore = metrics ? computeScores(metrics, activities).readiness : null
+      const readinessLbl = readinessScore != null ? readinessLabel(readinessScore) : null
       const recentActs = activities.slice(0, 7).map(a => ({
         type: a.activity_type?.replace(/_/g, ' ') ?? 'activity',
         durationMin: a.duration_sec ? Math.round(a.duration_sec / 60) : null,
@@ -990,10 +1000,6 @@ export default function DashboardPage() {
         trainingEffect: null as number | null,
         date: new Date(a.start_time).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }),
       }))
-
-      const readinessScore = metrics ? computeScores(metrics, activities).readiness : null
-      const readinessLbl = readinessScore != null ? readinessLabel(readinessScore) : null
-
       const res = await fetch('/api/ai/snapshot', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1012,32 +1018,50 @@ export default function DashboardPage() {
             stressMax: dailyHealth?.stress_max ?? null,
             restingHr: metrics?.resting_hr ?? metrics?.resting_heart_rate_bpm ?? null,
             steps: stepsVal,
-            stepGoal: null,
+            stepGoal: stepGoal,
             spo2: dailyHealth?.spo2_avg ?? metrics?.garmin_spo2_avg ?? metrics?.pulse_ox ?? null,
             respirationAwake: dailyHealth?.respiration_avg_bpm ?? null,
             respirationSleep: null,
-            intensityMinutes: null,
+            intensityMinutes: dailySteps?.moderate_intensity_minutes ?? null,
             intensityGoal: null,
             readinessScore,
             readinessLabel: readinessLbl,
             date: today,
-            localHour: new Date().getHours(),
+            localHour: now.getHours(),
           },
           activities: recentActs,
         }),
       })
-
-      const data = await res.json()
+      const data = await res.json() as { insight?: string }
       if (res.ok && data.insight) {
-        setAiInsight(data.insight)
-      } else {
-        setAiInsight('Could not generate insight. Check your Groq API key is set in Vercel.')
+        const newBriefing: DailyBriefing = {
+          text: data.insight,
+          generatedAt: now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
+          session,
+          read: false,
+        }
+        setBriefing(newBriefing)
+        setBriefingExpanded(false)
+        try { localStorage.setItem(storageKey, JSON.stringify(newBriefing)) } catch { /* ignore */ }
       }
-    } catch {
-      setAiInsight('Could not reach the AI. Please try again.')
-    } finally {
-      setAiLoading(false)
+    } catch { /* ignore */ } finally {
+      setBriefingLoading(false)
     }
+  }
+
+  useEffect(() => {
+    if (!loading && (metrics || dailyHealth) && !briefing && !briefingLoading) {
+      fetchDailyBriefing()
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading])
+
+  if (loading) {
+    return (
+      <main className="min-h-screen bg-gray-950 flex items-center justify-center">
+        <p className="text-gray-400">Loading...</p>
+      </main>
+    )
   }
 
   const scores = metrics ? computeScores(metrics, activities) : null
@@ -1069,80 +1093,6 @@ export default function DashboardPage() {
 
   return (
     <main className="min-h-screen bg-gray-950 p-4 md:p-8 pb-32">
-      {/* AI Insights Modal Overlay */}
-      {aiExpanded && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
-          onClick={() => setAiExpanded(false)}
-          role="dialog"
-          aria-modal="true"
-        >
-          <div
-            className="relative w-full max-w-lg max-h-[85vh] overflow-y-auto bg-gradient-to-br from-orange-950/90 via-gray-900 to-purple-950/90 rounded-3xl p-6 border border-orange-500/30 shadow-2xl"
-            onClick={e => e.stopPropagation()}
-          >
-            {/* Close button */}
-            <button
-              onClick={() => setAiExpanded(false)}
-              aria-label="Close AI insights"
-              className="absolute top-3 right-3 w-8 h-8 rounded-full bg-gray-800/80 hover:bg-gray-700 text-gray-300 hover:text-white flex items-center justify-center transition-colors"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-
-            <div className="flex items-center gap-3 mb-4">
-              <span className="text-2xl">✨</span>
-              <div>
-                <p className="text-base font-bold text-white">AI Insights</p>
-                <p className="text-xs text-gray-400">Personalised analysis & recommendations</p>
-              </div>
-            </div>
-
-            <div className="pt-4 border-t border-orange-500/20">
-              {aiLoading ? (
-                <div className="space-y-2">
-                  <div className="h-3 bg-orange-900/40 rounded animate-pulse w-3/4" />
-                  <div className="h-3 bg-orange-900/40 rounded animate-pulse w-full" />
-                  <div className="h-3 bg-orange-900/40 rounded animate-pulse w-5/6" />
-                  <div className="h-3 bg-orange-900/40 rounded animate-pulse w-2/3" />
-                  <p className="text-xs text-gray-500 mt-2">Analysing your metrics...</p>
-                </div>
-              ) : aiInsight ? (
-                <div className="text-sm text-gray-200 leading-relaxed space-y-2">
-                  {aiInsight.split('\n').map((line, i) => {
-                    const boldMatch = line.match(/^\*\*(.+?)\*\*(.*)/)
-                    if (boldMatch) {
-                      return (
-                        <p key={i} className="mt-3 first:mt-0">
-                          <span className="font-bold text-white">{boldMatch[1]}</span>
-                          <span className="text-gray-300">{boldMatch[2]}</span>
-                        </p>
-                      )
-                    }
-                    if (line.startsWith('•') || line.startsWith('-')) {
-                      return <p key={i} className="pl-3 text-gray-300">{line}</p>
-                    }
-                    return line.trim() ? <p key={i} className="text-gray-300">{line}</p> : null
-                  })}
-                </div>
-              ) : (
-                <p className="text-gray-500 text-sm">Generating your AI snapshot...</p>
-              )}
-            </div>
-
-            {/* Footer close action */}
-            <button
-              onClick={() => setAiExpanded(false)}
-              className="mt-5 w-full bg-gray-800/80 hover:bg-gray-700 text-gray-200 text-sm py-2 rounded-xl transition-colors"
-            >
-              Back to dashboard
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* Sleep Detail Modal Overlay */}
       {sleepDetailOpen && (
         <div
@@ -2260,47 +2210,104 @@ export default function DashboardPage() {
           )
         })()}
 
-        {/* Top row: AI Insights (half) + Daily Steps (half) */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {/* AI Insights compact card — tap opens modal overlay */}
-          {(() => {
-            // Pull a short preview: first non-bold, non-empty lines (up to ~2 sentences).
-            const previewText = aiInsight
-              ? aiInsight
-                  .split('\n')
-                  .map(l => l.replace(/^\*\*.+?\*\*\s*/, '').trim())
-                  .filter(Boolean)
-                  .slice(0, 2)
-                  .join(' ')
-              : null
-            return (
-              <button
-                type="button"
-                onClick={() => {
-                  setAiExpanded(true)
-                  if (!aiInsight && !aiLoading) fetchAIInsight()
-                }}
-                className="bg-gradient-to-r from-orange-900/40 to-purple-900/40 rounded-3xl p-4 border border-orange-500/20 text-left hover:border-orange-500/40 transition-colors"
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xl">✨</span>
-                    <p className="text-sm font-bold text-white">AI Insights</p>
+          {/* Daily Briefing — full width */}
+          <div className="bg-gray-900 rounded-3xl overflow-hidden">
+            <button
+              type="button"
+              className="w-full text-left"
+              onClick={() => {
+                if (!briefing && !briefingLoading) { fetchDailyBriefing(); return }
+                if (!briefing) return
+                const expanded = !briefingExpanded
+                setBriefingExpanded(expanded)
+                if (expanded && briefing && !briefing.read) {
+                  const now = new Date()
+                  const today = now.toISOString().split('T')[0]
+                  const storageKey = `daily_briefing_${today}_${briefing.session}`
+                  const updated = { ...briefing, read: true }
+                  setBriefing(updated)
+                  try { localStorage.setItem(storageKey, JSON.stringify(updated)) } catch { /* ignore */ }
+                }
+              }}
+            >
+              <div className="flex items-center justify-between px-5 pt-4 pb-3">
+                <div className="flex items-center gap-2">
+                  <p className="text-xs text-gray-300 uppercase tracking-wider font-semibold">
+                    {briefing ? sessionLabel(briefing.session) : sessionLabel(getDaySession(new Date().getHours()))}
+                  </p>
+                  {briefing && !briefing.read && (
+                    <span className="w-2 h-2 rounded-full bg-orange-500 shrink-0" />
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  {briefing && (
+                    <span className="text-[10px] text-gray-600">{briefing.generatedAt}</span>
+                  )}
+                  {briefing && (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}
+                      className={`w-4 h-4 text-gray-500 transition-transform ${briefingExpanded ? 'rotate-180' : ''}`}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                    </svg>
+                  )}
+                </div>
+              </div>
+              <div className="px-5 pb-4">
+                {briefingLoading && (
+                  <div className="flex items-center gap-2 text-gray-500 text-sm">
+                    <span className="w-3 h-3 border border-orange-400 border-t-transparent rounded-full animate-spin shrink-0" />
+                    Generating your {sessionLabel(getDaySession(new Date().getHours())).toLowerCase().replace(/^[^ ]+ /, '')}...
                   </div>
-                  <span className="text-[10px] text-orange-300/80 uppercase tracking-wider">Tap to open</span>
-                </div>
-                <div className="mt-2 text-[12px] text-gray-300 leading-snug line-clamp-3 min-h-[3em]">
-                  {aiLoading
-                    ? 'Analysing your metrics...'
-                    : previewText
-                    ? previewText
-                    : 'Tap for a personalised summary of today\'s recovery and training recommendation.'}
-                </div>
-              </button>
-            )
-          })()}
+                )}
+                {!briefingLoading && !briefing && (
+                  <p className="text-gray-500 text-sm">Tap to generate your AI briefing</p>
+                )}
+                {briefing && !briefingExpanded && (
+                  <p className="text-gray-200 text-sm leading-relaxed line-clamp-2">
+                    {briefing.text.split('\n')[0].replace(/^\*\*[^*]+\*\*\s*/, '')}
+                  </p>
+                )}
+                {briefing && briefingExpanded && (
+                  <div className="space-y-3">
+                    {briefing.text.split('\n').filter(l => l.trim()).map((para, i) => {
+                      const isBold = para.startsWith('**') && para.includes('**', 2)
+                      const clean = para.replace(/\*\*(.*?)\*\*/g, '$1').replace(/^[•\-] /, '')
+                      return (
+                        <p key={i} className={`text-sm leading-relaxed ${isBold ? 'text-white font-semibold' : 'text-gray-300'}`}>
+                          {clean}
+                        </p>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            </button>
+            {briefing && (
+              <div className="px-5 pb-3 flex items-center justify-between border-t border-gray-800 pt-2">
+                <span className="text-[10px] text-gray-600">
+                  {briefing.read ? 'Read' : 'Tap to read'}
+                </span>
+                <button
+                  type="button"
+                  onClick={e => {
+                    e.stopPropagation()
+                    const now = new Date()
+                    const today = now.toISOString().split('T')[0]
+                    const session = getDaySession(now.getHours())
+                    const storageKey = `daily_briefing_${today}_${session}`
+                    try { localStorage.removeItem(storageKey) } catch { /* ignore */ }
+                    setBriefing(null)
+                    setBriefingExpanded(false)
+                    setBriefingLoading(false)
+                  }}
+                  className="text-[10px] text-gray-600 hover:text-gray-400"
+                >
+                  Refresh
+                </button>
+              </div>
+            )}
+          </div>
 
-          {/* Daily Steps with progress bar */}
+          {/* Daily Steps — full width */}
           {(dailySteps?.total_steps != null || metrics?.steps != null) ? (() => {
             const totalSteps = dailySteps?.total_steps ?? metrics?.steps ?? 0
             const distKmSteps = dailySteps?.total_distance_meters
@@ -2361,7 +2368,6 @@ export default function DashboardPage() {
               <p className="text-xs text-gray-500">No step data yet today.</p>
             </div>
           )}
-        </div>
 
         {/* Today's Vitals */}
         <div className="bg-gray-900 rounded-3xl p-6">

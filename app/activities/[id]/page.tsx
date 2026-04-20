@@ -327,9 +327,12 @@ export default function ActivityDetailPage() {
 
   const [activity, setActivity] = useState<GarminActivity | null>(null)
   const [loading, setLoading] = useState(true)
-  const [analysis, setAnalysis] = useState<string | null>(null)
+  const [analysis, setAnalysis] = useState<{ headline: string; body: string } | null>(null)
   const [analysisLoading, setAnalysisLoading] = useState(false)
   const [analysisError, setAnalysisError] = useState<string | null>(null)
+  const [analysisExpanded, setAnalysisExpanded] = useState(false)
+  const [analysisGeneratedAt, setAnalysisGeneratedAt] = useState<string | null>(null)
+  const [recentActivities, setRecentActivities] = useState<Record<string, unknown>[]>([])
 
   useEffect(() => {
     const load = async () => {
@@ -344,7 +347,20 @@ export default function ActivityDetailPage() {
         .single()
 
       if (!data) { router.push('/activities'); return }
-      setActivity(data as GarminActivity)
+      const act = data as GarminActivity
+      setActivity(act)
+
+      // Fetch recent activities of same type for comparison (last 20, excluding this one)
+      const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString()
+      const { data: recent } = await supabase
+        .from('garmin_activities')
+        .select('duration_sec, distance_m, avg_hr, calories, raw_payload, start_time')
+        .eq('user_id', session.session.user.id)
+        .neq('id', id)
+        .gte('start_time', thirtyDaysAgo)
+        .order('start_time', { ascending: false })
+        .limit(20)
+      setRecentActivities((recent ?? []) as Record<string, unknown>[])
       setLoading(false)
     }
     load()
@@ -356,16 +372,19 @@ export default function ActivityDetailPage() {
     fetch('/api/coach/activity', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ activity }),
+      body: JSON.stringify({ activity, recentActivities }),
     })
       .then(r => r.json())
       .then(d => {
         if (d.error) setAnalysisError(d.error)
-        else setAnalysis(d.analysis)
+        else {
+          setAnalysis({ headline: d.headline ?? '', body: d.analysis ?? '' })
+          setAnalysisGeneratedAt(new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }))
+        }
       })
       .catch(e => setAnalysisError(e.message))
       .finally(() => setAnalysisLoading(false))
-  }, [activity])
+  }, [activity, recentActivities])
 
   if (loading || !activity) {
     return (
@@ -423,6 +442,60 @@ export default function ActivityDetailPage() {
           </div>
         </div>
 
+        {/* Athlete Intelligence — collapsed headline, expandable full analysis */}
+        <div className="bg-gray-900 rounded-2xl overflow-hidden">
+          <button
+            type="button"
+            className="w-full text-left"
+            onClick={() => {
+              if (analysis) setAnalysisExpanded(e => !e)
+            }}
+          >
+            <div className="flex items-center justify-between px-4 pt-4 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-6 h-6 bg-orange-500 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0">A</div>
+                <p className="text-orange-400 text-xs font-bold uppercase tracking-wider">Athlete Intelligence</p>
+                {analysisGeneratedAt && (
+                  <span className="text-[10px] text-gray-600">{analysisGeneratedAt}</span>
+                )}
+              </div>
+              {analysis && (
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}
+                  className={`w-4 h-4 text-gray-500 transition-transform ${analysisExpanded ? 'rotate-180' : ''}`}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                </svg>
+              )}
+            </div>
+            <div className="px-4 pb-4">
+              {analysisLoading && (
+                <div className="flex items-center gap-2 text-gray-400 text-sm">
+                  <span className="w-4 h-4 border border-orange-400 border-t-transparent rounded-full animate-spin" />
+                  Analysing your session...
+                </div>
+              )}
+              {analysisError && <p className="text-red-400 text-sm">{analysisError}</p>}
+              {analysis && !analysisExpanded && (
+                <p className="text-white font-semibold text-sm leading-snug">{analysis.headline}</p>
+              )}
+              {analysis && analysisExpanded && (
+                <div className="space-y-3">
+                  <p className="text-white font-bold text-base leading-snug">{analysis.headline}</p>
+                  {analysis.body.split('\n').filter(l => l.trim()).map((para, i) => (
+                    <p key={i} className="text-gray-300 text-sm leading-relaxed">
+                      {para.replace(/\*\*(.*?)\*\*/g, '$1')}
+                    </p>
+                  ))}
+                </div>
+              )}
+              {analysis && (
+                <p className="text-[10px] text-gray-600 mt-2">
+                  {analysisExpanded ? 'Tap to collapse' : 'Tap to read full analysis'}
+                </p>
+              )}
+            </div>
+          </button>
+        </div>
+
         {/* Primary stats */}
         {stats.length > 0 && (
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
@@ -442,32 +515,6 @@ export default function ActivityDetailPage() {
         {/* Performance stats (pace, cadence, VO2) */}
         <EffortSummary activity={activity} raw={raw} />
 
-        {/* AI Coach */}
-        <div className="bg-gray-900 rounded-2xl overflow-hidden">
-          <div className="flex items-center gap-2 px-4 pt-4 pb-3 border-b border-gray-800">
-            <div className="w-6 h-6 bg-orange-500 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0">A</div>
-            <p className="text-orange-400 text-sm font-bold uppercase tracking-wider">Athlete Intelligence</p>
-          </div>
-          <div className="px-4 py-4">
-            {analysisLoading && (
-              <div className="flex items-center gap-2 text-gray-400 text-sm">
-                <span className="w-4 h-4 border border-orange-400 border-t-transparent rounded-full animate-spin" />
-                Analysing your session...
-              </div>
-            )}
-            {analysisError && <p className="text-red-400 text-sm">{analysisError}</p>}
-            {analysis && (
-              <div className="relative">
-                <div className="h-48 overflow-y-auto pr-2" style={{ scrollbarWidth: 'thin', scrollbarColor: '#f97316 #1f2937' }}>
-                  <p className="text-gray-200 text-sm leading-relaxed">{analysis}</p>
-                </div>
-                {/* Fade indicator at bottom */}
-                <div className="absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-gray-900 to-transparent pointer-events-none rounded-b-xl" />
-                <p className="text-gray-600 text-xs text-center mt-2">↕ scroll to read more</p>
-              </div>
-            )}
-          </div>
-        </div>
 
       </div>
       <BottomNav />
