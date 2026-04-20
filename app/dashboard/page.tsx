@@ -547,6 +547,7 @@ export default function DashboardPage() {
   const [intradayLoading, setIntradayLoading] = useState(false)
   const [histBB, setHistBB] = useState<{ metric_date: string; body_battery_peak: number | null; body_battery_low: number | null }[]>([])
   const [bbChartTab, setBbChartTab] = useState<'1day' | '7days' | '4weeks'>('1day')
+  const [hoveredBBIdx, setHoveredBBIdx] = useState<number | null>(null)
   const [userId, setUserId] = useState<string | null>(null)
   const [stepsHistory, setStepsHistory] = useState<{ step_date: string; total_steps: number | null }[]>([])
   const [hourlySteps, setHourlySteps] = useState<Record<string, number> | null>(null)
@@ -2627,10 +2628,17 @@ export default function DashboardPage() {
                               }
                               return new Date(d).toLocaleDateString('en-GB', { weekday: 'short' })
                             }
-                            // For 4 weeks, only label every 7th day
+                            const fullDateLabel = (d: string) => new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
                             const showLabel = (i: number) => bbChartTab === '7days' || i % 7 === 0
+                            const hov = hoveredBBIdx !== null ? slice[hoveredBBIdx] : null
+                            const hovX = hoveredBBIdx !== null ? xS(hoveredBBIdx) : 0
+                            // Keep tooltip inside viewBox horizontally
+                            const ttW = 92, ttH = 52
+                            const ttX = Math.min(Math.max(hovX - ttW / 2, padL), W - padR - ttW)
+                            const ttY = padT
                             return (
-                              <svg viewBox={`0 0 ${W} ${H + padB}`} className="w-full">
+                              <svg viewBox={`0 0 ${W} ${H + padB}`} className="w-full"
+                                onMouseLeave={() => setHoveredBBIdx(null)}>
                                 {[0, 25, 50, 75, 100].map(v => (
                                   <g key={v}>
                                     <line x1={padL} y1={yS(v)} x2={W - padR} y2={yS(v)} stroke="#1e293b" strokeWidth={0.75} />
@@ -2644,19 +2652,44 @@ export default function DashboardPage() {
                                   if (hi == null && lo == null) return null
                                   const yHi = hi != null ? yS(hi) : yS(lo ?? 0)
                                   const yLo = lo != null ? yS(lo) : yS(hi ?? 0)
+                                  const isHov = hoveredBBIdx === i
                                   return (
-                                    <g key={d.metric_date}>
+                                    <g key={d.metric_date} style={{ cursor: 'pointer' }}
+                                      onMouseEnter={() => setHoveredBBIdx(i)}>
+                                      {/* Invisible wide hit target */}
+                                      <rect x={x - 10} y={padT} width={20} height={H - padT} fill="transparent" />
+                                      {/* Vertical connector */}
                                       {hi != null && lo != null && (
-                                        <line x1={x} y1={yHi} x2={x} y2={yLo} stroke="#334155" strokeWidth={2.5} strokeLinecap="round" />
+                                        <line x1={x} y1={yHi} x2={x} y2={yLo}
+                                          stroke={isHov ? '#64748b' : '#334155'} strokeWidth={isHov ? 3 : 2.5} strokeLinecap="round" />
                                       )}
-                                      {hi != null && <circle cx={x} cy={yHi} r={4.5} fill="#3b82f6" />}
-                                      {lo != null && <circle cx={x} cy={yLo} r={4} fill="#475569" />}
+                                      {hi != null && <circle cx={x} cy={yHi} r={isHov ? 6 : 4.5} fill="#3b82f6" />}
+                                      {lo != null && <circle cx={x} cy={yLo} r={isHov ? 5 : 4} fill={isHov ? '#64748b' : '#475569'} />}
                                       {showLabel(i) && (
-                                        <text x={x} y={H + padB - 2} textAnchor="middle" fontSize="8" fill="#475569">{dayLabel(d.metric_date)}</text>
+                                        <text x={x} y={H + padB - 2} textAnchor="middle" fontSize="8"
+                                          fill={isHov ? '#94a3b8' : '#475569'}>{dayLabel(d.metric_date)}</text>
                                       )}
                                     </g>
                                   )
                                 })}
+                                {/* Tooltip */}
+                                {hov && (
+                                  <g>
+                                    <rect x={ttX} y={ttY} width={ttW} height={ttH} rx={6}
+                                      fill="#0f172a" stroke="#334155" strokeWidth={1} />
+                                    <text x={ttX + 10} y={ttY + 14} fontSize="9" fontWeight="600" fill="#94a3b8">
+                                      {fullDateLabel(hov.metric_date)}
+                                    </text>
+                                    <circle cx={ttX + 13} cy={ttY + 27} r={3.5} fill="#3b82f6" />
+                                    <text x={ttX + 21} y={ttY + 31} fontSize="9" fill="white">
+                                      {hov.body_battery_peak ?? '—'} Highest
+                                    </text>
+                                    <circle cx={ttX + 13} cy={ttY + 42} r={3} fill="#64748b" />
+                                    <text x={ttX + 21} y={ttY + 46} fontSize="9" fill="white">
+                                      {hov.body_battery_low ?? '—'} Lowest
+                                    </text>
+                                  </g>
+                                )}
                               </svg>
                             )
                           })()}
