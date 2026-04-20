@@ -40,26 +40,60 @@ export default function CoachPage() {
         .maybeSingle()
       setDisplayName(profile?.display_name ?? profile?.name ?? '')
 
-      // Fetch today's metrics
       const today = new Date().toISOString().split('T')[0]
-      const { data: m } = await supabase
-        .from('daily_health_metrics')
-        .select('metric_date, garmin_hrv_nightly_avg, garmin_sleep_score, sleep_minutes, garmin_body_battery_high, garmin_stress_avg, resting_hr, resting_heart_rate_bpm, steps')
-        .eq('user_id', user.id)
-        .eq('metric_date', today)
-        .maybeSingle()
-      setMetrics(m ?? null)
+      const sevenAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0]
 
-      // Fetch last 7 days of activities
-      const weekAgo = new Date()
-      weekAgo.setDate(weekAgo.getDate() - 7)
-      const { data: acts } = await supabase
-        .from('garmin_activities')
-        .select('activity_type, start_time, duration_sec, distance_m, avg_hr, calories, training_effect, raw_payload')
-        .eq('user_id', user.id)
-        .gte('start_time', weekAgo.toISOString())
-        .order('start_time', { ascending: false })
-      setActivities((acts ?? []) as Record<string, unknown>[])
+      const [garminHealthRes, legacyRes, sleepRes, stepsRes, actsRes] = await Promise.all([
+        // Primary source: garmin_daily_health_metrics
+        supabase.from('garmin_daily_health_metrics')
+          .select('hrv_avg, hrv_status, respiration_avg_bpm, stress_avg, body_battery_end, spo2_avg')
+          .eq('user_id', user.id).eq('metric_date', today).maybeSingle(),
+        // Fallback for RHR
+        supabase.from('daily_health_metrics')
+          .select('garmin_hrv_nightly_avg, garmin_sleep_score, garmin_body_battery_high, garmin_stress_avg, resting_hr, resting_heart_rate_bpm, steps')
+          .eq('user_id', user.id).eq('metric_date', today).maybeSingle(),
+        // Sleep detail
+        supabase.from('garmin_sleep_data')
+          .select('sleep_score, sleep_duration_seconds, deep_sleep_seconds, rem_sleep_seconds')
+          .eq('user_id', user.id).gte('sleep_date', sevenAgo)
+          .order('sleep_date', { ascending: false }).limit(1).maybeSingle(),
+        // Steps + intensity
+        supabase.from('garmin_daily_steps')
+          .select('total_steps, active_minutes, moderate_intensity_minutes, vigorous_intensity_minutes')
+          .eq('user_id', user.id).eq('step_date', today).maybeSingle(),
+        // Last 7 days activities
+        supabase.from('garmin_activities')
+          .select('activity_type, start_time, duration_sec, distance_m, avg_hr, calories, training_effect, raw_payload')
+          .eq('user_id', user.id).gte('start_time', new Date(Date.now() - 7 * 86400000).toISOString())
+          .order('start_time', { ascending: false }),
+      ])
+
+      const gh = garminHealthRes.data as Record<string, unknown> | null
+      const leg = legacyRes.data as Record<string, unknown> | null
+      const sl = sleepRes.data as Record<string, unknown> | null
+      const st = stepsRes.data as Record<string, unknown> | null
+
+      // Merge into a single metrics object, preferring newer garmin tables
+      const merged: Record<string, unknown> = {
+        metric_date: today,
+        hrv: gh?.hrv_avg ?? leg?.garmin_hrv_nightly_avg ?? null,
+        hrv_status: gh?.hrv_status ?? null,
+        sleep_score: sl?.sleep_score ?? leg?.garmin_sleep_score ?? null,
+        sleep_duration_seconds: sl?.sleep_duration_seconds ?? null,
+        deep_sleep_seconds: sl?.deep_sleep_seconds ?? null,
+        rem_sleep_seconds: sl?.rem_sleep_seconds ?? null,
+        body_battery: gh?.body_battery_end ?? leg?.garmin_body_battery_high ?? null,
+        stress: gh?.stress_avg ?? leg?.garmin_stress_avg ?? null,
+        resting_hr: leg?.resting_hr ?? leg?.resting_heart_rate_bpm ?? null,
+        respiration: gh?.respiration_avg_bpm ?? null,
+        spo2: gh?.spo2_avg ?? null,
+        steps: st?.total_steps ?? leg?.steps ?? null,
+        active_minutes: st?.active_minutes ?? null,
+        moderate_intensity_minutes: st?.moderate_intensity_minutes ?? null,
+        vigorous_intensity_minutes: st?.vigorous_intensity_minutes ?? null,
+      }
+      setMetrics(merged)
+      setActivities((actsRes.data ?? []) as Record<string, unknown>[])
       setContextLoading(false)
     }
     load()
@@ -71,13 +105,21 @@ export default function CoachPage() {
 
   const buildContext = () => {
     const metricsCtx = metrics ? {
-      hrv: metrics.garmin_hrv_nightly_avg as number | null,
-      sleepScore: metrics.garmin_sleep_score as number | null,
-      sleepMinutes: metrics.sleep_minutes as number | null,
-      bodyBattery: metrics.garmin_body_battery_high as number | null,
-      stress: metrics.garmin_stress_avg as number | null,
-      restingHr: (metrics.resting_hr ?? metrics.resting_heart_rate_bpm) as number | null,
+      hrv: metrics.hrv as number | null,
+      hrvStatus: metrics.hrv_status as string | null,
+      sleepScore: metrics.sleep_score as number | null,
+      sleepDurationSeconds: metrics.sleep_duration_seconds as number | null,
+      deepSleepSeconds: metrics.deep_sleep_seconds as number | null,
+      remSleepSeconds: metrics.rem_sleep_seconds as number | null,
+      bodyBattery: metrics.body_battery as number | null,
+      stress: metrics.stress as number | null,
+      restingHr: metrics.resting_hr as number | null,
+      respiration: metrics.respiration as number | null,
+      spo2: metrics.spo2 as number | null,
       steps: metrics.steps as number | null,
+      activeMinutes: metrics.active_minutes as number | null,
+      moderateIntensityMinutes: metrics.moderate_intensity_minutes as number | null,
+      vigorousIntensityMinutes: metrics.vigorous_intensity_minutes as number | null,
       date: metrics.metric_date as string,
     } : null
 
@@ -145,19 +187,29 @@ export default function CoachPage() {
         <div className="px-4 py-2 flex gap-2 flex-wrap">
           {metrics ? (
             <>
-              {(metrics.garmin_body_battery_high as number | null) != null && (
+              {(metrics.body_battery as number | null) != null && (
                 <span className="bg-green-900/40 text-green-400 text-xs px-2 py-1 rounded-full">
-                  🔋 Battery {metrics.garmin_body_battery_high as number}
+                  🔋 Battery {metrics.body_battery as number}
                 </span>
               )}
-              {(metrics.garmin_hrv_nightly_avg as number | null) != null && (
+              {(metrics.hrv as number | null) != null && (
                 <span className="bg-blue-900/40 text-blue-400 text-xs px-2 py-1 rounded-full">
-                  💓 HRV {metrics.garmin_hrv_nightly_avg as number}ms
+                  💓 HRV {metrics.hrv as number}ms
                 </span>
               )}
-              {(metrics.garmin_sleep_score as number | null) != null && (
+              {(metrics.sleep_score as number | null) != null && (
                 <span className="bg-purple-900/40 text-purple-400 text-xs px-2 py-1 rounded-full">
-                  😴 Sleep {metrics.garmin_sleep_score as number}
+                  😴 Sleep {metrics.sleep_score as number}
+                </span>
+              )}
+              {(metrics.resting_hr as number | null) != null && (
+                <span className="bg-red-900/40 text-red-400 text-xs px-2 py-1 rounded-full">
+                  ❤️ RHR {metrics.resting_hr as number}bpm
+                </span>
+              )}
+              {(metrics.respiration as number | null) != null && (
+                <span className="bg-gray-800 text-gray-400 text-xs px-2 py-1 rounded-full">
+                  🌬️ {(metrics.respiration as number).toFixed(1)} brpm
                 </span>
               )}
             </>

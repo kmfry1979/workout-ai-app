@@ -7,12 +7,20 @@ type Message = { role: 'user' | 'assistant'; content: string }
 
 type MetricsContext = {
   hrv: number | null
+  hrvStatus: string | null
   sleepScore: number | null
-  sleepMinutes: number | null
+  sleepDurationSeconds: number | null
+  deepSleepSeconds: number | null
+  remSleepSeconds: number | null
   bodyBattery: number | null
   stress: number | null
   restingHr: number | null
+  respiration: number | null
+  spo2: number | null
   steps: number | null
+  activeMinutes: number | null
+  moderateIntensityMinutes: number | null
+  vigorousIntensityMinutes: number | null
   date: string
 }
 
@@ -32,14 +40,25 @@ function buildSystemPrompt(metrics: MetricsContext | null, activities: ActivityC
 
   let metricsSection = 'No health metrics available for today.'
   if (metrics) {
+    const sleepDur = metrics.sleepDurationSeconds != null
+      ? `${Math.floor(metrics.sleepDurationSeconds / 3600)}h ${Math.floor((metrics.sleepDurationSeconds % 3600) / 60)}m` : null
+    const deepPct = metrics.deepSleepSeconds != null && metrics.sleepDurationSeconds != null && metrics.sleepDurationSeconds > 0
+      ? `${Math.round((metrics.deepSleepSeconds / metrics.sleepDurationSeconds) * 100)}%` : null
+    const remPct = metrics.remSleepSeconds != null && metrics.sleepDurationSeconds != null && metrics.sleepDurationSeconds > 0
+      ? `${Math.round((metrics.remSleepSeconds / metrics.sleepDurationSeconds) * 100)}%` : null
+    const intensityMin = metrics.moderateIntensityMinutes != null || metrics.vigorousIntensityMinutes != null
+      ? (metrics.moderateIntensityMinutes ?? 0) + (metrics.vigorousIntensityMinutes ?? 0) * 2 : metrics.activeMinutes
     const lines = [
-      metrics.hrv != null ? `- HRV (nightly avg): ${metrics.hrv} ms` : null,
-      metrics.sleepScore != null ? `- Sleep score: ${metrics.sleepScore}/100` : null,
-      metrics.sleepMinutes != null ? `- Sleep duration: ${Math.floor(metrics.sleepMinutes / 60)}h ${metrics.sleepMinutes % 60}m` : null,
+      metrics.hrv != null ? `- HRV: ${metrics.hrv}ms${metrics.hrvStatus ? ` (${metrics.hrvStatus})` : ''}` : null,
+      metrics.sleepScore != null ? `- Sleep score: ${metrics.sleepScore}/100${sleepDur ? ` · ${sleepDur}` : ''}` : null,
+      deepPct ? `- Deep sleep: ${deepPct}${remPct ? ` · REM: ${remPct}` : ''}` : null,
       metrics.bodyBattery != null ? `- Body Battery: ${metrics.bodyBattery}/100` : null,
-      metrics.stress != null ? `- Avg stress: ${metrics.stress}/100` : null,
       metrics.restingHr != null ? `- Resting HR: ${metrics.restingHr} bpm` : null,
+      metrics.stress != null ? `- Avg stress: ${metrics.stress}/100` : null,
+      metrics.respiration != null ? `- Respiration: ${metrics.respiration.toFixed(1)} brpm` : null,
+      metrics.spo2 != null ? `- SpO2: ${metrics.spo2}%` : null,
       metrics.steps != null ? `- Steps today: ${metrics.steps.toLocaleString()}` : null,
+      intensityMin != null ? `- Intensity load today: ${Math.round(intensityMin)} min` : null,
     ].filter(Boolean)
     metricsSection = lines.length > 0 ? lines.join('\n') : 'Metrics synced but values are empty.'
   }
