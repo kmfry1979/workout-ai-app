@@ -2479,162 +2479,163 @@ export default function DashboardPage() {
                       : bb != null && bb >= 70
                       ? { title: 'Well charged', body: 'Your battery is in great shape. You have plenty of energy available for training or a demanding day.' }
                       : { title: 'Moderate charge', body: 'You have a reasonable amount of energy available. Keep activity moderate and prioritise a good night\'s sleep.' }
-                    // Mini ring SVG for summary
-                    const rr = 38, sw = 7, circ = 2 * Math.PI * rr
+                    const actDotColor = (type: string) => {
+                      const t = type.toLowerCase()
+                      if (t.includes('run')) return '#22c55e'
+                      if (t.includes('cycl') || t.includes('bike')) return '#3b82f6'
+                      if (t.includes('swim')) return '#06b6d4'
+                      if (t.includes('strength') || t.includes('gym') || t.includes('weight')) return '#f97316'
+                      if (t.includes('walk') || t.includes('hike')) return '#eab308'
+                      if (t.includes('yoga') || t.includes('stretch')) return '#a855f7'
+                      return '#6b7280'
+                    }
+                    const rr = 44, sw = 9, circ = 2 * Math.PI * rr
                     const ringPct = bb != null ? clampV(bb, 0, 100) / 100 : 0
                     return (
-                      <div className="space-y-4 text-sm">
-                        {/* Summary row — ring + charged/drained */}
-                        <div className="flex items-center gap-5">
-                          <svg viewBox="0 0 100 100" className="w-24 h-24 shrink-0">
-                            <circle cx={50} cy={50} r={rr} fill="none" stroke="#1e293b" strokeWidth={sw} />
-                            <circle cx={50} cy={50} r={rr} fill="none" stroke={fillColor} strokeWidth={sw} strokeLinecap="round"
-                              strokeDasharray={`${ringPct * circ} ${circ}`} transform="rotate(-90 50 50)" />
-                            <text x={50} y={46} textAnchor="middle" fill="white" fontSize="22" fontWeight="800" fontFamily="system-ui,sans-serif">{bb ?? '—'}</text>
-                            <text x={50} y={60} textAnchor="middle" fill="#64748b" fontSize="9" fontFamily="system-ui,sans-serif">/ 100</text>
-                          </svg>
-                          <div className="space-y-3 flex-1">
-                            {charged != null && (
-                              <div className="flex items-center gap-2">
-                                <span className="text-xl font-bold tabular-nums text-emerald-400">+{charged}</span>
-                                <span className="text-xs text-gray-500">Charged overnight</span>
-                              </div>
-                            )}
-                            {drained != null && (
-                              <div className="flex items-center gap-2">
-                                <span className="text-xl font-bold tabular-nums text-rose-400">−{drained}</span>
-                                <span className="text-xs text-gray-500">Drained today</span>
-                              </div>
-                            )}
-                            {bbPeak != null && (
-                              <div className="flex items-center gap-2">
-                                <span className="text-base font-semibold tabular-nums text-gray-300">{bbPeak}</span>
-                                <span className="text-xs text-gray-500">Peak today</span>
-                              </div>
-                            )}
+                      <div className="space-y-3 text-sm">
+
+                        {/* ── Summary ── */}
+                        <div className="bg-gray-800/50 rounded-2xl p-4">
+                          <p className="text-xs text-gray-500 uppercase tracking-wider font-semibold mb-3">Summary</p>
+                          <div className="flex items-center gap-5">
+                            {/* Ring */}
+                            <svg viewBox="0 0 110 110" className="w-28 h-28 shrink-0">
+                              <defs>
+                                <filter id="bbRingGlow" x="-30%" y="-30%" width="160%" height="160%">
+                                  <feGaussianBlur stdDeviation="2.5" result="blur" />
+                                  <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+                                </filter>
+                              </defs>
+                              <circle cx={55} cy={55} r={rr} fill="none" stroke="#1e293b" strokeWidth={sw} />
+                              <circle cx={55} cy={55} r={rr} fill="none" stroke={fillColor} strokeWidth={sw} strokeLinecap="round"
+                                strokeDasharray={`${ringPct * circ} ${circ}`} transform="rotate(-90 55 55)"
+                                filter={bb != null ? 'url(#bbRingGlow)' : undefined} />
+                              <text x={55} y={50} textAnchor="middle" fill="white" fontSize="26" fontWeight="800" fontFamily="system-ui,sans-serif">{bb ?? '—'}</text>
+                              <text x={55} y={65} textAnchor="middle" fill="#475569" fontSize="10" fontFamily="system-ui,sans-serif">/ 100</text>
+                            </svg>
+                            {/* Stats */}
+                            <div className="space-y-4 flex-1">
+                              {charged != null && (
+                                <div>
+                                  <p className="text-2xl font-bold tabular-nums text-emerald-400">+{charged}</p>
+                                  <p className="text-xs text-gray-500 mt-0.5">Charged</p>
+                                </div>
+                              )}
+                              {drained != null && (
+                                <div>
+                                  <p className="text-2xl font-bold tabular-nums text-rose-400">−{drained}</p>
+                                  <p className="text-xs text-gray-500 mt-0.5">Drained</p>
+                                </div>
+                              )}
+                            </div>
                           </div>
                         </div>
 
-                        {/* Status message */}
-                        <div className="bg-gray-800/60 rounded-2xl p-4">
+                        {/* ── Status message ── */}
+                        <div className="bg-gray-800/50 rounded-2xl p-4">
                           <p className="font-semibold text-white mb-1">{statusMsg.title}</p>
                           <p className="text-gray-400 text-xs leading-relaxed">{statusMsg.body}</p>
                         </div>
 
-                        {/* Stress indicator */}
-                        {stress != null && (
-                          <div className="bg-gray-800/60 rounded-2xl p-4">
-                            <div className="flex justify-between items-center mb-2">
-                              <p className="text-xs text-gray-400 uppercase tracking-wider font-semibold">Average Stress</p>
-                              <p className="font-bold text-white tabular-nums">{Math.round(stress)}<span className="text-gray-500 text-xs font-normal"> / 100</span></p>
-                            </div>
-                            <div className="h-2 bg-gray-700 rounded-full overflow-hidden">
-                              <div className="h-full rounded-full transition-all"
-                                style={{ width: `${Math.round(stress)}%`, background: stress > 60 ? '#ef4444' : stress > 35 ? '#f97316' : '#22c55e' }} />
-                            </div>
-                            <div className="flex justify-between text-[10px] text-gray-600 mt-1">
-                              <span>Rest</span><span>Low</span><span>Medium</span><span>High</span>
-                            </div>
+                        {/* ── Intraday chart ── */}
+                        <div className="bg-gray-800/50 rounded-2xl p-4">
+                          <div className="flex items-center justify-between mb-3">
+                            <p className="text-xs text-gray-500 uppercase tracking-wider font-semibold">Body Battery — Today</p>
+                            {stress != null && (
+                              <span className="text-xs text-gray-500">Stress avg: <span className="text-white font-semibold">{Math.round(stress)}</span></span>
+                            )}
                           </div>
-                        )}
-
-                        {/* Intraday chart */}
-                        <div className="bg-gray-800/60 rounded-2xl p-4">
-                          <p className="text-xs text-gray-400 uppercase tracking-wider font-semibold mb-3">Body Battery — Today</p>
                           {intradayLoading && (
-                            <div className="flex items-center gap-2 text-gray-500 text-xs py-4 justify-center">
+                            <div className="flex items-center gap-2 text-gray-500 text-xs py-6 justify-center">
                               <span className="w-3 h-3 border border-gray-400 border-t-transparent rounded-full animate-spin" />
-                              Loading chart...
+                              Loading…
                             </div>
                           )}
                           {!intradayLoading && intradayBB.length > 1 && (() => {
-                            const W = 320, H = 80, pad = 4
-                            const levels = intradayBB.map(d => d.level)
-                            const minL = 0, maxL = 100
+                            const W = 320, H = 90, pad = 6
                             const xScale = (i: number) => pad + (i / (intradayBB.length - 1)) * (W - pad * 2)
-                            const yScale = (v: number) => H - pad - ((v - minL) / (maxL - minL)) * (H - pad * 2)
-                            const points = intradayBB.map((d, i) => `${xScale(i)},${yScale(d.level)}`).join(' ')
-                            const areaPoints = `${xScale(0)},${H - pad} ${points} ${xScale(intradayBB.length - 1)},${H - pad}`
-                            // Color based on final value
-                            const lineColor = fillColor
-                            // Hour labels — show every 4h
+                            const yScale = (v: number) => H - pad - (v / 100) * (H - pad * 2)
+                            const pts = intradayBB.map((d, i) => `${xScale(i)},${yScale(d.level)}`).join(' ')
+                            const area = `${xScale(0)},${H - pad} ${pts} ${xScale(intradayBB.length - 1)},${H - pad}`
                             const hourLabels: { x: number; label: string }[] = []
                             intradayBB.forEach((d, i) => {
-                              const h = new Date(d.recorded_at).getHours()
-                              const m = new Date(d.recorded_at).getMinutes()
-                              if (m < 15 && (h % 4 === 0)) {
-                                hourLabels.push({ x: xScale(i), label: `${h}:00` })
-                              }
+                              const dt = new Date(d.recorded_at)
+                              if (dt.getMinutes() < 15 && dt.getHours() % 4 === 0)
+                                hourLabels.push({ x: xScale(i), label: `${dt.getHours()}:00` })
                             })
                             return (
-                              <svg viewBox={`0 0 ${W} ${H + 16}`} className="w-full">
+                              <svg viewBox={`0 0 ${W} ${H + 18}`} className="w-full">
                                 <defs>
-                                  <linearGradient id="bbAreaGrad" x1="0" y1="0" x2="0" y2="1">
-                                    <stop offset="0%" stopColor={lineColor} stopOpacity="0.3" />
-                                    <stop offset="100%" stopColor={lineColor} stopOpacity="0.02" />
+                                  <linearGradient id="bbChartGrad" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="0%" stopColor={fillColor} stopOpacity="0.35" />
+                                    <stop offset="100%" stopColor={fillColor} stopOpacity="0.02" />
                                   </linearGradient>
                                 </defs>
-                                {/* Grid lines at 25, 50, 75 */}
-                                {[25, 50, 75].map(v => (
+                                {[25, 50, 75, 100].map(v => (
                                   <g key={v}>
-                                    <line x1={pad} y1={yScale(v)} x2={W - pad} y2={yScale(v)} stroke="#1e293b" strokeWidth={0.75} strokeDasharray="3,3" />
-                                    <text x={W - pad + 2} y={yScale(v) + 3} fontSize="7" fill="#374151" textAnchor="start">{v}</text>
+                                    <line x1={pad} y1={yScale(v)} x2={W - pad} y2={yScale(v)} stroke="#1e293b" strokeWidth={0.75} strokeDasharray="4,4" />
+                                    <text x={W - pad + 3} y={yScale(v) + 3.5} fontSize="8" fill="#374151">{v}</text>
                                   </g>
                                 ))}
-                                {/* Area fill */}
-                                <polygon points={areaPoints} fill="url(#bbAreaGrad)" />
-                                {/* Line */}
-                                <polyline points={points} fill="none" stroke={lineColor} strokeWidth={1.75} strokeLinejoin="round" strokeLinecap="round" />
-                                {/* Hour labels */}
+                                <polygon points={area} fill="url(#bbChartGrad)" />
+                                <polyline points={pts} fill="none" stroke={fillColor} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
                                 {hourLabels.map(({ x, label }) => (
-                                  <text key={label} x={x} y={H + 13} textAnchor="middle" fontSize="7" fill="#475569">{label}</text>
+                                  <text key={label} x={x} y={H + 14} textAnchor="middle" fontSize="8" fill="#475569">{label}</text>
                                 ))}
                               </svg>
                             )
                           })()}
                           {!intradayLoading && intradayBB.length === 0 && (
-                            <p className="text-gray-600 text-xs text-center py-3">No intraday data yet — run a sync to populate</p>
+                            <div className="text-center py-4 space-y-1">
+                              <p className="text-gray-400 text-xs">Chart data not available yet</p>
+                              <p className="text-gray-600 text-xs">Run a sync to populate intraday readings</p>
+                            </div>
                           )}
                         </div>
 
-                        {/* Factors */}
-                        <div className="bg-gray-800/60 rounded-2xl p-4 space-y-1">
-                          <p className="text-xs text-gray-400 uppercase tracking-wider font-semibold mb-3">Factors</p>
-                          {/* Sleep as a charge factor */}
+                        {/* ── Factors ── */}
+                        <div className="bg-gray-800/50 rounded-2xl p-4">
+                          <p className="text-xs text-gray-500 uppercase tracking-wider font-semibold mb-3">Factors</p>
                           {charged != null && charged > 0 && (
-                            <div className="flex items-center justify-between py-2 border-b border-gray-700/50">
-                              <div>
-                                <p className="text-white font-medium text-sm">Sleep</p>
-                                {sleepData?.sleep_duration_seconds != null && (
-                                  <p className="text-gray-500 text-xs">{Math.floor(sleepData.sleep_duration_seconds / 3600)}h {Math.floor((sleepData.sleep_duration_seconds % 3600) / 60)}m</p>
-                                )}
+                            <div className="flex items-center justify-between py-2.5 border-b border-gray-700/40">
+                              <div className="flex items-center gap-3">
+                                <span className="text-lg">😴</span>
+                                <div>
+                                  <p className="text-white font-medium text-sm">Sleep</p>
+                                  {sleepData?.sleep_duration_seconds != null && (
+                                    <p className="text-gray-500 text-xs">{Math.floor(sleepData.sleep_duration_seconds / 3600)}h {Math.floor((sleepData.sleep_duration_seconds % 3600) / 60)}m</p>
+                                  )}
+                                </div>
                               </div>
-                              <div className="flex items-center gap-1.5">
-                                <span className="text-emerald-400 font-bold tabular-nums">+{charged}</span>
-                                <svg viewBox="0 0 24 24" fill="none" stroke="#34d399" strokeWidth={2.5} className="w-4 h-4">
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                <span className="text-emerald-400 font-bold tabular-nums text-base">+{charged}</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="#34d399" strokeWidth={3} className="w-3.5 h-3.5">
                                   <path strokeLinecap="round" strokeLinejoin="round" d="M5 15l7-7 7 7" />
                                 </svg>
                               </div>
                             </div>
                           )}
-                          {/* Today's activities as drain factors */}
                           {todayActs.length > 0 ? todayActs.map((a, i) => {
                             const raw = (a.raw_payload ?? {}) as Record<string, unknown>
                             const typeKey = ((raw.activityType as Record<string, unknown> | undefined)?.typeKey as string | undefined)
                               ?? String(a.activity_type ?? '')
                             const name = (raw.activityName as string | undefined) ?? typeKey.replace(/_/g, ' ')
                             const durMin = a.duration_sec ? Math.round(Number(a.duration_sec) / 60) : null
-                            const est = a.calories ? Math.round(Number(a.calories) / 15) : durMin ? Math.round(durMin / 4) : null
+                            const est = durMin ? Math.round(durMin / 4) : null
+                            const dotColor = actDotColor(typeKey)
                             return (
-                              <div key={i} className="flex items-center justify-between py-2 border-b border-gray-700/50 last:border-0">
-                                <div>
-                                  <p className="text-white font-medium text-sm capitalize">{name.toLowerCase().replace(/_/g, ' ')}</p>
-                                  {durMin && <p className="text-gray-500 text-xs">{durMin}m</p>}
+                              <div key={i} className="flex items-center justify-between py-2.5 border-b border-gray-700/40 last:border-0">
+                                <div className="flex items-center gap-3">
+                                  <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: dotColor }} />
+                                  <div>
+                                    <p className="text-white font-medium text-sm">{name || typeKey.replace(/_/g, ' ')}</p>
+                                    {durMin && <p className="text-gray-500 text-xs">{durMin}m</p>}
+                                  </div>
                                 </div>
                                 {est != null && (
-                                  <div className="flex items-center gap-1.5">
-                                    <span className="text-rose-400 font-bold tabular-nums">−{est}</span>
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="#f87171" strokeWidth={2.5} className="w-4 h-4">
+                                  <div className="flex items-center gap-1.5 shrink-0">
+                                    <span className="text-rose-400 font-bold tabular-nums text-base">−{est}</span>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="#f87171" strokeWidth={3} className="w-3.5 h-3.5">
                                       <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
                                     </svg>
                                   </div>
@@ -2645,6 +2646,7 @@ export default function DashboardPage() {
                             <p className="text-gray-600 text-xs py-2">No activities recorded today</p>
                           )}
                         </div>
+
                       </div>
                     )
                   })()}
