@@ -540,6 +540,7 @@ export default function DashboardPage() {
     | 'hrv' | 'spo2' | 'intensity' | 'readiness' | 'hydration'
   const [openDetail, setOpenDetail] = useState<DetailKey | null>(null)
   const closeDetail = () => setOpenDetail(null)
+  const [openTile, setOpenTile] = useState<'reserve' | 'vitals' | null>(null)
   const [stepsHistory, setStepsHistory] = useState<{ step_date: string; total_steps: number | null }[]>([])
   const [hourlySteps, setHourlySteps] = useState<Record<string, number> | null>(null)
   const [stepsTab, setStepsTab] = useState<'day' | 'week' | 'month' | 'year'>('day')
@@ -2141,6 +2142,10 @@ export default function DashboardPage() {
         </div>
 
         {/* Dual metric tiles — half width each */}
+        <div className="flex items-center justify-between px-1">
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest">Metrics</p>
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest">Vitals</p>
+        </div>
         <div className="grid grid-cols-2 gap-3">
           {/* Tile 1: Power Reserve + Load */}
           {(() => {
@@ -2165,9 +2170,7 @@ export default function DashboardPage() {
             const load = Math.min(21, 21 * Math.log10(1 + intensityMin) / Math.log10(301))
             const reservePct = reserve != null ? clampV(reserve, 0, 100) / 100 : 0
             const loadPct = clampV(load, 0, 21) / 21
-            // Orange (#f97316) when full → Red (#dc2626) as reserve depletes
             const reserveColor = reserve != null ? lerpHex('#f97316', '#dc2626', 1 - reservePct) : '#475569'
-            // Cool blue (#3b82f6) at low load → Electric teal (#2dd4bf) at high load
             const loadColor = lerpHex('#3b82f6', '#2dd4bf', loadPct)
             const reserveLabel = reserve == null ? '—' : reserve >= 80 ? 'Deep Reserve' : reserve >= 67 ? 'Charged' : reserve >= 34 ? 'Building' : 'Reserve Deficit'
             const cx = 90, cy = 90
@@ -2175,45 +2178,102 @@ export default function DashboardPage() {
             const circumOuter = 2 * Math.PI * rOuter
             const circumInner = 2 * Math.PI * rInner
             return (
-              <div className="rounded-3xl p-4 flex flex-col items-center" style={{ background: 'linear-gradient(160deg,#0f1629 0%,#0a0f1e 100%)', border: '1px solid #1e293b' }}>
-                <p className="text-[10px] font-bold mb-3 text-center tracking-[0.2em]" style={{ color: reserveColor }}>RESERVE</p>
-                <svg viewBox="0 0 180 180" className="w-36 h-36">
-                  <defs>
-                    <filter id="glowReserve" x="-50%" y="-50%" width="200%" height="200%">
-                      <feGaussianBlur stdDeviation="3.5" result="blur" />
-                      <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
-                    </filter>
-                    <filter id="glowLoad" x="-50%" y="-50%" width="200%" height="200%">
-                      <feGaussianBlur stdDeviation="2.5" result="blur" />
-                      <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
-                    </filter>
-                  </defs>
-                  <circle cx={cx} cy={cy} r={rOuter} fill="none" stroke="#0f172a" strokeWidth={swOuter} />
-                  <circle cx={cx} cy={cy} r={rInner} fill="none" stroke="#0f172a" strokeWidth={swInner} />
-                  <circle cx={cx} cy={cy} r={rOuter} fill="none" stroke={reserveColor} strokeWidth={swOuter} strokeLinecap="round"
-                    strokeDasharray={`${reservePct * circumOuter} ${circumOuter}`} transform={`rotate(-90 ${cx} ${cy})`}
-                    filter={reserve != null ? 'url(#glowReserve)' : undefined} />
-                  <circle cx={cx} cy={cy} r={rInner} fill="none" stroke={loadColor} strokeWidth={swInner} strokeLinecap="round"
-                    strokeDasharray={`${loadPct * circumInner} ${circumInner}`} transform={`rotate(-90 ${cx} ${cy})`}
-                    filter="url(#glowLoad)" />
-                  <text x={cx} y={cy - 5} textAnchor="middle" fill="white" fontSize="28" fontWeight="800" fontFamily="system-ui,sans-serif">
-                    {reserve ?? '—'}
-                  </text>
-                  <text x={cx} y={cy + 11} textAnchor="middle" fontSize="7.5" fontFamily="system-ui,sans-serif" letterSpacing="2" fill="#94a3b8">RESERVE</text>
-                  <text x={cx} y={cy + 23} textAnchor="middle" fontSize="7.5" fontFamily="system-ui,sans-serif" letterSpacing="1.5" fill={loadColor}>{load.toFixed(1)} LOAD</text>
-                </svg>
-                <div className="flex gap-4 mt-1.5 w-full justify-center">
-                  <div className="text-center">
-                    <p className="text-sm font-bold tabular-nums" style={{ color: reserveColor }}>{reserve ?? '—'}</p>
-                    <p className="text-[8px] uppercase tracking-widest mt-0.5" style={{ color: '#475569' }}>{reserveLabel}</p>
+              <>
+                <button type="button" onClick={() => setOpenTile('reserve')}
+                  className="rounded-3xl p-4 flex flex-col items-center w-full text-left transition-opacity hover:opacity-90 active:opacity-75"
+                  style={{ background: 'linear-gradient(160deg,#0f1629 0%,#0a0f1e 100%)', border: '1px solid #1e293b' }}>
+                  <div className="flex items-center justify-center gap-1.5 mb-3">
+                    <p className="text-[11px] font-bold tracking-[0.2em]" style={{ color: reserveColor }}>POWER RESERVE</p>
+                    <span className="text-[10px] text-slate-600 cursor-pointer" title="Tap for details">ⓘ</span>
                   </div>
-                  <div className="w-px" style={{ background: '#1e293b' }} />
-                  <div className="text-center">
-                    <p className="text-sm font-bold tabular-nums" style={{ color: loadColor }}>{load.toFixed(1)}</p>
-                    <p className="text-[8px] uppercase tracking-widest mt-0.5" style={{ color: '#475569' }}>Load / 21</p>
+                  <svg viewBox="0 0 180 180" className="w-36 h-36">
+                    <defs>
+                      <filter id="glowReserve" x="-50%" y="-50%" width="200%" height="200%">
+                        <feGaussianBlur stdDeviation="3.5" result="blur" />
+                        <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+                      </filter>
+                      <filter id="glowLoad" x="-50%" y="-50%" width="200%" height="200%">
+                        <feGaussianBlur stdDeviation="2.5" result="blur" />
+                        <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+                      </filter>
+                    </defs>
+                    <circle cx={cx} cy={cy} r={rOuter} fill="none" stroke="#0f172a" strokeWidth={swOuter} />
+                    <circle cx={cx} cy={cy} r={rInner} fill="none" stroke="#0f172a" strokeWidth={swInner} />
+                    <circle cx={cx} cy={cy} r={rOuter} fill="none" stroke={reserveColor} strokeWidth={swOuter} strokeLinecap="round"
+                      strokeDasharray={`${reservePct * circumOuter} ${circumOuter}`} transform={`rotate(-90 ${cx} ${cy})`}
+                      filter={reserve != null ? 'url(#glowReserve)' : undefined} />
+                    <circle cx={cx} cy={cy} r={rInner} fill="none" stroke={loadColor} strokeWidth={swInner} strokeLinecap="round"
+                      strokeDasharray={`${loadPct * circumInner} ${circumInner}`} transform={`rotate(-90 ${cx} ${cy})`}
+                      filter="url(#glowLoad)" />
+                    <text x={cx} y={cy - 6} textAnchor="middle" fill="white" fontSize="30" fontWeight="800" fontFamily="system-ui,sans-serif">
+                      {reserve ?? '—'}
+                    </text>
+                    <text x={cx} y={cy + 13} textAnchor="middle" fontSize="9" fontFamily="system-ui,sans-serif" letterSpacing="1.5" fill="#94a3b8">RESERVE</text>
+                    <text x={cx} y={cy + 26} textAnchor="middle" fontSize="9" fontFamily="system-ui,sans-serif" letterSpacing="1.5" fill={loadColor}>{load.toFixed(1)} LOAD</text>
+                  </svg>
+                  <div className="flex gap-4 mt-2 w-full justify-center">
+                    <div className="text-center">
+                      <p className="text-base font-bold tabular-nums" style={{ color: reserveColor }}>{reserve ?? '—'}</p>
+                      <p className="text-[10px] uppercase tracking-wider mt-0.5" style={{ color: '#475569' }}>{reserveLabel}</p>
+                    </div>
+                    <div className="w-px" style={{ background: '#1e293b' }} />
+                    <div className="text-center">
+                      <p className="text-base font-bold tabular-nums" style={{ color: loadColor }}>{load.toFixed(1)}</p>
+                      <p className="text-[10px] uppercase tracking-wider mt-0.5" style={{ color: '#475569' }}>Load / 21</p>
+                    </div>
                   </div>
-                </div>
-              </div>
+                </button>
+
+                <DetailModal open={openTile === 'reserve'} onClose={() => setOpenTile(null)}
+                  title="Power Reserve" subtitle={reserveLabel} icon="⚡"
+                  gradient="from-orange-950/60 via-gray-900 to-gray-950" border="border-orange-800/30">
+                  <div className="space-y-4 text-sm">
+                    <p className="text-gray-300 leading-relaxed">
+                      Power Reserve is how much energy your body has stored and ready to use. It&apos;s calculated from three overnight signals — the higher the score, the more capacity you have for hard training today.
+                    </p>
+                    <div className="bg-gray-800/60 rounded-2xl p-4 space-y-3">
+                      <p className="text-xs text-gray-400 uppercase tracking-wider font-semibold">Formula (0–100)</p>
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-center">
+                          <div>
+                            <p className="text-white font-medium">HRV <span className="text-gray-500 text-xs font-normal">45% weight</span></p>
+                            <p className="text-gray-400 text-xs">Heart rate variability — how well your nervous system recovered overnight</p>
+                          </div>
+                          <p className="text-white font-bold tabular-nums ml-3">{hrv != null ? `${hrv}ms` : '—'}</p>
+                        </div>
+                        <div className="flex justify-between items-center">
+                          <div>
+                            <p className="text-white font-medium">Sleep Score <span className="text-gray-500 text-xs font-normal">35% weight</span></p>
+                            <p className="text-gray-400 text-xs">Garmin&apos;s composite sleep quality score</p>
+                          </div>
+                          <p className="text-white font-bold tabular-nums ml-3">{sleepScore != null ? `${sleepScore}/100` : '—'}</p>
+                        </div>
+                        <div className="flex justify-between items-center">
+                          <div>
+                            <p className="text-white font-medium">Resting HR <span className="text-gray-500 text-xs font-normal">20% weight</span></p>
+                            <p className="text-gray-400 text-xs">Lower resting HR signals stronger recovery</p>
+                          </div>
+                          <p className="text-white font-bold tabular-nums ml-3">{rhr != null ? `${rhr}bpm` : '—'}</p>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="bg-gray-800/60 rounded-2xl p-4 space-y-2">
+                      <p className="text-xs text-gray-400 uppercase tracking-wider font-semibold">Reserve Levels</p>
+                      <div className="space-y-1.5 text-xs">
+                        <div className="flex justify-between"><span style={{ color: lerpHex('#f97316','#dc2626',0) }}>⚡ Deep Reserve (80–100)</span><span className="text-gray-400">Extra gear — peak output day</span></div>
+                        <div className="flex justify-between"><span style={{ color: lerpHex('#f97316','#dc2626',0.15) }}>⚡ Charged (67–79)</span><span className="text-gray-400">Good to train hard</span></div>
+                        <div className="flex justify-between"><span style={{ color: lerpHex('#f97316','#dc2626',0.55) }}>⚡ Building (34–66)</span><span className="text-gray-400">Moderate intensity recommended</span></div>
+                        <div className="flex justify-between"><span style={{ color: '#dc2626' }}>⚡ Reserve Deficit (&lt;34)</span><span className="text-gray-400">Rest or light movement only</span></div>
+                      </div>
+                    </div>
+                    <div className="bg-gray-800/60 rounded-2xl p-4 space-y-2">
+                      <p className="text-xs text-gray-400 uppercase tracking-wider font-semibold">Training Load (inner ring)</p>
+                      <p className="text-gray-300 text-xs leading-relaxed">Logarithmic 0–21 scale based on today&apos;s intensity minutes. A score of 10 is a moderate session; 18+ is an elite-level effort. Low load on a high-reserve day = opportunity. High load on a deficit = overreaching risk.</p>
+                      <p className="text-white font-bold text-lg tabular-nums">{load.toFixed(1)} <span className="text-gray-500 text-sm font-normal">/ 21</span></p>
+                    </div>
+                  </div>
+                </DetailModal>
+              </>
             )
           })()}
 
@@ -2233,54 +2293,101 @@ export default function DashboardPage() {
             const bbPct = bb != null ? clampV(bb, 0, 100) / 100 : 0
             const sleepPct = sleep != null ? clampV(sleep, 0, 100) / 100 : 0
             return (
-              <div className="rounded-3xl p-4 flex flex-col items-center" style={{ background: 'linear-gradient(160deg,#0f1629 0%,#0a0f1e 100%)', border: '1px solid #1e293b' }}>
-                <p className="text-[10px] font-bold mb-3 text-center tracking-[0.2em]" style={{ color: '#22d3ee' }}>VITALS</p>
-                <svg viewBox="0 0 180 180" className="w-36 h-36">
-                  <defs>
-                    <filter id="glowCyan" x="-50%" y="-50%" width="200%" height="200%">
-                      <feGaussianBlur stdDeviation="3.5" result="blur" />
-                      <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
-                    </filter>
-                    <filter id="glowIndigo" x="-50%" y="-50%" width="200%" height="200%">
-                      <feGaussianBlur stdDeviation="2.5" result="blur" />
-                      <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
-                    </filter>
-                  </defs>
-                  <circle cx={cx} cy={cy} r={rOuter} fill="none" stroke="#0f172a" strokeWidth={swOuter} />
-                  <circle cx={cx} cy={cy} r={rInner} fill="none" stroke="#0f172a" strokeWidth={swInner} />
-                  <circle cx={cx} cy={cy} r={rOuter} fill="none" stroke={bbColor} strokeWidth={swOuter} strokeLinecap="round"
-                    strokeDasharray={`${bbPct * circumOuter} ${circumOuter}`} transform={`rotate(-90 ${cx} ${cy})`}
-                    filter={bb != null && bb >= 40 ? 'url(#glowCyan)' : undefined} />
-                  <circle cx={cx} cy={cy} r={rInner} fill="none" stroke={sleepColor} strokeWidth={swInner} strokeLinecap="round"
-                    strokeDasharray={`${sleepPct * circumInner} ${circumInner}`} transform={`rotate(-90 ${cx} ${cy})`}
-                    filter="url(#glowIndigo)" />
-                  <text x={cx} y={cy - 5} textAnchor="middle" fill="white" fontSize="28" fontWeight="800" fontFamily="system-ui,sans-serif">
-                    {bb ?? '—'}
-                  </text>
-                  <text x={cx} y={cy + 11} textAnchor="middle" fontSize="7.5" fontFamily="system-ui,sans-serif" letterSpacing="2" fill="#94a3b8">BATTERY</text>
-                  <text x={cx} y={cy + 23} textAnchor="middle" fontSize="7.5" fontFamily="system-ui,sans-serif" letterSpacing="1.5" fill={sleepColor}>{sleep ?? '—'} SLEEP</text>
-                </svg>
-                <div className="flex gap-4 mt-1.5 w-full justify-center">
-                  <div className="text-center">
-                    <p className="text-sm font-bold tabular-nums" style={{ color: bbColor }}>{bb != null ? `${bb}` : '—'}</p>
-                    <p className="text-[8px] uppercase tracking-widest mt-0.5" style={{ color: '#475569' }}>{bbLabel}</p>
+              <>
+                <button type="button" onClick={() => setOpenTile('vitals')}
+                  className="rounded-3xl p-4 flex flex-col items-center w-full text-left transition-opacity hover:opacity-90 active:opacity-75"
+                  style={{ background: 'linear-gradient(160deg,#0f1629 0%,#0a0f1e 100%)', border: '1px solid #1e293b' }}>
+                  <div className="flex items-center justify-center gap-1.5 mb-3">
+                    <p className="text-[11px] font-bold tracking-[0.2em]" style={{ color: '#22d3ee' }}>VITALS</p>
+                    <span className="text-[10px] text-slate-600 cursor-pointer" title="Tap for details">ⓘ</span>
                   </div>
-                  <div className="w-px" style={{ background: '#1e293b' }} />
-                  <div className="text-center">
-                    <p className="text-sm font-bold tabular-nums" style={{ color: sleepColor }}>{sleep ?? '—'}</p>
-                    <p className="text-[8px] uppercase tracking-widest mt-0.5" style={{ color: '#475569' }}>Sleep</p>
+                  <svg viewBox="0 0 180 180" className="w-36 h-36">
+                    <defs>
+                      <filter id="glowCyan" x="-50%" y="-50%" width="200%" height="200%">
+                        <feGaussianBlur stdDeviation="3.5" result="blur" />
+                        <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+                      </filter>
+                      <filter id="glowIndigo" x="-50%" y="-50%" width="200%" height="200%">
+                        <feGaussianBlur stdDeviation="2.5" result="blur" />
+                        <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+                      </filter>
+                    </defs>
+                    <circle cx={cx} cy={cy} r={rOuter} fill="none" stroke="#0f172a" strokeWidth={swOuter} />
+                    <circle cx={cx} cy={cy} r={rInner} fill="none" stroke="#0f172a" strokeWidth={swInner} />
+                    <circle cx={cx} cy={cy} r={rOuter} fill="none" stroke={bbColor} strokeWidth={swOuter} strokeLinecap="round"
+                      strokeDasharray={`${bbPct * circumOuter} ${circumOuter}`} transform={`rotate(-90 ${cx} ${cy})`}
+                      filter={bb != null && bb >= 40 ? 'url(#glowCyan)' : undefined} />
+                    <circle cx={cx} cy={cy} r={rInner} fill="none" stroke={sleepColor} strokeWidth={swInner} strokeLinecap="round"
+                      strokeDasharray={`${sleepPct * circumInner} ${circumInner}`} transform={`rotate(-90 ${cx} ${cy})`}
+                      filter="url(#glowIndigo)" />
+                    <text x={cx} y={cy - 6} textAnchor="middle" fill="white" fontSize="30" fontWeight="800" fontFamily="system-ui,sans-serif">
+                      {bb ?? '—'}
+                    </text>
+                    <text x={cx} y={cy + 13} textAnchor="middle" fontSize="9" fontFamily="system-ui,sans-serif" letterSpacing="1.5" fill="#94a3b8">BATTERY</text>
+                    <text x={cx} y={cy + 26} textAnchor="middle" fontSize="9" fontFamily="system-ui,sans-serif" letterSpacing="1.5" fill={sleepColor}>{sleep ?? '—'} SLEEP</text>
+                  </svg>
+                  <div className="flex gap-4 mt-2 w-full justify-center">
+                    <div className="text-center">
+                      <p className="text-base font-bold tabular-nums" style={{ color: bbColor }}>{bb ?? '—'}</p>
+                      <p className="text-[10px] uppercase tracking-wider mt-0.5" style={{ color: '#475569' }}>{bbLabel}</p>
+                    </div>
+                    <div className="w-px" style={{ background: '#1e293b' }} />
+                    <div className="text-center">
+                      <p className="text-base font-bold tabular-nums" style={{ color: sleepColor }}>{sleep ?? '—'}</p>
+                      <p className="text-[10px] uppercase tracking-wider mt-0.5" style={{ color: '#475569' }}>Sleep</p>
+                    </div>
+                    {stress != null && (
+                      <>
+                        <div className="w-px" style={{ background: '#1e293b' }} />
+                        <div className="text-center">
+                          <p className="text-base font-bold tabular-nums text-slate-400">{Math.round(stress)}</p>
+                          <p className="text-[10px] uppercase tracking-wider mt-0.5" style={{ color: '#475569' }}>Stress</p>
+                        </div>
+                      </>
+                    )}
                   </div>
-                  {stress != null && (
-                    <>
-                      <div className="w-px" style={{ background: '#1e293b' }} />
-                      <div className="text-center">
-                        <p className="text-sm font-bold tabular-nums text-slate-400">{Math.round(stress)}</p>
-                        <p className="text-[8px] uppercase tracking-widest mt-0.5" style={{ color: '#475569' }}>Stress</p>
+                </button>
+
+                <DetailModal open={openTile === 'vitals'} onClose={() => setOpenTile(null)}
+                  title="Vitals" subtitle={bbLabel} icon="🔋"
+                  gradient="from-cyan-950/60 via-gray-900 to-gray-950" border="border-cyan-800/30">
+                  <div className="space-y-4 text-sm">
+                    <p className="text-gray-300 leading-relaxed">
+                      Vitals tracks two key energy signals throughout your day — how much energy Garmin estimates you have available (Body Battery), and how well you actually slept.
+                    </p>
+                    <div className="bg-gray-800/60 rounded-2xl p-4 space-y-4">
+                      <div>
+                        <div className="flex justify-between items-start mb-1">
+                          <p className="font-medium" style={{ color: '#22d3ee' }}>Body Battery <span className="text-gray-500 text-xs font-normal">(outer ring)</span></p>
+                          <p className="font-bold tabular-nums text-lg" style={{ color: bbColor }}>{bb ?? '—'}<span className="text-xs text-gray-500">/100</span></p>
+                        </div>
+                        <p className="text-gray-400 text-xs leading-relaxed">Garmin&apos;s proprietary energy reserve score. It charges while you sleep and depletes with activity and stress. Think of it as your phone battery — it reflects how much you have left to spend.</p>
+                        <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-center">
+                          <div className="bg-gray-700/50 rounded-xl p-2"><p style={{ color: '#22d3ee' }} className="font-bold">70–100</p><p className="text-gray-500 mt-0.5">Charged</p></div>
+                          <div className="bg-gray-700/50 rounded-xl p-2"><p style={{ color: '#fb923c' }} className="font-bold">40–69</p><p className="text-gray-500 mt-0.5">Draining</p></div>
+                          <div className="bg-gray-700/50 rounded-xl p-2"><p style={{ color: '#f43f5e' }} className="font-bold">0–39</p><p className="text-gray-500 mt-0.5">Depleted</p></div>
+                        </div>
                       </div>
-                    </>
-                  )}
-                </div>
-              </div>
+                      <div className="border-t border-gray-700/50 pt-4">
+                        <div className="flex justify-between items-start mb-1">
+                          <p className="font-medium" style={{ color: sleepColor }}>Sleep Score <span className="text-gray-500 text-xs font-normal">(inner ring)</span></p>
+                          <p className="font-bold tabular-nums text-lg" style={{ color: sleepColor }}>{sleep ?? '—'}<span className="text-xs text-gray-500">/100</span></p>
+                        </div>
+                        <p className="text-gray-400 text-xs leading-relaxed">Garmin&apos;s composite sleep quality score factoring in duration, deep sleep %, REM sleep %, and restlessness. Below 60 suggests poor recovery; above 75 is restorative sleep.</p>
+                      </div>
+                      {stress != null && (
+                        <div className="border-t border-gray-700/50 pt-4">
+                          <div className="flex justify-between items-start mb-1">
+                            <p className="font-medium text-slate-300">Stress Level</p>
+                            <p className="font-bold tabular-nums text-lg text-slate-300">{Math.round(stress)}<span className="text-xs text-gray-500">/100</span></p>
+                          </div>
+                          <p className="text-gray-400 text-xs leading-relaxed">Measured via HRV variability throughout the day. Above 50 indicates high physiological stress — this will accelerate Battery drain even without exercise.</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </DetailModal>
+              </>
             )
           })()}
         </div>
