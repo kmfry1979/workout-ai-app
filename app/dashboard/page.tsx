@@ -2142,9 +2142,14 @@ export default function DashboardPage() {
 
         {/* Dual metric tiles — half width each */}
         <div className="grid grid-cols-2 gap-3">
-          {/* Tile 1: Daily Form (readiness + load) */}
+          {/* Tile 1: Power Reserve + Load */}
           {(() => {
             const clampV = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
+            const lerpHex = (c1: string, c2: string, t: number) => {
+              const r1 = parseInt(c1.slice(1,3),16), g1 = parseInt(c1.slice(3,5),16), b1 = parseInt(c1.slice(5,7),16)
+              const r2 = parseInt(c2.slice(1,3),16), g2 = parseInt(c2.slice(3,5),16), b2 = parseInt(c2.slice(5,7),16)
+              return `#${Math.round(r1+(r2-r1)*t).toString(16).padStart(2,'0')}${Math.round(g1+(g2-g1)*t).toString(16).padStart(2,'0')}${Math.round(b1+(b2-b1)*t).toString(16).padStart(2,'0')}`
+            }
             const hrv = dailyHealth?.hrv_avg ?? metrics?.garmin_hrv_nightly_avg ?? null
             const sleepScore = sleepData?.sleep_score ?? metrics?.garmin_sleep_score ?? null
             const rhr = metrics?.resting_hr ?? metrics?.resting_heart_rate_bpm ?? null
@@ -2152,27 +2157,29 @@ export default function DashboardPage() {
             if (hrv != null) { recScore += ((clampV(hrv, 20, 120) - 20) / 100) * 100 * 0.45; recWeight += 0.45 }
             if (sleepScore != null) { recScore += sleepScore * 0.35; recWeight += 0.35 }
             if (rhr != null) { recScore += (100 - ((clampV(rhr, 40, 80) - 40) / 40) * 100) * 0.20; recWeight += 0.20 }
-            const form = recWeight > 0 ? Math.round(recScore / recWeight) : null
+            const reserve = recWeight > 0 ? Math.round(recScore / recWeight) : null
             const modMin = dailySteps?.moderate_intensity_minutes ?? null
             const vigMin = dailySteps?.vigorous_intensity_minutes ?? null
             const activeMin = dailySteps?.active_minutes ?? null
             const intensityMin = modMin != null || vigMin != null ? (modMin ?? 0) + (vigMin ?? 0) * 2 : (activeMin ?? 0) * 0.6
             const load = Math.min(21, 21 * Math.log10(1 + intensityMin) / Math.log10(301))
-            const formColor = form == null ? '#6b7280' : form >= 67 ? '#21FF00' : form >= 34 ? '#f97316' : '#FF0000'
-            const formLabel = form == null ? '—' : form >= 67 ? 'Peaked' : form >= 34 ? 'Building' : 'Fatigued'
+            const reservePct = reserve != null ? clampV(reserve, 0, 100) / 100 : 0
+            const loadPct = clampV(load, 0, 21) / 21
+            // Orange (#f97316) when full → Red (#dc2626) as reserve depletes
+            const reserveColor = reserve != null ? lerpHex('#f97316', '#dc2626', 1 - reservePct) : '#475569'
+            // Cool blue (#3b82f6) at low load → Electric teal (#2dd4bf) at high load
+            const loadColor = lerpHex('#3b82f6', '#2dd4bf', loadPct)
+            const reserveLabel = reserve == null ? '—' : reserve >= 80 ? 'Deep Reserve' : reserve >= 67 ? 'Charged' : reserve >= 34 ? 'Building' : 'Reserve Deficit'
             const cx = 90, cy = 90
-            const rOuter = 68, rInner = 52, swOuter = 8, swInner = 12
+            const rOuter = 68, rInner = 52, swOuter = 9, swInner = 12
             const circumOuter = 2 * Math.PI * rOuter
             const circumInner = 2 * Math.PI * rInner
-            const formPct = form != null ? clampV(form, 0, 100) / 100 : 0
-            const loadPct = clampV(load, 0, 21) / 21
-            const loadColor = '#38bdf8'
             return (
               <div className="rounded-3xl p-4 flex flex-col items-center" style={{ background: 'linear-gradient(160deg,#0f1629 0%,#0a0f1e 100%)', border: '1px solid #1e293b' }}>
-                <p className="text-[10px] font-bold mb-3 text-center tracking-[0.2em]" style={{ color: formColor === '#6b7280' ? '#475569' : formColor }}>DAILY FORM</p>
+                <p className="text-[10px] font-bold mb-3 text-center tracking-[0.2em]" style={{ color: reserveColor }}>RESERVE</p>
                 <svg viewBox="0 0 180 180" className="w-36 h-36">
                   <defs>
-                    <filter id="glowForm" x="-50%" y="-50%" width="200%" height="200%">
+                    <filter id="glowReserve" x="-50%" y="-50%" width="200%" height="200%">
                       <feGaussianBlur stdDeviation="3.5" result="blur" />
                       <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
                     </filter>
@@ -2183,27 +2190,27 @@ export default function DashboardPage() {
                   </defs>
                   <circle cx={cx} cy={cy} r={rOuter} fill="none" stroke="#0f172a" strokeWidth={swOuter} />
                   <circle cx={cx} cy={cy} r={rInner} fill="none" stroke="#0f172a" strokeWidth={swInner} />
-                  <circle cx={cx} cy={cy} r={rOuter} fill="none" stroke={formColor} strokeWidth={swOuter} strokeLinecap="round"
-                    strokeDasharray={`${formPct * circumOuter} ${circumOuter}`} transform={`rotate(-90 ${cx} ${cy})`}
-                    filter={form != null ? 'url(#glowForm)' : undefined} />
+                  <circle cx={cx} cy={cy} r={rOuter} fill="none" stroke={reserveColor} strokeWidth={swOuter} strokeLinecap="round"
+                    strokeDasharray={`${reservePct * circumOuter} ${circumOuter}`} transform={`rotate(-90 ${cx} ${cy})`}
+                    filter={reserve != null ? 'url(#glowReserve)' : undefined} />
                   <circle cx={cx} cy={cy} r={rInner} fill="none" stroke={loadColor} strokeWidth={swInner} strokeLinecap="round"
                     strokeDasharray={`${loadPct * circumInner} ${circumInner}`} transform={`rotate(-90 ${cx} ${cy})`}
                     filter="url(#glowLoad)" />
                   <text x={cx} y={cy - 5} textAnchor="middle" fill="white" fontSize="28" fontWeight="800" fontFamily="system-ui,sans-serif">
-                    {form ?? '—'}
+                    {reserve ?? '—'}
                   </text>
-                  <text x={cx} y={cy + 11} textAnchor="middle" fontSize="7.5" fontFamily="system-ui,sans-serif" letterSpacing="2" fill="#94a3b8">FORM</text>
+                  <text x={cx} y={cy + 11} textAnchor="middle" fontSize="7.5" fontFamily="system-ui,sans-serif" letterSpacing="2" fill="#94a3b8">RESERVE</text>
                   <text x={cx} y={cy + 23} textAnchor="middle" fontSize="7.5" fontFamily="system-ui,sans-serif" letterSpacing="1.5" fill={loadColor}>{load.toFixed(1)} LOAD</text>
                 </svg>
                 <div className="flex gap-4 mt-1.5 w-full justify-center">
                   <div className="text-center">
-                    <p className="text-sm font-bold tabular-nums" style={{ color: formColor }}>{form != null ? `${form}` : '—'}</p>
-                    <p className="text-[8px] uppercase tracking-widest mt-0.5" style={{ color: '#475569' }}>{formLabel}</p>
+                    <p className="text-sm font-bold tabular-nums" style={{ color: reserveColor }}>{reserve ?? '—'}</p>
+                    <p className="text-[8px] uppercase tracking-widest mt-0.5" style={{ color: '#475569' }}>{reserveLabel}</p>
                   </div>
                   <div className="w-px" style={{ background: '#1e293b' }} />
                   <div className="text-center">
                     <p className="text-sm font-bold tabular-nums" style={{ color: loadColor }}>{load.toFixed(1)}</p>
-                    <p className="text-[8px] uppercase tracking-widest mt-0.5" style={{ color: '#475569' }}>Load/21</p>
+                    <p className="text-[8px] uppercase tracking-widest mt-0.5" style={{ color: '#475569' }}>Load / 21</p>
                   </div>
                 </div>
               </div>
