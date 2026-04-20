@@ -541,6 +541,9 @@ export default function DashboardPage() {
   const [openDetail, setOpenDetail] = useState<DetailKey | null>(null)
   const closeDetail = () => setOpenDetail(null)
   const [openTile, setOpenTile] = useState<'reserve' | 'vitals' | 'battery' | null>(null)
+  const [intradayBB, setIntradayBB] = useState<{ recorded_at: string; level: number }[]>([])
+  const [intradayLoading, setIntradayLoading] = useState(false)
+  const [userId, setUserId] = useState<string | null>(null)
   const [stepsHistory, setStepsHistory] = useState<{ step_date: string; total_steps: number | null }[]>([])
   const [hourlySteps, setHourlySteps] = useState<Record<string, number> | null>(null)
   const [stepsTab, setStepsTab] = useState<'day' | 'week' | 'month' | 'year'>('day')
@@ -578,6 +581,20 @@ export default function DashboardPage() {
     stress: (number | null)[]
     steps: (number | null)[]
   }>({ hrv: [], sleep: [], bodyBattery: [], restingHr: [], stress: [], steps: [] })
+
+  const loadIntradayBB = async (userId: string) => {
+    if (intradayLoading || intradayBB.length > 0) return
+    setIntradayLoading(true)
+    const today = new Date().toISOString().split('T')[0]
+    const { data } = await supabase
+      .from('garmin_intraday_body_battery')
+      .select('recorded_at, level')
+      .eq('user_id', userId)
+      .eq('metric_date', today)
+      .order('recorded_at', { ascending: true })
+    setIntradayBB((data ?? []) as { recorded_at: string; level: number }[])
+    setIntradayLoading(false)
+  }
 
   const loadLastSync = async (userId: string) => {
     const { data } = await supabase
@@ -808,6 +825,7 @@ export default function DashboardPage() {
       setStepGoal(loadedGoal)
       setStepGoalInput(String(loadedGoal))
 
+      setUserId(user.id)
       await Promise.all([loadDashboardData(user.id), loadLastSync(user.id)])
       setLoading(false)
     }
@@ -2402,7 +2420,7 @@ export default function DashboardPage() {
             const fillY = bY + (bH - fillH) - 4
             return (
               <>
-                <button type="button" onClick={() => setOpenTile('battery')}
+                <button type="button" onClick={() => { setOpenTile('battery'); if (userId) loadIntradayBB(userId) }}
                   className="rounded-2xl p-3 flex flex-col items-center w-full transition-opacity hover:opacity-90 active:opacity-75"
                   style={{ background: 'linear-gradient(160deg,#0f1629 0%,#0a0f1e 100%)', border: '1px solid #1e293b' }}>
                   <div className="flex items-center justify-center gap-1 mb-2">
@@ -2517,6 +2535,65 @@ export default function DashboardPage() {
                             </div>
                           </div>
                         )}
+
+                        {/* Intraday chart */}
+                        <div className="bg-gray-800/60 rounded-2xl p-4">
+                          <p className="text-xs text-gray-400 uppercase tracking-wider font-semibold mb-3">Body Battery — Today</p>
+                          {intradayLoading && (
+                            <div className="flex items-center gap-2 text-gray-500 text-xs py-4 justify-center">
+                              <span className="w-3 h-3 border border-gray-400 border-t-transparent rounded-full animate-spin" />
+                              Loading chart...
+                            </div>
+                          )}
+                          {!intradayLoading && intradayBB.length > 1 && (() => {
+                            const W = 320, H = 80, pad = 4
+                            const levels = intradayBB.map(d => d.level)
+                            const minL = 0, maxL = 100
+                            const xScale = (i: number) => pad + (i / (intradayBB.length - 1)) * (W - pad * 2)
+                            const yScale = (v: number) => H - pad - ((v - minL) / (maxL - minL)) * (H - pad * 2)
+                            const points = intradayBB.map((d, i) => `${xScale(i)},${yScale(d.level)}`).join(' ')
+                            const areaPoints = `${xScale(0)},${H - pad} ${points} ${xScale(intradayBB.length - 1)},${H - pad}`
+                            // Color based on final value
+                            const lineColor = fillColor
+                            // Hour labels — show every 4h
+                            const hourLabels: { x: number; label: string }[] = []
+                            intradayBB.forEach((d, i) => {
+                              const h = new Date(d.recorded_at).getHours()
+                              const m = new Date(d.recorded_at).getMinutes()
+                              if (m < 15 && (h % 4 === 0)) {
+                                hourLabels.push({ x: xScale(i), label: `${h}:00` })
+                              }
+                            })
+                            return (
+                              <svg viewBox={`0 0 ${W} ${H + 16}`} className="w-full">
+                                <defs>
+                                  <linearGradient id="bbAreaGrad" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="0%" stopColor={lineColor} stopOpacity="0.3" />
+                                    <stop offset="100%" stopColor={lineColor} stopOpacity="0.02" />
+                                  </linearGradient>
+                                </defs>
+                                {/* Grid lines at 25, 50, 75 */}
+                                {[25, 50, 75].map(v => (
+                                  <g key={v}>
+                                    <line x1={pad} y1={yScale(v)} x2={W - pad} y2={yScale(v)} stroke="#1e293b" strokeWidth={0.75} strokeDasharray="3,3" />
+                                    <text x={W - pad + 2} y={yScale(v) + 3} fontSize="7" fill="#374151" textAnchor="start">{v}</text>
+                                  </g>
+                                ))}
+                                {/* Area fill */}
+                                <polygon points={areaPoints} fill="url(#bbAreaGrad)" />
+                                {/* Line */}
+                                <polyline points={points} fill="none" stroke={lineColor} strokeWidth={1.75} strokeLinejoin="round" strokeLinecap="round" />
+                                {/* Hour labels */}
+                                {hourLabels.map(({ x, label }) => (
+                                  <text key={label} x={x} y={H + 13} textAnchor="middle" fontSize="7" fill="#475569">{label}</text>
+                                ))}
+                              </svg>
+                            )
+                          })()}
+                          {!intradayLoading && intradayBB.length === 0 && (
+                            <p className="text-gray-600 text-xs text-center py-3">No intraday data yet — run a sync to populate</p>
+                          )}
+                        </div>
 
                         {/* Factors */}
                         <div className="bg-gray-800/60 rounded-2xl p-4 space-y-1">

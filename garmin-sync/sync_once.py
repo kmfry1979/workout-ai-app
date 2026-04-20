@@ -1115,6 +1115,62 @@ def upsert_daily_steps(
     print(f"  Upserted garmin_daily_steps for {date_iso} (total: {extracted['total_steps']})")
 
 
+def upsert_intraday_body_battery(
+    user_id: str,
+    connection_id: str,
+    date_iso: str,
+    bb_readings: list[dict[str, Any]],
+) -> int:
+    """
+    Extract per-reading body battery values from the raw API response and upsert
+    each one into garmin_intraday_body_battery.  Returns number of rows written.
+    """
+    rows = []
+    for entry in bb_readings or []:
+        if not isinstance(entry, dict):
+            continue
+        values = entry.get("bodyBatteryValuesArray") or entry.get("values") or []
+        for row in values:
+            ts_ms: Optional[int] = None
+            level: Optional[int] = None
+            status: Optional[str] = None
+            if isinstance(row, (list, tuple)):
+                ts_ms = as_int(row[0]) if len(row) > 0 else None
+                status = str(row[1]) if len(row) > 1 and row[1] is not None else None
+                for idx in (2, 1):
+                    if len(row) > idx and row[idx] is not None:
+                        level = as_int(row[idx])
+                        if level is not None:
+                            break
+            elif isinstance(row, dict):
+                ts_ms = as_int(row.get("startTimestampLocal") or row.get("timestamp"))
+                level = as_int(row.get("bodyBatteryLevel") or row.get("level") or row.get("value"))
+                status = str(row.get("activityType") or row.get("status") or "")
+            if ts_ms and level is not None:
+                ts_iso = _ms_epoch_to_iso(ts_ms)
+                if ts_iso:
+                    rows.append({
+                        "user_id": user_id,
+                        "connection_id": connection_id,
+                        "metric_date": date_iso,
+                        "recorded_at": ts_iso,
+                        "level": level,
+                        "status": status,
+                        "created_at": utc_now_iso(),
+                    })
+
+    for row in rows:
+        supabase_upsert(
+            "garmin_intraday_body_battery",
+            row,
+            on_conflict="connection_id,recorded_at",
+        )
+
+    if rows:
+        print(f"  Upserted {len(rows)} intraday body battery readings for {date_iso}")
+    return len(rows)
+
+
 def sync_recent_garmin_activities(api: Garmin, user_id: str, connection_id: str) -> int:
     success, activities, err = safe_call(api.get_activities, 0, ACTIVITY_LIMIT)
     if not success or activities is None:
@@ -1232,6 +1288,7 @@ def main() -> None:
             summary, hydration, hrv, bb, spo2,
         )
         upsert_daily_steps(SUPABASE_USER_ID, connection_id, date_iso, summary, steps_buckets)
+        upsert_intraday_body_battery(SUPABASE_USER_ID, connection_id, date_iso, bb)
 
     progress("Syncing recent activities", stage="activities", percent=97)
     activity_count = sync_recent_garmin_activities(api, SUPABASE_USER_ID, connection_id)
