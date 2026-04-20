@@ -77,6 +77,8 @@ type ActivitySummary = {
   duration_sec: number | null
   activity_type: string | null
   start_time: string
+  calories?: number | null
+  raw_payload?: Record<string, unknown> | null
 }
 
 function clamp(val: number, min: number, max: number) {
@@ -751,7 +753,7 @@ export default function DashboardPage() {
     const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString()
     const { data: acts } = await supabase
       .from('garmin_activities')
-      .select('duration_sec, activity_type, start_time')
+      .select('duration_sec, activity_type, start_time, calories, raw_payload')
       .eq('user_id', userId)
       .gte('start_time', weekAgo)
       .order('start_time', { ascending: false })
