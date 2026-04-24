@@ -2316,102 +2316,111 @@ export default function DashboardPage() {
             )
           })()}
 
-          {/* Tile 2: Vitals (body battery + sleep score) */}
+          {/* Tile 2: Vitals (HRV + RHR) */}
           {(() => {
             const clampV = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
-            const bb = dailyHealth?.body_battery_end ?? metrics?.garmin_body_battery_eod ?? null
-            const sleep = sleepData?.sleep_score ?? metrics?.garmin_sleep_score ?? null
+            const hrv = dailyHealth?.hrv_avg ?? metrics?.garmin_hrv_nightly_avg ?? null
+            const rhr = metrics?.resting_hr ?? metrics?.resting_heart_rate_bpm ?? null
             const stress = dailyHealth?.stress_avg ?? metrics?.garmin_stress_avg ?? null
-            const bbColor = bb == null ? '#475569' : bb >= 70 ? '#22d3ee' : bb >= 40 ? '#fb923c' : '#f43f5e'
-            const bbLabel = bb == null ? '—' : bb >= 70 ? 'Charged' : bb >= 40 ? 'Draining' : 'Depleted'
-            const sleepColor = '#818cf8'
+            // HRV: 20–120ms → 0–100%, purple
+            const hrvPct = hrv != null ? clampV((hrv - 20) / 100, 0, 1) : 0
+            const hrvColor = '#a855f7' // violet
+            const hrvStatus = hrv == null ? '—' : hrv >= 70 ? 'Excellent' : hrv >= 50 ? 'Good' : hrv >= 30 ? 'Fair' : 'Low'
+            // RHR: 40–80bpm → 0–100% (lower RHR = higher fill = healthier), rose
+            const rhrPct = rhr != null ? clampV((80 - rhr) / 40, 0, 1) : 0
+            const rhrColor = rhr == null ? '#475569' : rhr <= 55 ? '#22d3ee' : rhr <= 65 ? '#4ade80' : rhr <= 72 ? '#fb923c' : '#f43f5e'
             const cx = 90, cy = 90
             const rOuter = 68, rInner = 52, swOuter = 9, swInner = 12
             const circumOuter = 2 * Math.PI * rOuter
             const circumInner = 2 * Math.PI * rInner
-            const bbPct = bb != null ? clampV(bb, 0, 100) / 100 : 0
-            const sleepPct = sleep != null ? clampV(sleep, 0, 100) / 100 : 0
             return (
               <>
                 <button type="button" onClick={() => setOpenTile('vitals')}
                   className="rounded-2xl p-3 flex flex-col items-center w-full transition-opacity hover:opacity-90 active:opacity-75"
                   style={{ background: 'linear-gradient(160deg,#0f1629 0%,#0a0f1e 100%)', border: '1px solid #1e293b' }}>
                   <div className="flex items-center justify-center gap-1 mb-2">
-                    <p className="text-[9px] font-bold tracking-[0.15em]" style={{ color: '#22d3ee' }}>VITALS</p>
+                    <p className="text-[9px] font-bold tracking-[0.15em]" style={{ color: hrvColor }}>VITALS</p>
                     <span className="text-[9px] text-slate-600">ⓘ</span>
                   </div>
                   <svg viewBox="0 0 180 180" className="w-28 h-28">
                     <defs>
-                      <filter id="glowCyan" x="-50%" y="-50%" width="200%" height="200%">
+                      <filter id="glowHRV" x="-50%" y="-50%" width="200%" height="200%">
                         <feGaussianBlur stdDeviation="3.5" result="blur" />
                         <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
                       </filter>
-                      <filter id="glowIndigo" x="-50%" y="-50%" width="200%" height="200%">
+                      <filter id="glowRHR" x="-50%" y="-50%" width="200%" height="200%">
                         <feGaussianBlur stdDeviation="2.5" result="blur" />
                         <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
                       </filter>
                     </defs>
                     <circle cx={cx} cy={cy} r={rOuter} fill="none" stroke="#0f172a" strokeWidth={swOuter} />
                     <circle cx={cx} cy={cy} r={rInner} fill="none" stroke="#0f172a" strokeWidth={swInner} />
-                    <circle cx={cx} cy={cy} r={rOuter} fill="none" stroke={bbColor} strokeWidth={swOuter} strokeLinecap="round"
-                      strokeDasharray={`${bbPct * circumOuter} ${circumOuter}`} transform={`rotate(-90 ${cx} ${cy})`}
-                      filter={bb != null && bb >= 40 ? 'url(#glowCyan)' : undefined} />
-                    <circle cx={cx} cy={cy} r={rInner} fill="none" stroke={sleepColor} strokeWidth={swInner} strokeLinecap="round"
-                      strokeDasharray={`${sleepPct * circumInner} ${circumInner}`} transform={`rotate(-90 ${cx} ${cy})`}
-                      filter="url(#glowIndigo)" />
+                    <circle cx={cx} cy={cy} r={rOuter} fill="none" stroke={hrvColor} strokeWidth={swOuter} strokeLinecap="round"
+                      strokeDasharray={`${hrvPct * circumOuter} ${circumOuter}`} transform={`rotate(-90 ${cx} ${cy})`}
+                      filter={hrv != null ? 'url(#glowHRV)' : undefined} />
+                    <circle cx={cx} cy={cy} r={rInner} fill="none" stroke={rhrColor} strokeWidth={swInner} strokeLinecap="round"
+                      strokeDasharray={`${rhrPct * circumInner} ${circumInner}`} transform={`rotate(-90 ${cx} ${cy})`}
+                      filter={rhr != null ? 'url(#glowRHR)' : undefined} />
                     <text x={cx} y={cy - 4} textAnchor="middle" fill="white" fontSize="26" fontWeight="800" fontFamily="system-ui,sans-serif">
-                      {bb ?? '—'}
+                      {hrv != null ? Math.round(hrv) : '—'}
                     </text>
-                    <text x={cx} y={cy + 11} textAnchor="middle" fontSize="7.5" fontFamily="system-ui,sans-serif" letterSpacing="1" fill="#94a3b8">BATTERY</text>
-                    <text x={cx} y={cy + 23} textAnchor="middle" fontSize="7.5" fontFamily="system-ui,sans-serif" letterSpacing="1" fill={sleepColor}>{sleep ?? '—'} SLEEP</text>
+                    <text x={cx} y={cy + 11} textAnchor="middle" fontSize="7.5" fontFamily="system-ui,sans-serif" letterSpacing="1" fill={hrvColor}>HRV ms</text>
+                    <text x={cx} y={cy + 23} textAnchor="middle" fontSize="7.5" fontFamily="system-ui,sans-serif" letterSpacing="1" fill={rhrColor}>{rhr != null ? `${rhr} RHR` : '— RHR'}</text>
                   </svg>
                   <div className="flex gap-3 mt-1.5 w-full justify-center">
                     <div className="text-center">
-                      <p className="text-sm font-extrabold tabular-nums" style={{ color: bbColor }}>{bb ?? '—'}</p>
-                      <p className="text-[9px] font-bold uppercase tracking-wide mt-0.5" style={{ color: '#64748b' }}>{bbLabel}</p>
+                      <p className="text-sm font-extrabold tabular-nums" style={{ color: hrvColor }}>{hrv != null ? Math.round(hrv) : '—'}</p>
+                      <p className="text-[9px] font-bold uppercase tracking-wide mt-0.5" style={{ color: '#64748b' }}>{hrv != null ? `${hrvStatus}` : 'HRV'}</p>
                     </div>
                     <div className="w-px" style={{ background: '#1e293b' }} />
                     <div className="text-center">
-                      <p className="text-sm font-extrabold tabular-nums" style={{ color: sleepColor }}>{sleep ?? '—'}</p>
-                      <p className="text-[9px] font-bold uppercase tracking-wide mt-0.5" style={{ color: '#64748b' }}>Sleep</p>
+                      <p className="text-sm font-extrabold tabular-nums" style={{ color: rhrColor }}>{rhr ?? '—'}</p>
+                      <p className="text-[9px] font-bold uppercase tracking-wide mt-0.5" style={{ color: '#64748b' }}>RHR bpm</p>
                     </div>
                   </div>
                 </button>
 
                 <DetailModal open={openTile === 'vitals'} onClose={() => setOpenTile(null)}
-                  title="Vitals" subtitle={bbLabel} icon="🔋"
-                  gradient="from-cyan-950/60 via-gray-900 to-gray-950" border="border-cyan-800/30">
+                  title="Vitals" subtitle={`HRV ${hrv != null ? Math.round(hrv) + 'ms' : '—'} · RHR ${rhr ?? '—'} bpm`} icon="💓"
+                  gradient="from-violet-950/60 via-gray-900 to-gray-950" border="border-violet-800/30">
                   <div className="space-y-4 text-sm">
                     <p className="text-gray-300 leading-relaxed">
-                      Vitals tracks two key energy signals throughout your day — how much energy Garmin estimates you have available (Body Battery), and how well you actually slept.
+                      Core physiological markers measured during rest and sleep — the two signals that most reliably reveal how your body is coping with training and daily stress.
                     </p>
                     <div className="bg-gray-800/60 rounded-2xl p-4 space-y-4">
                       <div>
                         <div className="flex justify-between items-start mb-1">
-                          <p className="font-medium" style={{ color: '#22d3ee' }}>Body Battery <span className="text-gray-500 text-xs font-normal">(outer ring)</span></p>
-                          <p className="font-bold tabular-nums text-lg" style={{ color: bbColor }}>{bb ?? '—'}<span className="text-xs text-gray-500">/100</span></p>
+                          <p className="font-medium" style={{ color: hrvColor }}>HRV <span className="text-gray-500 text-xs font-normal">(outer ring)</span></p>
+                          <p className="font-bold tabular-nums text-lg" style={{ color: hrvColor }}>{hrv != null ? Math.round(hrv) : '—'}<span className="text-xs text-gray-500"> ms</span></p>
                         </div>
-                        <p className="text-gray-400 text-xs leading-relaxed">Garmin&apos;s proprietary energy reserve score. It charges while you sleep and depletes with activity and stress. Think of it as your phone battery — it reflects how much you have left to spend.</p>
-                        <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-center">
-                          <div className="bg-gray-700/50 rounded-xl p-2"><p style={{ color: '#22d3ee' }} className="font-bold">70–100</p><p className="text-gray-500 mt-0.5">Charged</p></div>
-                          <div className="bg-gray-700/50 rounded-xl p-2"><p style={{ color: '#fb923c' }} className="font-bold">40–69</p><p className="text-gray-500 mt-0.5">Draining</p></div>
-                          <div className="bg-gray-700/50 rounded-xl p-2"><p style={{ color: '#f43f5e' }} className="font-bold">0–39</p><p className="text-gray-500 mt-0.5">Depleted</p></div>
+                        <p className="text-gray-400 text-xs leading-relaxed">Heart Rate Variability — the millisecond variation between heartbeats during sleep. Higher HRV means your nervous system is in a parasympathetic (recovery) state. A drop of 10ms+ below your baseline is a strong signal to take it easy.</p>
+                        <div className="mt-2 grid grid-cols-4 gap-1.5 text-xs text-center">
+                          <div className="bg-gray-700/50 rounded-xl p-2"><p style={{ color: '#a855f7' }} className="font-bold">70+</p><p className="text-gray-500 mt-0.5">Excellent</p></div>
+                          <div className="bg-gray-700/50 rounded-xl p-2"><p style={{ color: '#818cf8' }} className="font-bold">50–69</p><p className="text-gray-500 mt-0.5">Good</p></div>
+                          <div className="bg-gray-700/50 rounded-xl p-2"><p style={{ color: '#fb923c' }} className="font-bold">30–49</p><p className="text-gray-500 mt-0.5">Fair</p></div>
+                          <div className="bg-gray-700/50 rounded-xl p-2"><p style={{ color: '#f43f5e' }} className="font-bold">&lt;30</p><p className="text-gray-500 mt-0.5">Low</p></div>
                         </div>
                       </div>
                       <div className="border-t border-gray-700/50 pt-4">
                         <div className="flex justify-between items-start mb-1">
-                          <p className="font-medium" style={{ color: sleepColor }}>Sleep Score <span className="text-gray-500 text-xs font-normal">(inner ring)</span></p>
-                          <p className="font-bold tabular-nums text-lg" style={{ color: sleepColor }}>{sleep ?? '—'}<span className="text-xs text-gray-500">/100</span></p>
+                          <p className="font-medium" style={{ color: rhrColor }}>Resting Heart Rate <span className="text-gray-500 text-xs font-normal">(inner ring)</span></p>
+                          <p className="font-bold tabular-nums text-lg" style={{ color: rhrColor }}>{rhr ?? '—'}<span className="text-xs text-gray-500"> bpm</span></p>
                         </div>
-                        <p className="text-gray-400 text-xs leading-relaxed">Garmin&apos;s composite sleep quality score factoring in duration, deep sleep %, REM sleep %, and restlessness. Below 60 suggests poor recovery; above 75 is restorative sleep.</p>
+                        <p className="text-gray-400 text-xs leading-relaxed">Your lowest heart rate during sleep. A rising RHR (even 2–3 bpm above your norm) often indicates under-recovery, oncoming illness, or accumulated fatigue. Elite endurance athletes typically see 40–50 bpm.</p>
+                        <div className="mt-2 grid grid-cols-4 gap-1.5 text-xs text-center">
+                          <div className="bg-gray-700/50 rounded-xl p-2"><p style={{ color: '#22d3ee' }} className="font-bold">≤55</p><p className="text-gray-500 mt-0.5">Athletic</p></div>
+                          <div className="bg-gray-700/50 rounded-xl p-2"><p style={{ color: '#4ade80' }} className="font-bold">56–65</p><p className="text-gray-500 mt-0.5">Good</p></div>
+                          <div className="bg-gray-700/50 rounded-xl p-2"><p style={{ color: '#fb923c' }} className="font-bold">66–72</p><p className="text-gray-500 mt-0.5">Fair</p></div>
+                          <div className="bg-gray-700/50 rounded-xl p-2"><p style={{ color: '#f43f5e' }} className="font-bold">73+</p><p className="text-gray-500 mt-0.5">High</p></div>
+                        </div>
                       </div>
                       {stress != null && (
                         <div className="border-t border-gray-700/50 pt-4">
                           <div className="flex justify-between items-start mb-1">
-                            <p className="font-medium text-slate-300">Stress Level</p>
-                            <p className="font-bold tabular-nums text-lg text-slate-300">{Math.round(stress)}<span className="text-xs text-gray-500">/100</span></p>
+                            <p className="font-medium text-amber-400">Stress</p>
+                            <p className="font-bold tabular-nums text-lg text-amber-400">{Math.round(stress)}<span className="text-xs text-gray-500">/100</span></p>
                           </div>
-                          <p className="text-gray-400 text-xs leading-relaxed">Measured via HRV variability throughout the day. Above 50 indicates high physiological stress — this will accelerate Battery drain even without exercise.</p>
+                          <p className="text-gray-400 text-xs leading-relaxed">Physiological stress estimated from HRV fluctuations throughout the day. Chronically high stress suppresses HRV and elevates RHR — the two signals in this tile.</p>
                         </div>
                       )}
                     </div>
