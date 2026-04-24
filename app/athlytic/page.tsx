@@ -185,6 +185,7 @@ export default function AthlyticPage() {
 
   return (
     <div className="min-h-screen pb-20" style={{ background: '#050505', fontFamily: 'system-ui,sans-serif' }}>
+      <div className="max-w-md mx-auto">
 
       {/* Header */}
       <div className="px-4 pt-6 pb-2 flex items-center justify-between">
@@ -435,6 +436,7 @@ export default function AthlyticPage() {
           </div>
         </div>
 
+      </div>
       </div>
       <BottomNav />
     </div>

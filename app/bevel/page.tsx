@@ -297,6 +297,7 @@ export default function BevelPage() {
 
   return (
     <div className="min-h-screen pb-20" style={{ background: '#060610', fontFamily: 'system-ui,sans-serif' }}>
+      <div className="max-w-md mx-auto">
 
       {/* Header */}
       <div className="px-4 pt-6 pb-2">
@@ -496,6 +497,7 @@ export default function BevelPage() {
           </div>
         </div>
 
+      </div>
       </div>
       <BottomNav />
     </div>
