@@ -206,12 +206,20 @@ export default function AthlyticPage() {
         )}
       </div>
 
+      {/* Methodology note */}
+      <div className="mx-4 mb-0 rounded-xl px-3 py-2.5" style={{ background: '#0a0a0a', border: '1px solid #1a1a1a' }}>
+        <p className="text-[10px] text-gray-500 leading-relaxed">
+          <span className="text-[#22c55e] font-bold">Recovery Score</span> uses your HRV relative to your personal 28-day baseline — the same approach Athlytic and Garmin use. It is <em>not</em> the same as Garmin&apos;s Training Readiness, but measures the same concept. <span className="text-gray-600">ACWR = Acute:Chronic Workload Ratio (7-day load ÷ 28-day average).</span>
+        </p>
+      </div>
+
       <div className="px-4 space-y-3">
 
         {/* Recovery ring */}
         <div className="rounded-2xl p-5 flex flex-col items-center"
           style={{ background: '#0a0a0a', border: '1px solid #1a1a1a' }}>
           <p className="text-[10px] font-bold tracking-[0.2em] text-gray-600 mb-2">RECOVERY SCORE</p>
+          <p className="text-[9px] text-gray-600 -mt-1 mb-2 text-center">HRV vs your 28d personal baseline · Sleep adjustment ±6pts</p>
 
           <svg viewBox="0 0 180 180" className="w-44 h-44">
             <defs>
@@ -326,6 +334,7 @@ export default function AthlyticPage() {
         {/* HRV 14-day bar chart */}
         <div className="rounded-2xl p-4" style={{ background: '#0a0a0a', border: '1px solid #1a1a1a' }}>
           <p className="text-[10px] font-bold tracking-widest text-gray-600 mb-3">HRV — 14 DAY TREND</p>
+          <p className="text-[9px] text-gray-600 -mt-2 mb-2">Green = above baseline · Yellow = within 8% · Red = below baseline</p>
           {last14.some(d => d.hrv != null) ? (
             <>
               <svg viewBox="0 0 280 75" className="w-full">
@@ -378,6 +387,7 @@ export default function AthlyticPage() {
         <div className="rounded-2xl p-4" style={{ background: '#0a0a0a', border: '1px solid #1a1a1a' }}>
           <div className="flex items-center justify-between mb-3">
             <p className="text-[10px] font-bold tracking-widest text-gray-600">TRAINING LOAD — 14 DAYS</p>
+            <p className="text-[9px] text-gray-600 -mt-2 mb-2">Intensity minutes weighted: moderate × 1, vigorous × 2. ACWR sweet spot: 0.8–1.3</p>
             {acwrData && (
               <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" style={{
                 color: acwrData.acwr <= 1.3 ? '#22c55e' : acwrData.acwr <= 1.5 ? '#eab308' : '#ef4444',

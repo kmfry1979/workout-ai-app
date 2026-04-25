@@ -313,12 +313,20 @@ export default function BevelPage() {
         </p>
       </div>
 
+      {/* Methodology note */}
+      <div className="mx-4 mb-0 rounded-xl px-3 py-2.5" style={{ background: '#0d0d1a', border: '1px solid #1a1a2e' }}>
+        <p className="text-[10px] text-gray-500 leading-relaxed">
+          <span style={{ color: '#a855f7' }} className="font-bold">Bevel Score</span> is a composite wellness index: Heart 30% (HRV+RHR) · Sleep 25% · Energy 20% (Body Battery) · Move 15% (steps) · Calm 10% (stress). Unlike Athlytic&apos;s training focus, Bevel measures holistic daily wellness.
+        </p>
+      </div>
+
       <div className="px-4 space-y-3">
 
         {/* Bevel Score ring */}
         <div className="rounded-2xl p-5 flex flex-col items-center"
           style={{ background: '#0d0d1a', border: '1px solid #1a1a2e' }}>
           <p className="text-[10px] font-bold tracking-[0.2em] text-gray-600 mb-2">BEVEL SCORE</p>
+          <p className="text-[9px] text-gray-600 -mt-1 mb-2 text-center">30-pillar composite · Updated on each sync</p>
           <svg viewBox="0 0 180 180" className="w-44 h-44">
             <defs>
               <filter id="bevelGlow" x="-50%" y="-50%" width="200%" height="200%">
@@ -389,6 +397,7 @@ export default function BevelPage() {
         <div className="rounded-2xl p-4" style={{ background: '#0d0d1a', border: '1px solid #1a1a2e' }}>
           <div className="flex items-center justify-between mb-3">
             <p className="text-[10px] font-bold tracking-widest text-gray-600">30-DAY TREND</p>
+            <p className="text-[9px] text-gray-600 -mt-2 mb-2">Your wellness score history · Higher is better · Aim for consistent 65+</p>
             {validTrend.length > 0 && (
               <span className="text-[10px] text-gray-600">
                 avg <strong style={{ color: '#a855f7' }}>{Math.round(mean(validTrend.map(d => d.score!)))}</strong>
@@ -443,6 +452,7 @@ export default function BevelPage() {
         {insights.length > 0 && (
           <div className="rounded-2xl p-4 space-y-3" style={{ background: '#0d0d1a', border: '1px solid #1a1a2e' }}>
             <p className="text-[10px] font-bold tracking-widest text-gray-600">INSIGHTS</p>
+            <p className="text-[9px] text-gray-600 -mt-2 mb-2">Algorithmically generated from your Garmin data patterns</p>
             {insights.map((insight, i) => (
               <div key={i} className="flex gap-3 items-start">
                 <div className="w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0" style={{ background: '#a855f7' }} />

@@ -63,11 +63,17 @@ function clamp(v: number, lo: number, hi: number) {
 
 // ─── Score Calculations ───────────────────────────────────────────────────────
 
-function calcRecovery(hrv: number | null, sleepScore: number | null, rhr: number | null): number | null {
+function calcRecovery(hrv: number | null, sleepScore: number | null, rhr: number | null, hrvStatus?: string | null): number | null {
+  const status = (hrvStatus ?? '').toLowerCase()
+  const hrvScore = hrv != null
+    ? status.includes('balanced') || status.includes('good') ? Math.min(85, 50 + (hrv - 30) * 1.5)
+    : status.includes('poor') || status.includes('low') ? Math.max(15, 40 - (40 - hrv))
+    : Math.max(0, Math.min(100, ((hrv - 20) / 60) * 100))
+    : null
   let score = 0, weight = 0
-  if (hrv != null) { score += ((clamp(hrv, 20, 120) - 20) / 100) * 100 * 0.45; weight += 0.45 }
+  if (hrvScore != null) { score += hrvScore * 0.45; weight += 0.45 }
   if (sleepScore != null) { score += sleepScore * 0.35; weight += 0.35 }
-  if (rhr != null) { score += (100 - ((clamp(rhr, 40, 80) - 40) / 40) * 100) * 0.20; weight += 0.20 }
+  if (rhr != null) { score += (100 - ((Math.max(40, Math.min(80, rhr)) - 40) / 40) * 100) * 0.20; weight += 0.20 }
   return weight > 0 ? Math.round(score / weight) : null
 }
 
@@ -518,7 +524,7 @@ export default function HealthPage() {
     if (!data || briefingLoading) return
     setBriefingLoading(true)
     try {
-      const recovery = calcRecovery(data.hrv, data.sleepScore, data.rhr)
+      const recovery = calcRecovery(data.hrv, data.sleepScore, data.rhr, data.hrvStatus)
       const strain = calcStrain(data.modIntMin, data.vigIntMin, data.activeMin)
       const warning = detectEarlyWarning(data.respiration ?? data.sleepRespiration, data.respirationHistory)
       const res = await fetch('/api/ai/snapshot', {
@@ -556,7 +562,7 @@ export default function HealthPage() {
     )
   }
 
-  const recovery = data ? calcRecovery(data.hrv, data.sleepScore, data.rhr) : null
+  const recovery = data ? calcRecovery(data.hrv, data.sleepScore, data.rhr, data.hrvStatus) : null
   const strain = data ? calcStrain(data.modIntMin, data.vigIntMin, data.activeMin) : 0
   const color = recoveryColor(recovery)
   const label = recoveryLabel(recovery)

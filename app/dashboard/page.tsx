@@ -563,6 +563,10 @@ export default function DashboardPage() {
   const [stepGoalInput, setStepGoalInput] = useState('10000')
   const [savingGoal, setSavingGoal] = useState(false)
 
+  const [checkin, setCheckin] = useState<number | null>(null) // 1-5
+  const [checkinSaving, setCheckinSaving] = useState(false)
+  const [checkinLoaded, setCheckinLoaded] = useState(false)
+
   // Settings + one-time backfill state
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [backfillOpen, setBackfillOpen] = useState(false)
@@ -629,6 +633,34 @@ export default function DashboardPage() {
       .eq('provider_type', 'garmin')
       .maybeSingle()
     setLastSyncAt(data?.last_successful_sync_at ?? null)
+  }
+
+  const loadCheckin = async (uid: string) => {
+    const today = new Date().toISOString().split('T')[0]
+    const { data } = await supabase
+      .from('daily_checkin')
+      .select('feeling_score')
+      .eq('user_id', uid)
+      .eq('check_date', today)
+      .maybeSingle()
+    setCheckin((data as { feeling_score: number } | null)?.feeling_score ?? null)
+    setCheckinLoaded(true)
+  }
+
+  const saveCheckin = async (score: number) => {
+    if (checkinSaving) return
+    setCheckinSaving(true)
+    setCheckin(score)
+    const today = new Date().toISOString().split('T')[0]
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return
+    await supabase.from('daily_checkin').upsert({
+      user_id: user.id,
+      check_date: today,
+      feeling_score: score,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'user_id,check_date' })
+    setCheckinSaving(false)
   }
 
   const loadDashboardData = async (userId: string) => {
@@ -832,6 +864,8 @@ export default function DashboardPage() {
       stress: dates.map(d => healthByDate.get(d)?.stress_avg ?? legacyByDate.get(d)?.garmin_stress_avg ?? null),
       steps: dates.map(d => legacyByDate.get(d)?.steps ?? null),
     })
+
+    await loadCheckin(userId)
   }
 
   useEffect(() => {
@@ -1033,19 +1067,25 @@ export default function DashboardPage() {
     try {
       const stepsVal = dailySteps?.total_steps ?? metrics?.steps ?? null
       const bodyBatteryEnd = dailyHealth?.body_battery_end ?? metrics?.garmin_body_battery_eod ?? null
-      // Use identical formula to the Readiness tile and Health page:
-      // 45% HRV (20–120ms range), 35% sleep score, 20% RHR (40–80bpm inverted)
       const _hrv = dailyHealth?.hrv_avg ?? metrics?.garmin_hrv_nightly_avg ?? null
+      const _hrvStatus = (dailyHealth?.hrv_status ?? metrics?.garmin_hrv_status ?? '').toLowerCase()
       const _sleep = sleepData?.sleep_score ?? metrics?.garmin_sleep_score ?? null
       const _rhr = metrics?.resting_hr ?? metrics?.resting_heart_rate_bpm ?? null
+      // HRV score: use Garmin's own status when available (they know your baseline),
+      // otherwise normalise raw value on 20–80ms range
+      const _hrvScore = _hrv != null
+        ? _hrvStatus.includes('balanced') || _hrvStatus.includes('good') ? Math.min(85, 50 + (_hrv - 30) * 1.5)
+        : _hrvStatus.includes('poor') || _hrvStatus.includes('low') ? Math.max(15, 40 - (40 - _hrv))
+        : Math.max(0, Math.min(100, ((_hrv - 20) / 60) * 100))  // fallback: 20–80ms range
+        : null
       let _rs = 0, _rw = 0
-      if (_hrv != null) { _rs += ((Math.max(20, Math.min(120, _hrv)) - 20) / 100) * 100 * 0.45; _rw += 0.45 }
+      if (_hrvScore != null) { _rs += _hrvScore * 0.45; _rw += 0.45 }
       if (_sleep != null) { _rs += _sleep * 0.35; _rw += 0.35 }
       if (_rhr != null) { _rs += (100 - ((Math.max(40, Math.min(80, _rhr)) - 40) / 40) * 100) * 0.20; _rw += 0.20 }
       const readinessScore = _rw > 0 ? Math.round(_rs / _rw) : null
       const readinessLbl = readinessScore == null ? null
-        : readinessScore >= 67 ? 'Recovered'
-        : readinessScore >= 34 ? 'Moderate'
+        : readinessScore >= 70 ? 'Well recovered'
+        : readinessScore >= 50 ? 'Moderate'
         : 'Low recovery'
       const recentActs = activities.slice(0, 7).map(a => ({
         type: a.activity_type?.replace(/_/g, ' ') ?? 'activity',
@@ -2207,10 +2247,16 @@ export default function DashboardPage() {
               return `#${Math.round(r1+(r2-r1)*t).toString(16).padStart(2,'0')}${Math.round(g1+(g2-g1)*t).toString(16).padStart(2,'0')}${Math.round(b1+(b2-b1)*t).toString(16).padStart(2,'0')}`
             }
             const hrv = dailyHealth?.hrv_avg ?? metrics?.garmin_hrv_nightly_avg ?? null
+            const hrvStatus = (dailyHealth?.hrv_status ?? metrics?.garmin_hrv_status ?? '').toLowerCase()
             const sleepScore = sleepData?.sleep_score ?? metrics?.garmin_sleep_score ?? null
             const rhr = metrics?.resting_hr ?? metrics?.resting_heart_rate_bpm ?? null
+            const hrvScore = hrv != null
+              ? hrvStatus.includes('balanced') || hrvStatus.includes('good') ? Math.min(85, 50 + (hrv - 30) * 1.5)
+              : hrvStatus.includes('poor') || hrvStatus.includes('low') ? Math.max(15, 40 - (40 - hrv))
+              : Math.max(0, Math.min(100, ((hrv - 20) / 60) * 100))
+              : null
             let recScore = 0, recWeight = 0
-            if (hrv != null) { recScore += ((clampV(hrv, 20, 120) - 20) / 100) * 100 * 0.45; recWeight += 0.45 }
+            if (hrvScore != null) { recScore += hrvScore * 0.45; recWeight += 0.45 }
             if (sleepScore != null) { recScore += sleepScore * 0.35; recWeight += 0.35 }
             if (rhr != null) { recScore += (100 - ((clampV(rhr, 40, 80) - 40) / 40) * 100) * 0.20; recWeight += 0.20 }
             const reserve = recWeight > 0 ? Math.round(recScore / recWeight) : null
@@ -2967,6 +3013,42 @@ export default function DashboardPage() {
               </div>
             )}
           </div>
+
+          {/* Daily Check-in */}
+          {checkinLoaded && (() => {
+            const feelings = [
+              { score: 1, emoji: '😴', label: 'Drained' },
+              { score: 2, emoji: '😕', label: 'Tired' },
+              { score: 3, emoji: '😐', label: 'OK' },
+              { score: 4, emoji: '😊', label: 'Good' },
+              { score: 5, emoji: '🤩', label: 'Great' },
+            ]
+            return (
+              <div className="rounded-2xl p-4" style={{ background: '#111827', border: '1px solid #1f2937' }}>
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-xs font-bold tracking-widest text-gray-400">
+                    {checkin ? '✓ TODAY\'S CHECK-IN' : 'HOW DO YOU FEEL TODAY?'}
+                  </p>
+                  {checkin && <span className="text-[10px] text-gray-600">Tap to update</span>}
+                </div>
+                <div className="flex justify-around">
+                  {feelings.map(f => (
+                    <button key={f.score} type="button" onClick={() => saveCheckin(f.score)}
+                      className="flex flex-col items-center gap-1 transition-all"
+                      style={{ opacity: checkin && checkin !== f.score ? 0.35 : 1 }}>
+                      <span className={`text-2xl transition-transform ${checkin === f.score ? 'scale-125' : 'hover:scale-110'}`}>
+                        {f.emoji}
+                      </span>
+                      <span className="text-[9px] font-medium"
+                        style={{ color: checkin === f.score ? '#f97316' : '#4b5563' }}>
+                        {f.label}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )
+          })()}
 
           {/* Daily Steps — full width */}
           {(dailySteps?.total_steps != null || metrics?.steps != null) ? (() => {
