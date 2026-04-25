@@ -111,6 +111,66 @@ function briefDescription(activity: GarminActivity): string {
     : base || 'Activity recorded.'
 }
 
+// ─── Streak helpers ───────────────────────────────────────────────────────────
+
+function localDs(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+}
+
+function calcActivityStreak(datestrs: string[]): number {
+  const set = new Set(datestrs)
+  const d = new Date(); d.setHours(0,0,0,0)
+  if (!set.has(localDs(d))) d.setDate(d.getDate() - 1)
+  let streak = 0
+  for (let i = 0; i < 366; i++) {
+    if (set.has(localDs(d))) { streak++; d.setDate(d.getDate() - 1) } else break
+  }
+  return streak
+}
+
+function ActivityStreakBanner({ streak, activityDateStrs }: { streak: number; activityDateStrs: string[] }) {
+  const dateSet = new Set(activityDateStrs)
+  const today = new Date(); today.setHours(0,0,0,0)
+  const todayStr = localDs(today)
+  const dow = (today.getDay() + 6) % 7
+  const DAY_LABELS = ['M','T','W','T','F','S','S']
+  const weekDays = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(today); d.setDate(today.getDate() - dow + i)
+    const ds = localDs(d)
+    return { label: DAY_LABELS[i], ds, isToday: ds === todayStr, isFuture: d > today, hasActivity: dateSet.has(ds) }
+  })
+  return (
+    <div className="bg-gray-900 rounded-2xl px-4 py-3 flex items-center gap-4">
+      <div className="flex flex-col items-center shrink-0 w-12">
+        <span className="text-3xl leading-none">🔥</span>
+        <span className="text-orange-400 font-bold text-xl leading-tight">{streak}</span>
+        <span className="text-gray-500 text-[10px] leading-none">{streak === 1 ? 'day' : 'days'}</span>
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-gray-400 text-[11px] font-semibold uppercase tracking-wider mb-2">Activity Streak</p>
+        <div className="flex justify-between">
+          {weekDays.map((wd, i) => (
+            <div key={i} className="flex flex-col items-center gap-1">
+              <span className="text-gray-600 text-[9px]">{wd.label}</span>
+              <div className="w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold"
+                style={wd.hasActivity
+                  ? { background: '#f97316', color: 'white' }
+                  : wd.isToday
+                  ? { background: 'transparent', border: '2px solid #f97316', color: '#f97316' }
+                  : wd.isFuture
+                  ? { background: 'transparent', border: '1px solid #1f2937' }
+                  : { background: '#1f2937', color: '#374151' }
+                }>
+                {wd.hasActivity ? '✓' : wd.isToday ? '·' : ''}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Card ─────────────────────────────────────────────────────────────────────
 
 function ActivityCard({ activity }: { activity: GarminActivity }) {
@@ -177,6 +237,8 @@ export default function ActivitiesPage() {
   const [loading, setLoading] = useState(true)
   const [activities, setActivities] = useState<GarminActivity[]>([])
   const [displayName, setDisplayName] = useState('')
+  const [streak, setStreak] = useState(0)
+  const [activityDateStrs, setActivityDateStrs] = useState<string[]>([])
 
   useEffect(() => {
     const load = async () => {
@@ -191,14 +253,29 @@ export default function ActivitiesPage() {
         .maybeSingle()
       setDisplayName(profile?.display_name ?? profile?.name ?? '')
 
-      const { data: acts } = await supabase
-        .from('garmin_activities')
-        .select('id, activity_type, start_time, duration_sec, distance_m, calories, avg_hr, max_hr, training_effect, raw_payload')
-        .eq('user_id', user.id)
-        .order('start_time', { ascending: false })
-        .limit(20)
+      const ninetyAgo = new Date(Date.now() - 90 * 86400000).toISOString()
 
-      setActivities((acts ?? []) as GarminActivity[])
+      const [actsRes, streakRes] = await Promise.all([
+        supabase
+          .from('garmin_activities')
+          .select('id, activity_type, start_time, duration_sec, distance_m, calories, avg_hr, max_hr, training_effect, raw_payload')
+          .eq('user_id', user.id)
+          .order('start_time', { ascending: false })
+          .limit(50),
+        supabase
+          .from('garmin_activities')
+          .select('start_time')
+          .eq('user_id', user.id)
+          .gte('start_time', ninetyAgo)
+          .order('start_time', { ascending: false }),
+      ])
+
+      setActivities((actsRes.data ?? []) as GarminActivity[])
+
+      const datestrs = [...new Set((streakRes.data ?? []).map((r: { start_time: string }) => localDs(new Date(r.start_time))))]
+      setActivityDateStrs(datestrs)
+      setStreak(calcActivityStreak(datestrs))
+
       setLoading(false)
     }
     load()
@@ -223,6 +300,8 @@ export default function ActivitiesPage() {
           </div>
           {displayName && <p className="text-gray-500 text-sm">{displayName}</p>}
         </div>
+
+        {streak > 0 && <ActivityStreakBanner streak={streak} activityDateStrs={activityDateStrs} />}
 
         {activities.length === 0 ? (
           <div className="bg-gray-900 rounded-2xl p-8 text-center">
