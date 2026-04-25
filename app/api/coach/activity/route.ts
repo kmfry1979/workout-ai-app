@@ -8,7 +8,19 @@ function fmtPace(mps: number): string {
   return `${Math.floor(spk / 60)}:${String(spk % 60).padStart(2, '0')}/km`
 }
 
-function buildPrompt(activity: Record<string, unknown>, recentActivities: Record<string, unknown>[]): string {
+type TreadmillSegment = { start_min: number; end_min: number; incline_pct: number | null; speed_kmh: number | null; description: string }
+
+function treadmillSegmentsToText(segments: TreadmillSegment[]): string {
+  const parts = segments.map(s => {
+    const incline = s.incline_pct != null ? (s.incline_pct === 0 ? 'flat (0%)' : `${s.incline_pct}% incline`) : ''
+    const speed = s.speed_kmh != null ? `${s.speed_kmh} km/h` : ''
+    const detail = [incline, speed].filter(Boolean).join(', ')
+    return `${s.start_min}–${s.end_min} min: ${detail || s.description}`
+  })
+  return parts.join(' | ')
+}
+
+function buildPrompt(activity: Record<string, unknown>, recentActivities: Record<string, unknown>[], treadmillSegments?: TreadmillSegment[] | null): string {
   const raw = (activity.raw_payload ?? {}) as Record<string, unknown>
 
   const rawTypeKey = (raw.activityType as Record<string, unknown> | undefined)?.typeKey as string | undefined
@@ -82,6 +94,9 @@ function buildPrompt(activity: Record<string, unknown>, recentActivities: Record
     vo2max ? `VO2 Max: ${vo2max} ml/kg/min` : null,
     elevGain ? `Elevation gain: ${Math.round(Number(elevGain))}m` : null,
     comparisonStr ? `Comparison (${comparisonStr})` : null,
+    treadmillSegments && treadmillSegments.length > 0
+      ? `Treadmill segments (user-recorded): ${treadmillSegmentsToText(treadmillSegments)}`
+      : null,
   ].filter(Boolean).join('\n')
 
   return `You are an expert coach providing post-activity feedback. The athlete just completed:
@@ -105,19 +120,19 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'GROQ_API_KEY is not configured' }, { status: 503 })
   }
 
-  let body: { activity: Record<string, unknown>; recentActivities?: Record<string, unknown>[] }
+  let body: { activity: Record<string, unknown>; recentActivities?: Record<string, unknown>[]; treadmillSegments?: TreadmillSegment[] | null }
   try {
     body = await req.json()
   } catch {
     return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
   }
 
-  const { activity, recentActivities = [] } = body
+  const { activity, recentActivities = [], treadmillSegments } = body
   if (!activity) {
     return NextResponse.json({ error: 'activity is required' }, { status: 400 })
   }
 
-  const prompt = buildPrompt(activity, recentActivities)
+  const prompt = buildPrompt(activity, recentActivities, treadmillSegments)
 
   let res: Response
   try {
