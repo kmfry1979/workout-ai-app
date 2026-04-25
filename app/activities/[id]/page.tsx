@@ -404,20 +404,21 @@ function TreadmillDetailsCard({ segments, notes, editedAt, onEdit }: {
   )
 }
 
-// ─── Treadmill Edit Card ───────────────────────────────────────────────────────
+// ─── Treadmill Edit Modal ─────────────────────────────────────────────────────
 
-function TreadmillEditCard({ activity, onSaved }: {
+function TreadmillEditModal({ activity, onSaved, onDismiss }: {
   activity: GarminActivity
   onSaved: (segments: TreadmillSegment[], notes: string) => void
+  onDismiss: () => void
 }) {
-  const [open, setOpen] = useState(false)
-  const [text, setText] = useState('')
+  const [text, setText] = useState(activity.user_activity_notes ?? '')
   const [parsing, setParsing] = useState(false)
   const [preview, setPreview] = useState<{ segments: TreadmillSegment[]; notes: string; confidence: string } | null>(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const durationMin = activity.duration_sec ? Math.round(activity.duration_sec / 60) : null
+  const isEdit = !!activity.user_edited_at
 
   const handleParse = async () => {
     if (!text.trim()) return
@@ -450,7 +451,6 @@ function TreadmillEditCard({ activity, onSaved }: {
       const data = await res.json() as { error?: string }
       if (!res.ok || data.error) throw new Error(data.error ?? 'Save failed')
       onSaved(preview.segments, preview.notes)
-      setOpen(false); setPreview(null); setText('')
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Save failed')
     } finally {
@@ -458,105 +458,115 @@ function TreadmillEditCard({ activity, onSaved }: {
     }
   }
 
-  if (!open) {
-    return (
-      <div className="bg-gray-900 rounded-2xl p-4 border border-dashed border-gray-700">
-        <div className="flex items-center gap-3 mb-3">
-          <span className="text-xl">🏃</span>
-          <div>
-            <p className="text-white text-sm font-semibold">Add Treadmill Details</p>
-            <p className="text-gray-500 text-xs">Garmin can&apos;t record incline or speed segments — add them here so your AI analysis is accurate.</p>
-          </div>
-        </div>
-        <button type="button" onClick={() => setOpen(true)}
-          className="w-full py-2.5 rounded-xl text-sm font-semibold text-white transition-colors"
-          style={{ background: '#f97316' }}>
-          Add Details →
-        </button>
-      </div>
-    )
-  }
-
   return (
-    <div className="bg-gray-900 rounded-2xl p-4">
-      <div className="flex items-center justify-between mb-3">
-        <p className="text-white text-sm font-semibold">🏃 Add Treadmill Details</p>
-        <button type="button" onClick={() => { setOpen(false); setPreview(null); setError(null) }}
-          className="text-gray-500 hover:text-gray-300 text-lg leading-none">✕</button>
-      </div>
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-4"
+      style={{ background: 'rgba(0,0,0,0.88)' }}
+      onClick={e => { if (e.target === e.currentTarget) onDismiss() }}>
+      <div className="w-full max-w-md rounded-3xl overflow-y-auto"
+        style={{ background: '#111827', border: '1px solid #374151', maxHeight: '92vh' }}>
 
-      {!preview ? (
-        <>
-          <p className="text-gray-500 text-xs mb-3">
-            Describe your session in plain English — incline percentages, speeds, or time splits.
-          </p>
-          <div className="bg-gray-800 rounded-xl p-1 mb-2">
-            <p className="text-gray-600 text-[10px] px-2 pt-1.5">Example: &quot;First 20 mins at 1% incline, then 20 mins flat at 10 km/h&quot;</p>
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-gray-800">
+          <div>
+            <p className="text-orange-400 text-xs font-bold tracking-widest">🏃 TREADMILL DETAILS</p>
+            <p className="text-white font-semibold text-sm mt-0.5">
+              {isEdit ? 'Update your session notes' : 'Garmin missed this — add it now'}
+            </p>
           </div>
-          <textarea
-            value={text}
-            onChange={e => setText(e.target.value)}
-            placeholder={`Describe what you did — incline, speed, time splits...`}
-            rows={3}
-            className="w-full bg-gray-800 text-white text-sm rounded-xl px-3 py-2.5 resize-none outline-none placeholder-gray-600 focus:ring-1 focus:ring-orange-500 mb-3"
-          />
-          {error && <p className="text-red-400 text-xs mb-2">{error}</p>}
-          <button type="button" onClick={handleParse} disabled={!text.trim() || parsing}
-            className="w-full py-2.5 rounded-xl text-sm font-semibold text-white disabled:opacity-40 transition-colors"
-            style={{ background: '#f97316' }}>
-            {parsing ? 'AI is reading your description…' : 'Parse with AI →'}
+          <button type="button" onClick={onDismiss}
+            className="w-8 h-8 rounded-full flex items-center justify-center text-gray-400 hover:text-white hover:bg-gray-800 transition-colors">
+            ✕
           </button>
-        </>
-      ) : (
-        <>
-          <p className="text-xs text-green-400 font-semibold mb-3">
-            ✓ AI understood your session {preview.confidence === 'low' ? '(low confidence — please check below)' : ''}
-          </p>
-          {/* Preview timeline */}
-          {preview.segments.length > 0 && (() => {
-            const total = preview.segments[preview.segments.length - 1]?.end_min ?? 1
-            return (
-              <>
-                <div className="flex rounded-lg overflow-hidden h-7 gap-px mb-1">
-                  {preview.segments.map((seg, i) => {
-                    const w = ((seg.end_min - seg.start_min) / total) * 100
-                    return (
-                      <div key={i} className="flex items-center justify-center text-[9px] font-bold text-white"
-                        style={{ width: `${w}%`, background: inclineColor(seg.incline_pct), minWidth: 20 }}>
-                        {seg.incline_pct != null ? `${seg.incline_pct}%` : '?'}
-                      </div>
-                    )
-                  })}
-                </div>
-                <div className="space-y-1.5 mb-3 mt-3">
-                  {preview.segments.map((seg, i) => (
-                    <div key={i} className="flex items-center gap-2 text-xs">
-                      <div className="w-2 h-2 rounded-full" style={{ background: inclineColor(seg.incline_pct) }} />
-                      <span className="text-gray-400 w-20">{seg.start_min}–{seg.end_min} min</span>
-                      <span className="text-white font-medium">{seg.incline_pct != null ? `${seg.incline_pct === 0 ? 'Flat' : `${seg.incline_pct}% incline`}` : 'Unknown'}</span>
-                      {seg.speed_kmh != null && <span className="text-gray-500">{seg.speed_kmh} km/h</span>}
+        </div>
+
+        <div className="px-5 py-4">
+          {!preview ? (
+            <>
+              <p className="text-gray-400 text-xs mb-3 leading-relaxed">
+                Describe your session in plain English. Include incline %, speed, and time splits — the AI will structure it for you.
+              </p>
+              <div className="rounded-xl px-3 py-2 mb-3 text-[11px] text-gray-500" style={{ background: '#1a2236' }}>
+                e.g. &quot;First 20 mins at 1% incline at 9km/h, then 20 mins flat at 10km/h&quot;
+              </div>
+              <textarea
+                value={text}
+                onChange={e => setText(e.target.value)}
+                placeholder="Describe what you did..."
+                rows={4}
+                autoFocus
+                className="w-full bg-gray-800 text-white text-sm rounded-xl px-4 py-3 resize-none outline-none placeholder-gray-600 focus:ring-1 focus:ring-orange-500 mb-3"
+              />
+              {error && <p className="text-red-400 text-xs mb-3">{error}</p>}
+              <div className="flex gap-2">
+                <button type="button" onClick={onDismiss}
+                  className="flex-1 py-3 rounded-xl text-sm font-semibold text-gray-400 transition-colors"
+                  style={{ background: '#1f2937' }}>
+                  Skip for now
+                </button>
+                <button type="button" onClick={handleParse} disabled={!text.trim() || parsing}
+                  className="flex-1 py-3 rounded-xl text-sm font-bold text-white disabled:opacity-40 transition-colors"
+                  style={{ background: '#f97316' }}>
+                  {parsing ? '⏳ Reading...' : 'Parse with AI →'}
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="text-xs font-semibold mb-3" style={{ color: preview.confidence === 'low' ? '#f97316' : '#22c55e' }}>
+                {preview.confidence === 'low' ? '⚠ Low confidence — please check below' : '✓ AI understood your session'}
+              </p>
+
+              {/* Preview timeline bar */}
+              {preview.segments.length > 0 && (() => {
+                const total = Math.max(preview.segments[preview.segments.length - 1]?.end_min ?? 1, 1)
+                return (
+                  <>
+                    <div className="flex rounded-xl overflow-hidden h-9 gap-px mb-3">
+                      {preview.segments.map((seg, i) => {
+                        const w = ((seg.end_min - seg.start_min) / total) * 100
+                        return (
+                          <div key={i} className="flex flex-col items-center justify-center text-[9px] font-bold text-white px-1"
+                            style={{ width: `${w}%`, background: inclineColor(seg.incline_pct), minWidth: 28 }}>
+                            <span>{seg.incline_pct != null ? `${seg.incline_pct}%` : '?'}</span>
+                            <span className="text-[8px] opacity-75">{seg.end_min - seg.start_min}m</span>
+                          </div>
+                        )
+                      })}
                     </div>
-                  ))}
-                </div>
-              </>
-            )
-          })()}
-          <p className="text-gray-500 text-xs mb-4 italic">&quot;{preview.notes}&quot;</p>
-          {error && <p className="text-red-400 text-xs mb-2">{error}</p>}
-          <div className="flex gap-2">
-            <button type="button" onClick={() => setPreview(null)}
-              className="flex-1 py-2.5 rounded-xl text-sm font-semibold text-gray-400"
-              style={{ background: '#1f2937' }}>
-              Try again
-            </button>
-            <button type="button" onClick={handleSave} disabled={saving}
-              className="flex-1 py-2.5 rounded-xl text-sm font-semibold text-white disabled:opacity-40"
-              style={{ background: '#1d4ed8' }}>
-              {saving ? 'Saving…' : '✓ Confirm & Save'}
-            </button>
-          </div>
-        </>
-      )}
+                    <div className="space-y-2 mb-3">
+                      {preview.segments.map((seg, i) => (
+                        <div key={i} className="flex items-center gap-2 text-xs bg-gray-800 rounded-xl px-3 py-2">
+                          <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: inclineColor(seg.incline_pct) }} />
+                          <span className="text-gray-400 w-16 shrink-0">{seg.start_min}–{seg.end_min} min</span>
+                          <span className="text-white font-medium">
+                            {seg.incline_pct != null ? (seg.incline_pct === 0 ? 'Flat (0%)' : `${seg.incline_pct}% incline`) : 'Unknown incline'}
+                          </span>
+                          {seg.speed_kmh != null && <span className="text-gray-400 ml-auto">{seg.speed_kmh} km/h</span>}
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )
+              })()}
+
+              <p className="text-gray-500 text-xs mb-4 italic leading-relaxed">&ldquo;{preview.notes}&rdquo;</p>
+              {error && <p className="text-red-400 text-xs mb-3">{error}</p>}
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setPreview(null)}
+                  className="flex-1 py-3 rounded-xl text-sm font-semibold text-gray-400"
+                  style={{ background: '#1f2937' }}>
+                  ← Try again
+                </button>
+                <button type="button" onClick={handleSave} disabled={saving}
+                  className="flex-1 py-3 rounded-xl text-sm font-bold text-white disabled:opacity-40"
+                  style={{ background: '#1d4ed8' }}>
+                  {saving ? 'Saving…' : '✓ Save & Update AI'}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
     </div>
   )
 }
@@ -578,6 +588,7 @@ export default function ActivityDetailPage() {
   const [recentActivities, setRecentActivities] = useState<Record<string, unknown>[]>([])
   const [treadmillSegments, setTreadmillSegments] = useState<TreadmillSegment[] | null>(null)
   const [treadmillNotes, setTreadmillNotes] = useState<string | null>(null)
+  const [editModalOpen, setEditModalOpen] = useState(false)
 
   useEffect(() => {
     const load = async () => {
@@ -613,13 +624,24 @@ export default function ActivityDetailPage() {
     load()
   }, [id, router])
 
-  useEffect(() => {
-    if (!activity) return
+  const localDateStr = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+
+  const isTreadmillActivity = (act: GarminActivity) => {
+    const raw = act.raw_payload ?? {}
+    const rawTypeKey = ((raw.activityType as Record<string, unknown> | undefined)?.typeKey as string | undefined ?? '').toLowerCase()
+    const legacyType = (act.activity_type ?? '').toLowerCase()
+    return rawTypeKey.includes('treadmill') || rawTypeKey.includes('indoor_run') ||
+           legacyType.includes('treadmill') || legacyType.includes('indoor_run') ||
+           (raw.activityName as string | undefined ?? '').toLowerCase().includes('treadmill')
+  }
+
+  const runAnalysis = (act: GarminActivity, recent: Record<string, unknown>[], segs: TreadmillSegment[] | null) => {
     setAnalysisLoading(true)
+    setAnalysisError(null)
     fetch('/api/coach/activity', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ activity, recentActivities, treadmillSegments }),
+      body: JSON.stringify({ activity: act, recentActivities: recent, treadmillSegments: segs }),
     })
       .then(r => r.json())
       .then(d => {
@@ -629,9 +651,26 @@ export default function ActivityDetailPage() {
           setAnalysisGeneratedAt(new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }))
         }
       })
-      .catch(e => setAnalysisError(e.message))
+      .catch(e => setAnalysisError(e instanceof Error ? e.message : 'Analysis failed'))
       .finally(() => setAnalysisLoading(false))
+  }
+
+  // Run analysis on load (after both activity + recent activities are ready)
+  useEffect(() => {
+    if (!activity) return
+    runAnalysis(activity, recentActivities, treadmillSegments)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activity, recentActivities])
+
+  // Auto-open edit modal for treadmill activities completed today that haven't been edited
+  useEffect(() => {
+    if (!activity) return
+    const isToday = localDateStr(new Date(activity.start_time)) === localDateStr(new Date())
+    if (isTreadmillActivity(activity) && isToday && !activity.user_edited_at) {
+      setEditModalOpen(true)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activity])
 
   if (loading || !activity) {
     return (
@@ -646,14 +685,7 @@ export default function ActivityDetailPage() {
   const rawName = raw.activityName as string | undefined
   const rawTypeKey = (raw.activityType as Record<string, unknown> | undefined)?.typeKey as string | undefined
 
-  // Treadmill detection
-  const isTreadmill = !!(rawTypeKey?.toLowerCase().includes('treadmill') || cleanType(activity.activity_type).toLowerCase().includes('treadmill'))
-  const activityDateStr = new Date(activity.start_time).toISOString().split('T')[0]
-  const todayStr = new Date().toISOString().split('T')[0]
-  const isToday = activityDateStr === todayStr
-  const hasBeenEdited = !!activity.user_edited_at
-  const showEditPrompt = isTreadmill && isToday && !hasBeenEdited
-  const showEditButton = isTreadmill && hasBeenEdited  // already edited, can re-edit
+  const isTreadmill = isTreadmillActivity(activity)
   const type = rawTypeKey ? rawTypeKey.replace(/_/g, ' ') : cleanType(activity.activity_type)
   const title = rawName ?? `${timeOfDay(new Date(activity.start_time))} ${type}`
   const emoji = activityEmoji(type)
@@ -771,41 +803,41 @@ export default function ActivityDetailPage() {
         {/* Performance stats (pace, cadence, VO2) */}
         <EffortSummary activity={activity} raw={raw} />
 
-        {/* Treadmill details — shown if data has been saved */}
+        {/* Treadmill details card — shows saved segments */}
         {treadmillSegments && treadmillSegments.length > 0 && (
           <TreadmillDetailsCard
             segments={treadmillSegments}
             notes={treadmillNotes}
             editedAt={activity.user_edited_at}
-            onEdit={() => {/* re-open edit by clearing segments */
-              setTreadmillSegments(null)
-            }}
+            onEdit={() => setEditModalOpen(true)}
           />
         )}
 
-        {/* Treadmill edit prompt — today's treadmill run, not yet edited */}
-        {showEditPrompt && !treadmillSegments && (
-          <TreadmillEditCard
-            activity={activity}
-            onSaved={(segs, notes) => {
-              setTreadmillSegments(segs)
-              setTreadmillNotes(notes)
-            }}
-          />
-        )}
-
-        {/* Re-edit button — already edited, offer to update */}
-        {showEditButton && !treadmillSegments && (
-          <TreadmillEditCard
-            activity={activity}
-            onSaved={(segs, notes) => {
-              setTreadmillSegments(segs)
-              setTreadmillNotes(notes)
-            }}
-          />
+        {/* Re-open edit for treadmill activities with no segments yet */}
+        {isTreadmill && !treadmillSegments && (
+          <button type="button" onClick={() => setEditModalOpen(true)}
+            className="w-full py-3 rounded-2xl text-sm font-semibold text-orange-400 border border-orange-400/30 hover:bg-orange-400/10 transition-colors">
+            🏃 Add treadmill details (incline / speed)
+          </button>
         )}
 
       </div>
+
+      {/* Treadmill edit modal — auto-opens for today's treadmill run */}
+      {editModalOpen && (
+        <TreadmillEditModal
+          activity={activity}
+          onDismiss={() => setEditModalOpen(false)}
+          onSaved={(segs, notes) => {
+            setTreadmillSegments(segs)
+            setTreadmillNotes(notes)
+            setEditModalOpen(false)
+            // Re-run AI analysis with the new treadmill data
+            runAnalysis(activity, recentActivities, segs)
+          }}
+        />
+      )}
+
       <BottomNav />
     </main>
   )
