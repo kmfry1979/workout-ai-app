@@ -24,6 +24,14 @@ type MetricsContext = {
   date: string
 }
 
+type TreadmillSegment = {
+  start_min: number
+  end_min: number
+  incline_pct: number | null
+  speed_kmh: number | null
+  description: string
+}
+
 type ActivityContext = {
   type: string
   name: string
@@ -33,6 +41,8 @@ type ActivityContext = {
   avgHr: number | null
   calories: number | null
   trainingEffect: number | null
+  treadmillSegments: TreadmillSegment[] | null
+  notes: string | null
 }
 
 function buildSystemPrompt(metrics: MetricsContext | null, activities: ActivityContext[]): string {
@@ -73,7 +83,17 @@ function buildSystemPrompt(metrics: MetricsContext | null, activities: ActivityC
           a.avgHr ? `${a.avgHr}bpm avg HR` : null,
           a.trainingEffect ? `TE ${a.trainingEffect.toFixed(1)}` : null,
         ].filter(Boolean)
-        return `- ${parts.join(' · ')}`
+        let line = `- ${parts.join(' · ')}`
+        if (a.treadmillSegments && a.treadmillSegments.length > 0) {
+          const segStr = a.treadmillSegments.map(s => {
+            const inc = s.incline_pct != null ? (s.incline_pct === 0 ? 'flat' : `${s.incline_pct}% incline`) : ''
+            const spd = s.speed_kmh != null ? `${s.speed_kmh}km/h` : ''
+            return `${s.start_min}–${s.end_min}min: ${[inc, spd].filter(Boolean).join(', ') || s.description}`
+          }).join(' | ')
+          line += `\n  Treadmill segments: ${segStr}`
+        }
+        if (a.notes) line += `\n  Notes: ${a.notes}`
+        return line
       }).join('\n')
     : 'No recent activities recorded.'
 

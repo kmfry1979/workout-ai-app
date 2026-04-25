@@ -61,9 +61,9 @@ export default function CoachPage() {
         supabase.from('garmin_daily_steps')
           .select('total_steps, active_minutes, moderate_intensity_minutes, vigorous_intensity_minutes')
           .eq('user_id', user.id).eq('step_date', today).maybeSingle(),
-        // Last 7 days activities
+        // Last 7 days activities (include treadmill segments + notes)
         supabase.from('garmin_activities')
-          .select('activity_type, start_time, duration_sec, distance_m, avg_hr, calories, training_effect, raw_payload')
+          .select('activity_type, start_time, duration_sec, distance_m, avg_hr, calories, training_effect, raw_payload, treadmill_segments, user_activity_notes')
           .eq('user_id', user.id).gte('start_time', new Date(Date.now() - 7 * 86400000).toISOString())
           .order('start_time', { ascending: false }),
       ])
@@ -126,6 +126,7 @@ export default function CoachPage() {
     const actsCtx = activities.map(a => {
       const raw = (a.raw_payload ?? {}) as Record<string, unknown>
       const typeKey = (raw.activityType as Record<string, unknown> | undefined)?.typeKey as string | undefined
+      const segments = a.treadmill_segments as { start_min: number; end_min: number; incline_pct: number | null; speed_kmh: number | null; description: string }[] | null
       return {
         type: typeKey?.replace(/_/g, ' ') ?? String(a.activity_type ?? 'activity'),
         name: raw.activityName as string ?? '',
@@ -135,6 +136,8 @@ export default function CoachPage() {
         avgHr: a.avg_hr as number | null,
         calories: a.calories as number | null,
         trainingEffect: a.training_effect as number | null,
+        treadmillSegments: segments && segments.length > 0 ? segments : null,
+        notes: a.user_activity_notes as string | null ?? null,
       }
     })
 
