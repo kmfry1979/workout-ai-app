@@ -22,6 +22,19 @@ type ActivityDetail = {
   start_time: string
 }
 
+type WeeklyPlan = {
+  generated_at: string
+  week_start: string
+  days: { day: string; session: string; detail: string; intensity: 'rest' | 'low' | 'moderate' | 'high' }[]
+}
+
+type RaceGoal = {
+  name: string
+  distance_km: number
+  target_sec: number
+  race_date: string
+}
+
 type HealthData = {
   hrv: number | null
   hrvStatus: string | null
@@ -284,6 +297,23 @@ function calcWeeklySummary(stepsHistory28: { date: string; load: number }[], sle
     hrv: { this: avg(thisWeekHRV), last: avg(lastWeekHRV) },
     activities: { this: thisWeekActs, last: lastWeekActs },
   }
+}
+
+// ─── Pace Trend ──────────────────────────────────────────────────────────────
+
+function calcPaceTrend(activities: ActivityDetail[]): { date: string; paceMinPerKm: number }[] {
+  return activities
+    .filter(a => {
+      const t = friendlyActivityType(a.activity_type).toLowerCase()
+      return (t.includes('run') || t.includes('treadmill') || t.includes('jog'))
+        && a.distance_m != null && a.distance_m > 500
+        && a.duration_sec != null && a.duration_sec > 0
+    })
+    .map(a => ({
+      date: a.start_time.split('T')[0],
+      paceMinPerKm: (a.duration_sec! / 60) / (a.distance_m! / 1000),
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date))
 }
 
 // ─── Sleep Debt ───────────────────────────────────────────────────────────────
@@ -555,6 +585,16 @@ export default function HealthPage() {
   const [briefingLoading, setBriefingLoading] = useState(false)
   const [view, setView] = useState<'today' | 'analytics'>('today')
   const [analyticsTab, setAnalyticsTab] = useState<'trends' | 'training' | 'records'>('trends')
+  // Weekly planner
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null)
+  const [weeklyPlan, setWeeklyPlan] = useState<WeeklyPlan | null>(null)
+  const [planLoading, setPlanLoading] = useState(false)
+  const [expandedDay, setExpandedDay] = useState<string | null>(null)
+  // Race goal
+  const [raceGoal, setRaceGoal] = useState<RaceGoal | null>(null)
+  const [showRaceModal, setShowRaceModal] = useState(false)
+  const [raceForm, setRaceForm] = useState({ name: '', distance_km: '5', target_time: '', race_date: '' })
+  const [savingRace, setSavingRace] = useState(false)
 
   const loadData = useCallback(async () => {
     const { data: sessionData } = await supabase.auth.getSession()
@@ -607,7 +647,7 @@ export default function HealthPage() {
         .select('raw_payload, start_time')
         .eq('user_id', userId).order('start_time', { ascending: false }).limit(10),
       supabase.from('profiles')
-        .select('date_of_birth, display_name, name')
+        .select('date_of_birth, display_name, name, weekly_plan, race_goal')
         .eq('user_id', userId).maybeSingle(),
       // Analytics
       supabase.from('garmin_daily_health_metrics')
@@ -634,7 +674,7 @@ export default function HealthPage() {
     const sleep = sleepRes.data
     const steps = stepsRes.data
     const activities = (activitiesRes.data ?? []) as RawActivity[]
-    const profile = profileRes.data as { date_of_birth?: string | null; display_name?: string | null; name?: string | null } | null
+    const profile = profileRes.data as { date_of_birth?: string | null; display_name?: string | null; name?: string | null; weekly_plan?: WeeklyPlan | null; race_goal?: RaceGoal | null } | null
 
     const rhr = (todayLegacy as { resting_hr?: number | null; resting_heart_rate_bpm?: number | null } | null)
       ?.resting_hr ?? (todayLegacy as { resting_heart_rate_bpm?: number | null } | null)?.resting_heart_rate_bpm ?? null
@@ -668,6 +708,10 @@ export default function HealthPage() {
       const load = mod > 0 || vig > 0 ? mod + vig * 2 : active * 0.6
       return { date: r.step_date, load }
     })
+
+    setCurrentUserId(userId)
+    setWeeklyPlan((profile?.weekly_plan as WeeklyPlan | null) ?? null)
+    setRaceGoal((profile?.race_goal as RaceGoal | null) ?? null)
 
     setData({
       hrv: (todayHealth as { hrv_avg?: number | null } | null)?.hrv_avg ?? null,
@@ -732,6 +776,63 @@ export default function HealthPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data])
 
+  const generatePlan = async () => {
+    if (!data || planLoading) return
+    setPlanLoading(true)
+    try {
+      const acwrResult = calcACWR(data.stepsHistory28)
+      const hrvTrendResult = calcHRVTrend(data.hrvHistory30)
+      const recovery = calcRecovery(data.hrv, data.sleepScore, data.rhr, data.hrvStatus)
+      const strain = calcStrain(data.modIntMin, data.vigIntMin, data.activeMin)
+      const recentActivities = data.activities90.slice(0, 7).map(a => ({
+        type: friendlyActivityType(a.activity_type),
+        durationMin: a.duration_sec ? Math.round(a.duration_sec / 60) : null,
+        date: a.start_time.split('T')[0],
+      }))
+      const res = await fetch('/api/ai/weekly-plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          acwr: acwrResult?.acwr ?? null,
+          hrvTrend: hrvTrendResult?.trend ?? null,
+          recovery,
+          strain,
+          bodyBattery: data.bodyBatteryEnd ?? null,
+          recentActivities,
+        }),
+      })
+      if (!res.ok) return
+      const json = await res.json() as WeeklyPlan
+      setWeeklyPlan(json)
+      setExpandedDay(null)
+      if (currentUserId) {
+        await supabase.from('profiles').upsert({ user_id: currentUserId, weekly_plan: json }, { onConflict: 'user_id' })
+      }
+    } finally {
+      setPlanLoading(false)
+    }
+  }
+
+  const saveRaceGoal = async () => {
+    if (!currentUserId) return
+    setSavingRace(true)
+    try {
+      const [hh, mm, ss] = raceForm.target_time.split(':').map(Number)
+      const target_sec = (hh || 0) * 3600 + (mm || 0) * 60 + (ss || 0)
+      const goal: RaceGoal = {
+        name: raceForm.name,
+        distance_km: parseFloat(raceForm.distance_km),
+        target_sec,
+        race_date: raceForm.race_date,
+      }
+      await supabase.from('profiles').upsert({ user_id: currentUserId, race_goal: goal }, { onConflict: 'user_id' })
+      setRaceGoal(goal)
+      setShowRaceModal(false)
+    } finally {
+      setSavingRace(false)
+    }
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center" style={{ background: '#0a0a0a' }}>
@@ -767,6 +868,45 @@ export default function HealthPage() {
   const maxZoneMin = zones.length > 0 ? Math.max(...zones.map(z => z.minutes), 1) : 1
   const prs = data ? calcPersonalRecords(data.activities90) : {}
   const weeklySummary = data ? calcWeeklySummary(data.stepsHistory28, data.sleepHistory30, data.hrvHistory30, data.activities90) : null
+
+  // HRV Drop Alert: compare today's HRV to prior 7-day rolling average
+  const hrv7Avg = (hrvTrend?.rolling7 ?? []).slice(-8, -1).filter((v): v is number => v != null)
+  const hrv7Mean = hrv7Avg.length > 0 ? hrv7Avg.reduce((a, b) => a + b, 0) / hrv7Avg.length : null
+  const hrvDropPct = data?.hrv != null && hrv7Mean != null && hrv7Mean > 0
+    ? ((data.hrv - hrv7Mean) / hrv7Mean) * 100 : null
+  const hrvAlert = hrvDropPct != null && hrvDropPct < -12
+
+  // Pace trend for running activities over 90 days
+  const paceTrend = data ? calcPaceTrend(data.activities90) : []
+  const paceTrendValues = paceTrend.map(p => p.paceMinPerKm)
+  const bestPaceMinPerKm = paceTrend.length > 0 ? Math.min(...paceTrendValues) : null
+  const avgPaceMinPerKm = paceTrend.length > 0 ? paceTrendValues.reduce((a, b) => a + b, 0) / paceTrendValues.length : null
+  const fmtPace = (minPerKm: number | null) => {
+    if (minPerKm == null) return '—'
+    const m = Math.floor(minPerKm)
+    const s = Math.round((minPerKm - m) * 60)
+    return `${m}:${String(s).padStart(2, '0')} /km`
+  }
+  // Invert for sparkline — faster (lower) pace should appear higher on chart
+  const paceTrendInverted = paceTrend.length > 0
+    ? (() => {
+        const maxPace = Math.max(...paceTrendValues)
+        return paceTrendValues.map(p => maxPace - p + (bestPaceMinPerKm ?? 0))
+      })()
+    : []
+
+  // Race goal helpers
+  const daysUntilRace = raceGoal?.race_date
+    ? Math.ceil((new Date(raceGoal.race_date).getTime() - Date.now()) / 86400000) : null
+  const fmtSec = (sec: number) => {
+    const h = Math.floor(sec / 3600)
+    const m = Math.floor((sec % 3600) / 60)
+    const s = sec % 60
+    return h > 0 ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}` : `${m}:${String(s).padStart(2,'0')}`
+  }
+  const estFinishSec = raceGoal && avgPaceMinPerKm
+    ? Math.round(avgPaceMinPerKm * 60 * raceGoal.distance_km) : null
+  const targetDeltaSec = estFinishSec != null && raceGoal ? estFinishSec - raceGoal.target_sec : null
 
   const tabBtn = (key: typeof view, lbl: string) => (
     <button
@@ -820,6 +960,14 @@ export default function HealthPage() {
               <div className="mb-4 rounded-2xl p-4 border border-amber-500/40 bg-amber-950/30">
                 <p className="text-sm font-bold text-amber-400 mb-1">🏁 Training Done for Today</p>
                 <p className="text-xs text-amber-300">Your body battery is at {bodyBattery} and strain is {strain.toFixed(1)} — you&apos;ve already put in a big day. Your morning recovery score ({recovery != null ? `${Math.round(recovery)}%` : '—'}) was from before you trained. Prioritise rest, food, and sleep tonight.</p>
+              </div>
+            )}
+            {hrvAlert && !overreaching && (
+              <div className="mb-4 rounded-2xl p-4 border border-yellow-500/40 bg-yellow-950/30">
+                <p className="text-sm font-bold text-yellow-400 mb-1">⚡ HRV Drop Detected</p>
+                <p className="text-xs text-yellow-300">
+                  Your HRV is {data?.hrv}ms — {Math.abs(Math.round(hrvDropPct!))}% below your 7-day average ({Math.round(hrv7Mean!)}ms). This often signals accumulated fatigue. Consider an easy or rest day.
+                </p>
               </div>
             )}
 
@@ -975,6 +1123,73 @@ export default function HealthPage() {
                 </button>
               )}
             </div>
+
+            {/* Weekly Training Planner */}
+            <div className="rounded-3xl p-6 mb-4" style={{ background: '#111111' }}>
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-1">
+                  <p className="text-xs text-gray-500 uppercase tracking-widest">📅 This Week&apos;s Plan</p>
+                  <InfoTip text="AI-generated 7-day training plan based on your ACWR, HRV trend, recovery score, and recent activity history. Regenerate each week." />
+                </div>
+                <button
+                  onClick={generatePlan}
+                  disabled={planLoading}
+                  className="text-[10px] px-3 py-1.5 rounded-lg bg-orange-600 hover:bg-orange-500 disabled:opacity-40 text-white transition-colors"
+                >
+                  {planLoading ? 'Generating…' : weeklyPlan ? 'Regenerate' : 'Generate Plan'}
+                </button>
+              </div>
+              {planLoading && (
+                <div className="flex items-center gap-2 py-2">
+                  <div className="w-4 h-4 border border-gray-600 border-t-orange-400 rounded-full animate-spin" />
+                  <span className="text-xs text-gray-500">Building your personalised plan…</span>
+                </div>
+              )}
+              {!planLoading && weeklyPlan && (
+                <>
+                  <p className="text-[10px] text-gray-600 mb-3">
+                    Week of {new Date(weeklyPlan.week_start + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+                  </p>
+                  <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
+                    {weeklyPlan.days.map(d => {
+                      const intensityColor: Record<string, string> = {
+                        rest: '#4b5563', low: '#22c55e', moderate: '#f97316', high: '#ef4444'
+                      }
+                      const bg = intensityColor[d.intensity] ?? '#4b5563'
+                      return (
+                        <button
+                          key={d.day}
+                          onClick={() => setExpandedDay(expandedDay === d.day ? null : d.day)}
+                          className="shrink-0 flex flex-col items-center gap-1 rounded-2xl px-3 py-2 transition-all"
+                          style={{ background: expandedDay === d.day ? bg + '33' : '#1a1a1a', border: `1px solid ${expandedDay === d.day ? bg : '#2a2a2a'}` }}
+                        >
+                          <span className="text-[10px] text-gray-400 font-semibold">{d.day}</span>
+                          <div className="w-2 h-2 rounded-full" style={{ background: bg }} />
+                          <span className="text-[9px] text-gray-500 text-center max-w-[52px] leading-tight">{d.session}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                  {expandedDay && (() => {
+                    const day = weeklyPlan.days.find(d => d.day === expandedDay)
+                    if (!day) return null
+                    const intensityColor: Record<string, string> = { rest: '#6b7280', low: '#22c55e', moderate: '#f97316', high: '#ef4444' }
+                    return (
+                      <div className="mt-3 rounded-2xl p-3" style={{ background: '#1a1a1a' }}>
+                        <div className="flex items-center gap-2 mb-1">
+                          <div className="w-2 h-2 rounded-full" style={{ background: intensityColor[day.intensity] ?? '#6b7280' }} />
+                          <span className="text-xs text-white font-semibold">{day.day} — {day.session}</span>
+                        </div>
+                        <p className="text-xs text-gray-400 leading-relaxed">{day.detail}</p>
+                      </div>
+                    )
+                  })()}
+                </>
+              )}
+              {!planLoading && !weeklyPlan && (
+                <p className="text-xs text-gray-600">Generate a personalised Mon–Sun plan based on your current fitness signals.</p>
+              )}
+            </div>
           </>
         )}
 
@@ -1045,6 +1260,42 @@ export default function HealthPage() {
                     </>
                   ) : (
                     <p className="text-xs text-gray-600">Need at least 5 paired nights of sleep + HRV data.</p>
+                  )}
+                </div>
+
+                {/* Running Pace Trend */}
+                <div className="rounded-3xl p-5 mb-4" style={{ background: '#111111' }}>
+                  <div className="flex items-center gap-1 mb-1">
+                    <p className="text-xs text-gray-500 uppercase tracking-widest">Running Pace Trend · 90 days</p>
+                    <InfoTip text="Average pace (min/km) for each running session over the last 90 days. The chart is inverted so faster (lower) pace appears higher. A rising line means you're getting faster." />
+                  </div>
+                  {paceTrend.length >= 2 ? (
+                    <>
+                      <div className="flex gap-4 mb-3">
+                        <div>
+                          <p className="text-[10px] text-gray-500">Avg pace</p>
+                          <p className="text-sm font-bold text-white">{fmtPace(avgPaceMinPerKm)}</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] text-gray-500">Best pace</p>
+                          <p className="text-sm font-bold" style={{ color: '#21FF00' }}>{fmtPace(bestPaceMinPerKm)}</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] text-gray-500">Runs</p>
+                          <p className="text-sm font-bold text-white">{paceTrend.length}</p>
+                        </div>
+                      </div>
+                      <SparkLine values={paceTrendInverted} color="#f97316" height={52} />
+                      <p className="text-[10px] text-gray-600 mt-2">
+                        {paceTrend.length >= 5 && avgPaceMinPerKm != null && paceTrendValues.slice(-3).reduce((a,b)=>a+b,0)/3 < avgPaceMinPerKm
+                          ? 'Recent runs are faster than your 90-day average — great progress.'
+                          : paceTrend.length >= 5 && avgPaceMinPerKm != null && paceTrendValues.slice(-3).reduce((a,b)=>a+b,0)/3 > avgPaceMinPerKm * 1.05
+                          ? 'Recent runs are slower than average — could be fatigue or easy training days.'
+                          : 'Consistent pace across 90 days.'}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-xs text-gray-600">Need at least 2 running sessions in the last 90 days.</p>
                   )}
                 </div>
 
@@ -1165,6 +1416,88 @@ export default function HealthPage() {
                   </div>
                 )}
 
+                {/* Race Goal */}
+                <div className="rounded-3xl p-5 mb-4" style={{ background: '#111111' }}>
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-1">
+                      <p className="text-xs text-gray-500 uppercase tracking-widest">🎯 Race Goal</p>
+                      <InfoTip text="Set a target race and track your estimated finish time based on recent running pace. The estimate uses your 90-day average pace for the goal distance." />
+                    </div>
+                    {raceGoal && (
+                      <button
+                        onClick={() => {
+                          const h = Math.floor(raceGoal.target_sec / 3600)
+                          const m = Math.floor((raceGoal.target_sec % 3600) / 60)
+                          const s = raceGoal.target_sec % 60
+                          setRaceForm({
+                            name: raceGoal.name,
+                            distance_km: String(raceGoal.distance_km),
+                            target_time: `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`,
+                            race_date: raceGoal.race_date,
+                          })
+                          setShowRaceModal(true)
+                        }}
+                        className="text-[10px] px-2 py-1 rounded-lg border border-gray-600 text-gray-400 hover:text-white"
+                      >
+                        Edit
+                      </button>
+                    )}
+                  </div>
+                  {raceGoal ? (
+                    <>
+                      <p className="text-lg font-bold text-white mb-1">{raceGoal.name}</p>
+                      <p className="text-xs text-gray-400 mb-3">
+                        {raceGoal.distance_km}km ·{' '}
+                        {daysUntilRace != null && daysUntilRace > 0 ? `${daysUntilRace} days away` : daysUntilRace === 0 ? 'Race day!' : 'Race passed'}
+                      </p>
+                      <div className="grid grid-cols-2 gap-2 mb-3">
+                        <div className="rounded-xl p-3" style={{ background: '#1a1a1a' }}>
+                          <p className="text-[10px] text-gray-500 mb-1">Target time</p>
+                          <p className="text-base font-bold text-white">{fmtSec(raceGoal.target_sec)}</p>
+                          <p className="text-[10px] text-gray-500">
+                            {fmtPace(raceGoal.target_sec / 60 / raceGoal.distance_km)} target pace
+                          </p>
+                        </div>
+                        <div className="rounded-xl p-3" style={{ background: '#1a1a1a' }}>
+                          <p className="text-[10px] text-gray-500 mb-1">Est. finish (current pace)</p>
+                          {estFinishSec != null ? (
+                            <>
+                              <p className="text-base font-bold" style={{ color: targetDeltaSec != null && targetDeltaSec <= 0 ? '#21FF00' : '#f97316' }}>
+                                {fmtSec(estFinishSec)}
+                              </p>
+                              {targetDeltaSec != null && (
+                                <p className="text-[10px]" style={{ color: targetDeltaSec <= 0 ? '#21FF00' : '#f97316' }}>
+                                  {targetDeltaSec <= 0 ? `${fmtSec(Math.abs(targetDeltaSec))} under target` : `${fmtSec(targetDeltaSec)} off target`}
+                                </p>
+                              )}
+                            </>
+                          ) : (
+                            <p className="text-xs text-gray-600">No run data</p>
+                          )}
+                        </div>
+                      </div>
+                      {estFinishSec != null && targetDeltaSec != null && (
+                        <div className="w-full bg-gray-800 rounded-full h-2">
+                          <div className="h-2 rounded-full transition-all" style={{
+                            width: `${Math.min(100, Math.max(5, (raceGoal.target_sec / estFinishSec) * 100))}%`,
+                            background: targetDeltaSec <= 0 ? '#21FF00' : '#f97316'
+                          }} />
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div>
+                      <p className="text-xs text-gray-600 mb-3">Set a race goal to track your progress toward it.</p>
+                      <button
+                        onClick={() => setShowRaceModal(true)}
+                        className="text-xs px-4 py-2 rounded-lg bg-orange-600 hover:bg-orange-500 text-white transition-colors"
+                      >
+                        + Set Race Goal
+                      </button>
+                    </div>
+                  )}
+                </div>
+
                 {/* Training Zones */}
                 <div className="rounded-3xl p-5 mb-4" style={{ background: '#111111' }}>
                   <div className="flex items-center gap-1 mb-1">
@@ -1245,6 +1578,84 @@ export default function HealthPage() {
 
       </div>
       <BottomNav />
+
+      {/* Race Goal Modal */}
+      {showRaceModal && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 px-4 pb-6">
+          <div className="w-full max-w-md rounded-3xl p-6" style={{ background: '#1a1a1a' }}>
+            <h2 className="text-base font-bold text-white mb-4">🎯 Race Goal</h2>
+            <div className="space-y-3">
+              <div>
+                <label className="text-[10px] text-gray-500 uppercase tracking-wider">Race name</label>
+                <input
+                  type="text"
+                  value={raceForm.name}
+                  onChange={e => setRaceForm(f => ({ ...f, name: e.target.value }))}
+                  placeholder="e.g. 5K Parkrun, London Marathon"
+                  className="w-full mt-1 bg-gray-800 text-white text-sm rounded-xl px-3 py-2.5 outline-none focus:ring-1 focus:ring-orange-500 placeholder-gray-600"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 uppercase tracking-wider">Distance (km)</label>
+                <select
+                  value={raceForm.distance_km}
+                  onChange={e => setRaceForm(f => ({ ...f, distance_km: e.target.value }))}
+                  className="w-full mt-1 bg-gray-800 text-white text-sm rounded-xl px-3 py-2.5 outline-none focus:ring-1 focus:ring-orange-500"
+                >
+                  <option value="5">5 km</option>
+                  <option value="10">10 km</option>
+                  <option value="21.1">21.1 km (Half Marathon)</option>
+                  <option value="42.2">42.2 km (Marathon)</option>
+                  <option value="custom">Custom</option>
+                </select>
+                {raceForm.distance_km === 'custom' && (
+                  <input
+                    type="number"
+                    step="0.1"
+                    placeholder="Distance in km"
+                    className="w-full mt-2 bg-gray-800 text-white text-sm rounded-xl px-3 py-2.5 outline-none focus:ring-1 focus:ring-orange-500 placeholder-gray-600"
+                    onChange={e => setRaceForm(f => ({ ...f, distance_km: e.target.value }))}
+                  />
+                )}
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 uppercase tracking-wider">Target time (HH:MM:SS)</label>
+                <input
+                  type="text"
+                  value={raceForm.target_time}
+                  onChange={e => setRaceForm(f => ({ ...f, target_time: e.target.value }))}
+                  placeholder="e.g. 00:25:00 or 1:45:00"
+                  className="w-full mt-1 bg-gray-800 text-white text-sm rounded-xl px-3 py-2.5 outline-none focus:ring-1 focus:ring-orange-500 placeholder-gray-600"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 uppercase tracking-wider">Race date</label>
+                <input
+                  type="date"
+                  value={raceForm.race_date}
+                  onChange={e => setRaceForm(f => ({ ...f, race_date: e.target.value }))}
+                  className="w-full mt-1 bg-gray-800 text-white text-sm rounded-xl px-3 py-2.5 outline-none focus:ring-1 focus:ring-orange-500"
+                />
+              </div>
+            </div>
+            <div className="flex gap-2 mt-5">
+              <button
+                onClick={() => setShowRaceModal(false)}
+                className="flex-1 py-3 rounded-2xl border border-gray-600 text-gray-300 text-sm hover:border-gray-400"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveRaceGoal}
+                disabled={savingRace || !raceForm.name || !raceForm.target_time || !raceForm.race_date}
+                className="flex-1 py-3 rounded-2xl bg-orange-600 hover:bg-orange-500 disabled:opacity-40 text-white text-sm font-semibold transition-colors"
+              >
+                {savingRace ? 'Saving…' : 'Save Goal'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

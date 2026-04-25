@@ -86,6 +86,11 @@ function formatPace(mps: number): string {
   return `${Math.floor(secPerKm / 60)}:${String(secPerKm % 60).padStart(2, '0')} /km`
 }
 
+function formatSecPerKm(sec: number): string {
+  const s = Math.round(sec)
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+}
+
 // ─── Stat block ───────────────────────────────────────────────────────────────
 
 function Stat({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
@@ -331,41 +336,73 @@ function RelativeEffort({ raw }: { raw: Record<string, unknown> }) {
   )
 }
 
-// ─── Pace Chart ───────────────────────────────────────────────────────────────
+// ─── Pace Zones Card ──────────────────────────────────────────────────────────
 
-function PaceChart({ activity, raw, paceInsight, paceInsightLoading }: {
+const PACE_ZONE_COLORS = ['#6b7280', '#3b82f6', '#22c55e', '#f97316', '#ef4444']
+const PACE_ZONE_LABELS = ['Z1 Recovery', 'Z2 Aerobic', 'Z3 Tempo', 'Z4 Threshold', 'Z5 Max']
+
+function PaceZonesCard({ activity, raw, treadmillSegments, paceInsight, paceInsightLoading }: {
   activity: GarminActivity
   raw: Record<string, unknown>
+  treadmillSegments: TreadmillSegment[] | null
   paceInsight: string | null
   paceInsightLoading: boolean
 }) {
   const avgSpeed = raw.averageSpeed as number | undefined
   const maxSpeed = raw.maxSpeed as number | undefined
 
-  const zones = [1, 2, 3, 4, 5].map(i => {
+  // HR zone times (seconds) — used as pace zone proxy
+  const hrZoneSec = [1, 2, 3, 4, 5].map(i => {
     const val = raw[`hrTimeInZone_${i}`] ?? raw[`timeInHRZone${i}`]
-    return val != null ? Math.round(Number(val) / 60) : 0
+    return val != null ? Number(val) : 0
   })
-  const totalZoneMin = zones.reduce((s, v) => s + v, 0)
 
-  const hasData = (avgSpeed && activity.distance_m && activity.distance_m > 100) || totalZoneMin > 0
-  if (!hasData && !paceInsight && !paceInsightLoading) return null
+  const avgPaceSecPerKm = avgSpeed && avgSpeed > 0 ? Math.round(1000 / avgSpeed) : null
 
-  const maxBarMin = Math.max(...zones, 1)
-  const BAR_HEIGHT = 56
+  // For treadmill runs: compute actual pace zone seconds from segment speeds
+  let paceZoneSec = hrZoneSec
+  if (treadmillSegments && treadmillSegments.length > 0 && avgPaceSecPerKm) {
+    const b = avgPaceSecPerKm
+    const bounds = [b * 1.25, b * 1.10, b * 1.00, b * 0.90]
+    const computed = [0, 0, 0, 0, 0]
+    for (const seg of treadmillSegments) {
+      if (!seg.speed_kmh || seg.speed_kmh <= 0) continue
+      const segPace = 3600 / seg.speed_kmh // sec/km
+      const dur = (seg.end_min - seg.start_min) * 60
+      const idx = segPace > bounds[0] ? 0 : segPace > bounds[1] ? 1 : segPace > bounds[2] ? 2 : segPace > bounds[3] ? 3 : 4
+      computed[idx] += dur
+    }
+    if (computed.some(v => v > 0)) paceZoneSec = computed
+  }
+
+  const totalSec = paceZoneSec.reduce((s, v) => s + v, 0)
+  const isRun = activity.distance_m != null && activity.distance_m > 100 && avgSpeed
+  if (!isRun && totalSec === 0 && !paceInsight && !paceInsightLoading) return null
+
+  // Pace range labels per zone
+  const paceRanges = avgPaceSecPerKm ? [
+    `>${formatSecPerKm(avgPaceSecPerKm * 1.25)} /km`,
+    `${formatSecPerKm(avgPaceSecPerKm * 1.10)}–${formatSecPerKm(avgPaceSecPerKm * 1.25)} /km`,
+    `${formatSecPerKm(avgPaceSecPerKm * 1.00)}–${formatSecPerKm(avgPaceSecPerKm * 1.10)} /km`,
+    `${formatSecPerKm(avgPaceSecPerKm * 0.90)}–${formatSecPerKm(avgPaceSecPerKm * 1.00)} /km`,
+    `<${formatSecPerKm(avgPaceSecPerKm * 0.90)} /km`,
+  ] : Array(5).fill('')
 
   return (
     <div className="bg-gray-900 rounded-2xl p-4">
-      <h3 className="text-white font-semibold text-sm mb-4">Pace · Effort Profile</h3>
+      <h3 className="text-white font-semibold text-sm mb-1">Pace Zones</h3>
+      {avgPaceSecPerKm && (
+        <p className="text-[10px] text-gray-500 mb-4">Based on avg pace {formatPace(avgSpeed!)}</p>
+      )}
 
-      {/* Pace summary row */}
-      {avgSpeed && activity.distance_m && activity.distance_m > 100 && (
+      {/* Avg + Best pace */}
+      {isRun && (
         <div className="flex gap-6 mb-4">
           <div>
             <p className="text-gray-500 text-[10px] uppercase tracking-wider">Avg Pace</p>
-            <p className="text-white font-bold text-2xl leading-tight">{formatPace(avgSpeed)}</p>
+            <p className="text-white font-bold text-2xl leading-tight">{formatPace(avgSpeed!)}</p>
           </div>
-          {maxSpeed && maxSpeed > avgSpeed && (
+          {maxSpeed && maxSpeed > avgSpeed! && (
             <div>
               <p className="text-gray-500 text-[10px] uppercase tracking-wider">Best Pace</p>
               <p className="text-orange-400 font-bold text-2xl leading-tight">{formatPace(maxSpeed)}</p>
@@ -374,38 +411,39 @@ function PaceChart({ activity, raw, paceInsight, paceInsightLoading }: {
         </div>
       )}
 
-      {/* Zone bar chart */}
-      {totalZoneMin > 0 && (
-        <>
-          <p className="text-gray-600 text-[10px] uppercase tracking-wider mb-3">Effort Distribution</p>
-          <div className="flex items-end gap-1.5" style={{ height: BAR_HEIGHT + 20 }}>
-            {zones.map((min, i) => {
-              const barH = min > 0 ? Math.max(Math.round((min / maxBarMin) * BAR_HEIGHT), 6) : 2
-              return (
-                <div key={i} className="flex-1 flex flex-col items-center justify-end gap-1" style={{ height: BAR_HEIGHT + 20 }}>
-                  {min > 0 && (
-                    <span className="text-[9px] text-gray-500 leading-none">{min}m</span>
-                  )}
-                  <div className="w-full rounded-t-md"
-                    style={{ height: barH, background: min > 0 ? ZONE_STROKE_COLORS[i] : '#1f2937' }} />
+      {/* Horizontal zone bars — Garmin style */}
+      {totalSec > 0 && (
+        <div className="space-y-2.5 mb-4">
+          {paceZoneSec.map((sec, i) => {
+            const pct = totalSec > 0 ? Math.round((sec / totalSec) * 100) : 0
+            return (
+              <div key={i} className="flex items-center gap-2">
+                <span className="text-gray-400 text-xs w-24 shrink-0">{PACE_ZONE_LABELS[i]}</span>
+                <div className="flex-1 bg-gray-800 rounded-full h-5 overflow-hidden">
+                  <div
+                    className="h-5 rounded-full flex items-center justify-end pr-1.5 transition-all duration-700"
+                    style={{
+                      width: `${Math.max(pct > 0 ? 8 : 0, pct)}%`,
+                      backgroundColor: PACE_ZONE_COLORS[i],
+                      minWidth: pct > 0 ? 26 : 0,
+                    }}
+                  >
+                    {pct >= 10 && <span className="text-white text-[9px] font-bold">{pct}%</span>}
+                  </div>
                 </div>
-              )
-            })}
-          </div>
-          <div className="flex gap-1.5 mt-1">
-            {['Z1', 'Z2', 'Z3', 'Z4', 'Z5'].map((z, i) => (
-              <div key={i} className="flex-1 text-center text-[9px] text-gray-600">{z}</div>
-            ))}
-          </div>
-        </>
+                <span className="text-gray-600 text-[9px] w-24 text-right shrink-0 leading-tight">{paceRanges[i]}</span>
+              </div>
+            )
+          })}
+        </div>
       )}
 
-      {/* Athlete Intelligence pace insight */}
+      {/* Athlete Intelligence — pace insight */}
       {(paceInsight || paceInsightLoading) && (
-        <div className={totalZoneMin > 0 ? 'mt-4 pt-4 border-t border-gray-800' : 'mt-1'}>
+        <div className={totalSec > 0 ? 'pt-4 border-t border-gray-800' : ''}>
           <div className="flex items-center gap-2 mb-2">
             <div className="w-5 h-5 bg-orange-500 rounded-full flex items-center justify-center text-[10px] font-bold text-white shrink-0">A</div>
-            <p className="text-orange-400 text-[10px] font-bold uppercase tracking-wider">Athlete Intelligence · Pace</p>
+            <p className="text-orange-400 text-[10px] font-bold uppercase tracking-wider">Athlete Intelligence</p>
           </div>
           {paceInsightLoading && !paceInsight ? (
             <div className="flex items-center gap-2 text-gray-500 text-xs">
@@ -877,8 +915,8 @@ export default function ActivityDetailPage() {
           </button>
         </div>
 
-        {/* Pace chart + Athlete Intelligence pace insight */}
-        <PaceChart activity={activity} raw={raw} paceInsight={paceInsight} paceInsightLoading={analysisLoading} />
+        {/* Pace Zones + Athlete Intelligence pace insight */}
+        <PaceZonesCard activity={activity} raw={raw} treadmillSegments={treadmillSegments} paceInsight={paceInsight} paceInsightLoading={analysisLoading} />
 
         {/* Primary stats */}
         {stats.length > 0 && (
