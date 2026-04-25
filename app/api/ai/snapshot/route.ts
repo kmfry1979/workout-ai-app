@@ -11,6 +11,7 @@ type HealthEngineRequest = {
   sleepScore: number | null
   respiration: number | null
   respirationBaseline: number | null
+  bodyBatteryEnd: number | null
   hour: number
 }
 
@@ -69,11 +70,15 @@ function buildPrompt(body: SnapshotRequest): string {
   const todayStr = new Date(m.date).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
   const trainedToday = activities.some(a => a.date === todayStr && (a.durationMin ?? 0) > 0)
 
+  // Late-day depletion: the readiness/readiness score is locked in from overnight signals.
+  // If it's afternoon/evening, they've trained, and battery is depleted, that score is stale.
+  const lateDayDepleted = hour >= 14 && trainedToday && m.bodyBatteryEnd != null && m.bodyBatteryEnd < 45
+
   const lines: string[] = []
 
-  // Readiness
+  // Readiness — label as stale when late-day depleted so the AI doesn't lead with it
   if (m.readinessScore != null)
-    lines.push(`- Overall readiness: ${m.readinessScore}/100 (${m.readinessLabel ?? 'unknown'})`)
+    lines.push(`- Morning readiness score: ${m.readinessScore}/100 (${m.readinessLabel ?? 'unknown'})${lateDayDepleted ? ' ⚠️ STALE — calculated from overnight data before training; does NOT reflect current state' : ''}`)
 
   // Body battery
   if (m.bodyBatteryHigh != null || m.bodyBatteryEnd != null)
@@ -131,30 +136,38 @@ function buildPrompt(body: SnapshotRequest): string {
       }).join('\n')
     : 'No recent activities.'
 
-  const contextLine = `It is the ${timeOfDay} (local hour ${hour}:00). ${
-    trainedToday
-      ? 'The athlete has already completed at least one activity today.'
-      : 'No activity has been logged yet today.'
-  }`
+  const contextLine = lateDayDepleted
+    ? `It is the ${timeOfDay} (local hour ${hour}:00). CRITICAL CONTEXT: The athlete has already trained today and their body battery is now depleted at ${m.bodyBatteryEnd}. The morning readiness score (${m.readinessScore ?? '—'}) was calculated from overnight data BEFORE training — it is now outdated and must NOT be used as the primary indicator. The body battery and training activity are the honest signals right now.`
+    : `It is the ${timeOfDay} (local hour ${hour}:00). ${trainedToday ? 'The athlete has already completed at least one activity today.' : 'No activity has been logged yet today.'}`
 
   // Recommendation framing changes by time of day. After ~18:00 it's too late
   // to prescribe a hard session — validate rest if it fits and pivot to
   // tomorrow's plan + a light evening option.
-  const recommendationGuidance =
-    hour >= 18
-      ? `
+  const recommendationGuidance = lateDayDepleted
+    ? `
+**Tonight & Tomorrow**
+Training is done for today. Do NOT recommend another session.
+- Acknowledge what the athlete has achieved today.
+- Give ONE specific recovery action for tonight (e.g. protein-rich meal, 10 min stretching, prioritise 8h sleep, avoid screens before bed).
+- Then prescribe the main session FOR TOMORROW based on their morning recovery signals — pick ONE of: full rest, active recovery, easy aerobic, moderate run/cycle, tempo/threshold, intervals, or strength. Be specific with duration and intensity.`
+    : hour >= 18
+    ? `
 **Tonight & Tomorrow**
 It is the ${timeOfDay}, so don't prescribe a hard workout for today.
 - If no training happened and recovery signals are only moderate, explicitly validate rest: a well-timed rest day supports adaptation. Say so plainly.
 - Suggest ONE gentle evening option the athlete can do now if they want movement: a 15–20 min easy walk, mobility/stretching, or breath-work for sleep.
 - Then prescribe the main session FOR TOMORROW — pick ONE of: full rest, active recovery, easy aerobic, moderate run/cycle, tempo/threshold, intervals, or strength. Be specific ("tomorrow: 30–40 min easy run at conversational pace" or "tomorrow: 5x800m at 5k pace, 90s rest").`
-      : `
+    : `
 **Today's Recommendation**
 Pick ONE of: full rest, active recovery (light walk/yoga), easy aerobic, moderate run/cycle, tempo/threshold, intervals, or strength. State which and why with numbers. Give a specific session (e.g. "30–40 min easy run at conversational pace" or "5x800m intervals with 90s rest").${
-          trainedToday
-            ? ' The athlete already trained today, so frame this as "for the rest of the day" — likely recovery, mobility, or hydration/fuel focus rather than another hard session.'
-            : ''
-        }`
+        trainedToday
+          ? ' The athlete already trained today, so frame this as "for the rest of the day" — likely recovery, mobility, or hydration/fuel focus rather than another hard session.'
+          : ''
+      }`
+
+  const currentStatusInstruction = lateDayDepleted
+    ? `**Current Status**\nOne sentence describing where the athlete is RIGHT NOW — reference body battery (${m.bodyBatteryEnd}) and the fact that they've already trained hard today. Do NOT lead with the morning readiness score.`
+    : `**Current Status**\nOne sentence on overall recovery and readiness today, referencing actual numbers.`
 
   return `You are an expert sports scientist giving a daily training snapshot. Today is ${today}. ${contextLine}
 
@@ -167,8 +180,7 @@ ${actSection}
 ## Instructions
 Analyse the data and respond in EXACTLY this format (including the bold section headers):
 
-**Current Status**
-One sentence on overall recovery and readiness today, referencing actual numbers.
+${currentStatusInstruction}
 
 **Key Signals**
 • [Most important positive or negative signal with the number]
@@ -183,17 +195,27 @@ Be direct, warm, and non-preachy. Reference specific numbers. Never prescribe a 
 }
 
 function buildHealthEnginePrompt(body: HealthEngineRequest): string {
-  const { recovery, strain, hrv, sleepScore, respiration, respirationBaseline, hour } = body
+  const { recovery, strain, hrv, sleepScore, respiration, respirationBaseline, bodyBatteryEnd, hour } = body
   const timeLabel = hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : 'evening'
+
+  // Late-day depletion: recovery is locked in from overnight — it doesn't update
+  // when the athlete trains. By afternoon, strain + body battery tell the real story.
+  const lateDayDone = hour >= 14 && strain != null && strain > 12 && bodyBatteryEnd != null && bodyBatteryEnd < 45
+
   const lines = [
-    recovery != null ? `Recovery score: ${Math.round(recovery)}/100` : null,
-    strain != null ? `Strain score: ${strain.toFixed(1)}/21` : null,
-    hrv != null ? `HRV: ${hrv}ms` : null,
+    recovery != null ? `Morning recovery score: ${Math.round(recovery)}/100 (calculated from overnight HRV/sleep — does NOT update during the day)` : null,
+    strain != null ? `Today's strain: ${strain.toFixed(1)}/21` : null,
+    bodyBatteryEnd != null ? `Body battery (current): ${bodyBatteryEnd}/100` : null,
+    hrv != null ? `HRV last night: ${hrv}ms` : null,
     sleepScore != null ? `Sleep score: ${sleepScore}/100` : null,
     respiration != null ? `Respiration: ${respiration} brpm${respirationBaseline ? ` (baseline ${respirationBaseline.toFixed(1)})` : ''}` : null,
   ].filter(Boolean).join('\n')
 
-  return `You are a world-class human performance coach. It is the ${timeLabel}. Give EXACTLY 2 sentences as a coach speaking directly to the athlete. First sentence: describe their current recovery/readiness state with a specific number. Second sentence: one concrete, specific recommendation (training or recovery). Be direct, warm, and human. No bullet points, no headers, no labels.\n\nMetrics:\n${lines}`
+  const context = lateDayDone
+    ? `IMPORTANT CONTEXT: It is the ${timeLabel} and the athlete has already trained hard today (strain ${strain?.toFixed(1)}/21) with their body battery now depleted at ${bodyBatteryEnd}. The morning recovery score of ${recovery != null ? Math.round(recovery) : '—'} was accurate at wake-up but is now outdated — it does NOT reflect the current state. Do NOT recommend more training. Instead, validate the work done and focus entirely on recovery: rest, nutrition, hydration, and sleep.`
+    : `It is the ${timeLabel}.`
+
+  return `You are a world-class human performance coach. ${context} Give EXACTLY 2 sentences as a coach speaking directly to the athlete. First sentence: describe their current state with a specific number (if late-day depleted, reference strain and body battery, not just morning recovery). Second sentence: one concrete, specific recommendation (training if fresh, recovery if depleted). Be direct, warm, and human. No bullet points, no headers, no labels.\n\nMetrics:\n${lines}`
 }
 
 export async function POST(req: NextRequest) {

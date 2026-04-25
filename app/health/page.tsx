@@ -714,6 +714,7 @@ export default function HealthPage() {
           sleepScore: data.sleepScore,
           respiration: data.respiration ?? data.sleepRespiration,
           respirationBaseline: warning.baseline || null,
+          bodyBatteryEnd: data.bodyBatteryEnd ?? null,
           hour: new Date().getHours(),
         }),
       })
@@ -749,6 +750,10 @@ export default function HealthPage() {
   const chronoAge = data?.dob ? Math.floor((Date.now() - new Date(data.dob).getTime()) / (365.25 * 24 * 3600 * 1000)) : null
   const hour = new Date().getHours()
   const briefingLabel = hour < 12 ? '🌅 Morning Briefing' : hour < 18 ? '☀️ Afternoon Check-in' : '🌙 Evening Briefing'
+  // Late-day override: recovery is a morning metric — if it's afternoon/evening, strain is high,
+  // and body battery is depleted, the "push harder" advice is no longer valid.
+  const bodyBattery = data?.bodyBatteryEnd ?? null
+  const lateDayDone = hour >= 14 && strain > 12 && bodyBattery != null && bodyBattery < 45
   const fmt = (sec: number | null) => sec != null ? `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m` : '—'
 
   // Analytics computations
@@ -811,6 +816,12 @@ export default function HealthPage() {
                 <p className="text-xs text-red-300">Recovery is critically low ({Math.round(recovery!)}%) while strain is high ({strain.toFixed(1)}). Prioritise full rest today.</p>
               </div>
             )}
+            {lateDayDone && !overreaching && (
+              <div className="mb-4 rounded-2xl p-4 border border-amber-500/40 bg-amber-950/30">
+                <p className="text-sm font-bold text-amber-400 mb-1">🏁 Training Done for Today</p>
+                <p className="text-xs text-amber-300">Your body battery is at {bodyBattery} and strain is {strain.toFixed(1)} — you&apos;ve already put in a big day. Your morning recovery score ({recovery != null ? `${Math.round(recovery)}%` : '—'}) was from before you trained. Prioritise rest, food, and sleep tonight.</p>
+              </div>
+            )}
 
             <div className="rounded-3xl p-6 mb-4 flex flex-col items-center" style={{ background: '#111111' }}>
               <div className="flex items-center gap-1 mb-1">
@@ -829,6 +840,8 @@ export default function HealthPage() {
                 </div>
                 <p className="text-[11px] text-gray-400 leading-relaxed">
                   {recovery == null ? 'Not enough data to calculate recovery.'
+                    : lateDayDone
+                    ? `This morning's recovery was ${Math.round(recovery)}% — but you've since trained hard (strain ${strain.toFixed(1)}) and your body battery is now ${bodyBattery}. This score reflects how you started the day, not where you are now. Rest and recover tonight.`
                     : recovery >= 67 ? 'Your body is well recovered. Green light for a hard training session today.'
                     : recovery >= 34 ? 'Partially recovered. Moderate training is fine — avoid pushing to your limit.'
                     : 'Low recovery. Your body needs rest more than it needs training today.'}
