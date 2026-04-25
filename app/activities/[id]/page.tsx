@@ -331,6 +331,83 @@ function RelativeEffort({ raw }: { raw: Record<string, unknown> }) {
   )
 }
 
+// ─── Shared helpers (module level) ────────────────────────────────────────────
+
+function localDs(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+}
+
+function calcActivityStreak(datestrs: string[]): number {
+  const set = new Set(datestrs)
+  const d = new Date(); d.setHours(0,0,0,0)
+  if (!set.has(localDs(d))) d.setDate(d.getDate() - 1) // ok if today not done yet
+  let streak = 0
+  for (let i = 0; i < 366; i++) {
+    if (set.has(localDs(d))) { streak++; d.setDate(d.getDate() - 1) } else break
+  }
+  return streak
+}
+
+// ─── Activity Streak Banner ────────────────────────────────────────────────────
+
+function ActivityStreakBanner({ streak, activityDateStrs }: { streak: number; activityDateStrs: string[] }) {
+  const dateSet = new Set(activityDateStrs)
+  const today = new Date(); today.setHours(0,0,0,0)
+  const todayStr = localDs(today)
+  const dow = (today.getDay() + 6) % 7 // Mon=0
+  const DAY_LABELS = ['M','T','W','T','F','S','S']
+  const weekDays = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(today); d.setDate(today.getDate() - dow + i)
+    const ds = localDs(d)
+    return { label: DAY_LABELS[i], ds, isToday: ds === todayStr, isFuture: d > today, hasActivity: dateSet.has(ds) }
+  })
+
+  return (
+    <div className="bg-gray-900 rounded-2xl px-4 py-3 flex items-center gap-4">
+      <div className="flex flex-col items-center shrink-0">
+        <span className="text-3xl leading-none">🔥</span>
+        <span className="text-orange-400 font-bold text-xl leading-tight">{streak}</span>
+        <span className="text-gray-500 text-[10px] leading-none">{streak === 1 ? 'day' : 'days'}</span>
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-gray-400 text-[11px] font-semibold uppercase tracking-wider mb-2">Activity Streak</p>
+        <div className="flex justify-between">
+          {weekDays.map((wd, i) => (
+            <div key={i} className="flex flex-col items-center gap-1">
+              <span className="text-gray-600 text-[9px]">{wd.label}</span>
+              <div className="w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-bold"
+                style={wd.hasActivity
+                  ? { background: '#f97316', color: 'white' }
+                  : wd.isToday
+                  ? { background: 'transparent', border: '2px solid #f97316', color: '#f97316' }
+                  : wd.isFuture
+                  ? { background: 'transparent', border: '1px solid #1f2937' }
+                  : { background: '#1f2937', color: '#374151' }
+                }>
+                {wd.hasActivity ? '✓' : wd.isToday ? '·' : ''}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Pace Insight Card ────────────────────────────────────────────────────────
+
+function PaceInsightCard({ insight }: { insight: string }) {
+  return (
+    <div className="bg-gray-900 rounded-2xl p-4">
+      <div className="flex items-center gap-2 mb-3">
+        <div className="w-6 h-6 bg-orange-500 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0">A</div>
+        <p className="text-orange-400 text-xs font-bold uppercase tracking-wider">Athlete Intelligence · Pace</p>
+      </div>
+      <p className="text-gray-200 text-sm leading-relaxed">{insight}</p>
+    </div>
+  )
+}
+
 // ─── Treadmill Segments Display ───────────────────────────────────────────────
 
 function inclineColor(pct: number | null): string {
@@ -589,6 +666,9 @@ export default function ActivityDetailPage() {
   const [treadmillSegments, setTreadmillSegments] = useState<TreadmillSegment[] | null>(null)
   const [treadmillNotes, setTreadmillNotes] = useState<string | null>(null)
   const [editModalOpen, setEditModalOpen] = useState(false)
+  const [paceInsight, setPaceInsight] = useState<string | null>(null)
+  const [activityDateStrs, setActivityDateStrs] = useState<string[]>([])
+  const [activityStreak, setActivityStreak] = useState(0)
 
   useEffect(() => {
     const load = async () => {
@@ -619,6 +699,19 @@ export default function ActivityDetailPage() {
         .order('start_time', { ascending: false })
         .limit(20)
       setRecentActivities((recent ?? []) as Record<string, unknown>[])
+
+      // Fetch 90-day activity dates for streak calculation
+      const ninetyAgo = new Date(Date.now() - 90 * 86400000).toISOString()
+      const { data: streakData } = await supabase
+        .from('garmin_activities')
+        .select('start_time')
+        .eq('user_id', session.session.user.id)
+        .gte('start_time', ninetyAgo)
+        .order('start_time', { ascending: false })
+      const datestrs = [...new Set((streakData ?? []).map((r: { start_time: string }) => localDs(new Date(r.start_time))))]
+      setActivityDateStrs(datestrs)
+      setActivityStreak(calcActivityStreak(datestrs))
+
       setLoading(false)
     }
     load()
@@ -648,6 +741,7 @@ export default function ActivityDetailPage() {
         if (d.error) setAnalysisError(d.error)
         else {
           setAnalysis({ headline: d.headline ?? '', body: d.analysis ?? '' })
+          if (d.paceInsight) setPaceInsight(d.paceInsight)
           setAnalysisGeneratedAt(new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }))
         }
       })
@@ -718,6 +812,11 @@ export default function ActivityDetailPage() {
         {/* Back */}
         <a href="/activities" className="text-gray-500 text-sm hover:text-gray-300">← Activities</a>
 
+        {/* Activity Streak */}
+        {activityStreak > 0 && (
+          <ActivityStreakBanner streak={activityStreak} activityDateStrs={activityDateStrs} />
+        )}
+
         {/* Header */}
         <div className="bg-gray-900 rounded-2xl p-5">
           <div className="flex items-start gap-3">
@@ -783,6 +882,9 @@ export default function ActivityDetailPage() {
             </div>
           </button>
         </div>
+
+        {/* Pace Intelligence card */}
+        {paceInsight && <PaceInsightCard insight={paceInsight} />}
 
         {/* Primary stats */}
         {stats.length > 0 && (

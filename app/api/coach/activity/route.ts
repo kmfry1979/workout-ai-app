@@ -99,20 +99,24 @@ function buildPrompt(activity: Record<string, unknown>, recentActivities: Record
       : null,
   ].filter(Boolean).join('\n')
 
+  const isRun = type.toLowerCase().includes('run') || type.toLowerCase().includes('jog') || type.toLowerCase().includes('walk') || type.toLowerCase().includes('treadmill')
+
   return `You are an expert coach providing post-activity feedback. The athlete just completed:
 
 ${lines}
 
-Write a coaching summary in EXACTLY this format:
+Write a coaching summary in EXACTLY this format (all four sections, no extra text):
 
-HEADLINE: [One punchy sentence (max 15 words) comparing this session to their typical performance — reference a specific number like pace, distance, or HR. Be direct and specific like "Solid ${durationMin}min ${type} — ${avgPaceStr ? `${avgPaceStr} pace is` : 'effort is'} ${comparisonStr.includes('faster') ? 'faster than your recent average' : comparisonStr.includes('above avg') ? 'above your recent average' : 'consistent with your recent form'}".]
+HEADLINE: [One punchy sentence (max 15 words) comparing this session to their typical performance — reference a specific number like pace, distance, or HR.]
+
+PACE_INSIGHT: [${isRun ? `2-3 sentences specifically about their pacing strategy and effort distribution. Reference the avg pace number. Describe how their HR zones reveal pacing pattern — e.g. did they go out hard and fade, hold steady, or build? What does the pace + zone combo suggest about how the session was run? Write conversationally: "You held a steady Z2 effort for most of this run…". No bullet points.` : `2-3 sentences about the effort distribution and intensity pattern for this ${type} session. Reference HR zones and training effect. Describe the effort shape (steady, intervals, progressive etc). Write conversationally.`}]
 
 BODY:
-[Paragraph 1 — 3-4 sentences: Describe what the data says. Reference HR zones (which zone dominated, what that means physiologically), pace/distance vs recent average if available, training effect score and what it means (1=minor benefit, 5=overreaching), and whether the effort was appropriate for the day. Be specific with numbers.]
+[Paragraph 1 — 3-4 sentences: Describe what the data says. Reference HR zones, pace/distance vs recent average, training effect score (1=minor, 5=overreaching). Be specific with numbers.]
 
-[Paragraph 2 — 2-3 sentences: Recovery and next steps. Based on the aerobic/anaerobic TE scores and HR data, what should the athlete do next? Mention timeline (e.g. "take 24h easy") and one specific session recommendation for their next workout.]
+[Paragraph 2 — 2-3 sentences: Recovery and next steps. What should the athlete do next, with timeline and one specific session recommendation.]
 
-Keep the total body to 150-180 words. Do not use bullet points. Write like a knowledgeable coach who reviewed the data.`
+Keep total BODY to 150-180 words. Do not use bullet points. Write like a knowledgeable coach.`
 }
 
 export async function POST(req: NextRequest) {
@@ -163,11 +167,13 @@ export async function POST(req: NextRequest) {
   const text = data.choices?.[0]?.message?.content
   if (!text) return NextResponse.json({ error: data.error?.message ?? 'No response from Groq' }, { status: 502 })
 
-  // Parse headline and body from the structured response
-  const headlineMatch = text.match(/HEADLINE:\s*(.+?)(?:\n|$)/i)
+  // Parse structured sections from the response
+  const headlineMatch = text.match(/HEADLINE:\s*(.+?)(?:\n|PACE_INSIGHT:|$)/i)
+  const paceInsightMatch = text.match(/PACE_INSIGHT:\s*([\s\S]+?)(?:\n\n|BODY:|$)/i)
   const bodyMatch = text.match(/BODY:\s*([\s\S]+)/i)
   const headline = headlineMatch?.[1]?.trim() ?? text.split('\n')[0].trim()
+  const paceInsight = paceInsightMatch?.[1]?.trim().replace(/\n/g, ' ') ?? null
   const bodyText = bodyMatch?.[1]?.trim() ?? text.replace(/HEADLINE:.+\n?/i, '').trim()
 
-  return NextResponse.json({ headline, analysis: bodyText })
+  return NextResponse.json({ headline, paceInsight, analysis: bodyText })
 }
