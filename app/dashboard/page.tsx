@@ -573,17 +573,32 @@ export default function DashboardPage() {
     stress_level: number | null
     motivation_level: number | null
   }
+  type EveningCheckinData = {
+    feeling_score: number | null      // "How was your day?"
+    workout_status: number | null     // stored as night_wakings: 0=rest,1=done,2=modified,3=skipped,4=bonus
+    nutrition_score: number | null    // stored as sleep_rating: 1–5
+    stress_level: number | null
+    energy_level: number | null
+    motivation_level: number | null   // "Ready for tomorrow?"
+  }
   const EMPTY_MORNING: MorningCheckinData = {
     feeling_score: null, body_ache_areas: [], night_wakings: null,
     sleep_rating: null, energy_level: null, stress_level: null, motivation_level: null,
   }
+  const EMPTY_EVENING: EveningCheckinData = {
+    feeling_score: null, workout_status: null, nutrition_score: null,
+    stress_level: null, energy_level: null, motivation_level: null,
+  }
   const [morningCheckin, setMorningCheckin] = useState<MorningCheckinData | null>(null)
-  const [eveningCheckin, setEveningCheckin] = useState<{ feeling_score: number | null } | null>(null)
+  const [eveningCheckin, setEveningCheckin] = useState<EveningCheckinData | null>(null)
   const [checkinHistory, setCheckinHistory] = useState<{ check_date: string; check_type: string }[]>([])
   const [checkinLoaded, setCheckinLoaded] = useState(false)
   const [morningModalOpen, setMorningModalOpen] = useState(false)
   const [morningStep, setMorningStep] = useState(0)
   const [morningDraft, setMorningDraft] = useState<MorningCheckinData>(EMPTY_MORNING)
+  const [eveningModalOpen, setEveningModalOpen] = useState(false)
+  const [eveningStep, setEveningStep] = useState(0)
+  const [eveningDraft, setEveningDraft] = useState<EveningCheckinData>(EMPTY_EVENING)
   const [morningStreak, setMorningStreak] = useState(0)
   const [eveningStreak, setEveningStreak] = useState(0)
   const [checkinSaving, setCheckinSaving] = useState(false)
@@ -696,7 +711,14 @@ export default function DashboardPage() {
     const tm = rows.find(r => r.check_date === today && r.check_type === 'morning')
     const te = rows.find(r => r.check_date === today && r.check_type === 'evening')
     setMorningCheckin(tm ? { feeling_score: tm.feeling_score, body_ache_areas: tm.body_ache_areas ?? [], night_wakings: tm.night_wakings, sleep_rating: tm.sleep_rating, energy_level: tm.energy_level, stress_level: tm.stress_level, motivation_level: tm.motivation_level } : null)
-    setEveningCheckin(te ? { feeling_score: te.feeling_score } : null)
+    setEveningCheckin(te ? {
+      feeling_score: te.feeling_score,
+      workout_status: te.night_wakings,
+      nutrition_score: te.sleep_rating,
+      stress_level: te.stress_level,
+      energy_level: te.energy_level,
+      motivation_level: te.motivation_level,
+    } : null)
     setCheckinLoaded(true)
     // Load today's journal entry alongside check-in
     const todayForJournal = localDateStr(new Date())
@@ -745,6 +767,29 @@ export default function DashboardPage() {
     const hist = [...checkinHistory.filter(r => !(r.check_date === today && r.check_type === 'morning')), { check_date: today, check_type: 'morning' }]
     setCheckinHistory(hist)
     setMorningStreak(calcCheckinStreak('morning', hist))
+    setCheckinSaving(false)
+  }
+
+  const saveEveningCheckin = async (draft: EveningCheckinData) => {
+    if (checkinSaving) return
+    setCheckinSaving(true)
+    const today = localDateStr(new Date())
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) { setCheckinSaving(false); return }
+    await supabase.from('daily_checkin').upsert({
+      user_id: user.id, check_date: today, check_type: 'evening',
+      feeling_score: draft.feeling_score,
+      night_wakings: draft.workout_status,
+      sleep_rating: draft.nutrition_score,
+      stress_level: draft.stress_level,
+      energy_level: draft.energy_level,
+      motivation_level: draft.motivation_level,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'user_id,check_date,check_type' })
+    setEveningCheckin(draft)
+    const hist = [...checkinHistory.filter(r => !(r.check_date === today && r.check_type === 'evening')), { check_date: today, check_type: 'evening' }]
+    setCheckinHistory(hist)
+    setEveningStreak(calcCheckinStreak('evening', hist))
     setCheckinSaving(false)
   }
 
@@ -3169,17 +3214,148 @@ export default function DashboardPage() {
                   </button>
 
                   {/* Evening tile */}
-                  <div className="rounded-2xl p-4" style={{ background: '#111827', border: '1px solid #1f2937', opacity: 0.6 }}>
+                  <button type="button" onClick={() => { setEveningDraft(eveningCheckin ?? EMPTY_EVENING); setEveningStep(0); setEveningModalOpen(true) }}
+                    className="rounded-2xl p-4 text-left transition-colors hover:opacity-90 active:scale-95"
+                    style={{ background: '#111827', border: '1px solid #1f2937' }}>
                     <div className="flex items-center justify-between mb-1">
                       <span className="text-[10px] font-bold tracking-widest text-indigo-400">🌙 EVENING</span>
-                      {eveningCheckin && <span className="text-[9px] text-blue-400 font-bold">✓ DONE</span>}
+                      {eveningCheckin && <span className="text-[9px] text-indigo-400 font-bold">✓ DONE</span>}
                     </div>
                     <p className="text-[10px] text-gray-500 mb-0.5">Last: <span className="text-gray-300">{fmtLast(lastEvening?.check_date)}</span></p>
                     <p className="text-[10px] text-gray-500">Streak: <span className="text-indigo-400 font-semibold">{eveningStreak} {eveningStreak === 1 ? 'day' : 'days'}</span></p>
                     <DayBubbles doneDates={eveningDates} />
-                    <p className="text-[9px] text-gray-600 mt-2 text-center">Coming soon</p>
-                  </div>
+                  </button>
                 </div>
+
+                {/* Evening check-in modal */}
+                {eveningModalOpen && (() => {
+                  const ESTEPS = [
+                    {
+                      key: 'feeling', title: 'How was your day?', subtitle: 'Overall from start to finish',
+                      options: [
+                        { v: 1, emoji: '😩', label: 'Rough' }, { v: 2, emoji: '😕', label: 'Hard' },
+                        { v: 3, emoji: '😐', label: 'OK' }, { v: 4, emoji: '😊', label: 'Good' },
+                        { v: 5, emoji: '🤩', label: 'Great' },
+                      ],
+                      val: () => eveningDraft.feeling_score,
+                      set: (v: number) => setEveningDraft(d => ({ ...d, feeling_score: v })),
+                    },
+                    {
+                      key: 'workout', title: 'Workout today?', subtitle: 'What happened with training?',
+                      options: [
+                        { v: 0, emoji: '🛋️', label: 'Rest day' }, { v: 1, emoji: '✅', label: 'Completed' },
+                        { v: 2, emoji: '🔄', label: 'Modified' }, { v: 3, emoji: '❌', label: 'Skipped' },
+                        { v: 4, emoji: '💪', label: 'Bonus' },
+                      ],
+                      val: () => eveningDraft.workout_status,
+                      set: (v: number) => setEveningDraft(d => ({ ...d, workout_status: v })),
+                    },
+                    {
+                      key: 'nutrition', title: 'Nutrition quality?', subtitle: 'How well did you eat today?',
+                      options: [
+                        { v: 1, emoji: '🍔', label: 'Poor' }, { v: 2, emoji: '🍕', label: 'Fair' },
+                        { v: 3, emoji: '🍱', label: 'OK' }, { v: 4, emoji: '🥗', label: 'Good' },
+                        { v: 5, emoji: '🌿', label: 'On point' },
+                      ],
+                      val: () => eveningDraft.nutrition_score,
+                      set: (v: number) => setEveningDraft(d => ({ ...d, nutrition_score: v })),
+                    },
+                    {
+                      key: 'stress', title: 'Stress level?', subtitle: 'Mental load today',
+                      options: [
+                        { v: 1, emoji: '😌', label: 'Calm' }, { v: 2, emoji: '🙂', label: 'Low' },
+                        { v: 3, emoji: '😐', label: 'Moderate' }, { v: 4, emoji: '😤', label: 'High' },
+                        { v: 5, emoji: '🤯', label: 'Max' },
+                      ],
+                      val: () => eveningDraft.stress_level,
+                      set: (v: number) => setEveningDraft(d => ({ ...d, stress_level: v })),
+                    },
+                    {
+                      key: 'energy', title: 'Energy during the day?', subtitle: 'Physical energy levels',
+                      options: [
+                        { v: 1, emoji: '🪫', label: 'Drained' }, { v: 2, emoji: '😞', label: 'Low' },
+                        { v: 3, emoji: '⚡', label: 'OK' }, { v: 4, emoji: '🔋', label: 'Good' },
+                        { v: 5, emoji: '🚀', label: 'High' },
+                      ],
+                      val: () => eveningDraft.energy_level,
+                      set: (v: number) => setEveningDraft(d => ({ ...d, energy_level: v })),
+                    },
+                    {
+                      key: 'tomorrow', title: 'Ready for tomorrow?', subtitle: 'Going into tonight',
+                      options: [
+                        { v: 1, emoji: '😴', label: 'Need rest' }, { v: 2, emoji: '😕', label: 'Tired' },
+                        { v: 3, emoji: '😐', label: 'OK' }, { v: 4, emoji: '💪', label: 'Ready' },
+                        { v: 5, emoji: '🔥', label: 'Bring it' },
+                      ],
+                      val: () => eveningDraft.motivation_level,
+                      set: (v: number) => setEveningDraft(d => ({ ...d, motivation_level: v })),
+                    },
+                  ]
+                  const estep = ESTEPS[eveningStep]
+                  const eIsLast = eveningStep === ESTEPS.length - 1
+                  const eCanNext = estep.val() != null
+                  return (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center px-4" style={{ background: 'rgba(0,0,0,0.85)' }}
+                      onClick={e => { if (e.target === e.currentTarget) setEveningModalOpen(false) }}>
+                      <div className="w-full max-w-md rounded-3xl p-6 overflow-y-auto" style={{ background: '#111827', border: '1px solid #1f2937', maxHeight: '90vh' }}>
+                        {/* Header */}
+                        <div className="flex items-center justify-between mb-4">
+                          <p className="text-[10px] font-bold tracking-widest text-indigo-400">🌙 EVENING CHECK-IN</p>
+                          <button type="button" onClick={() => setEveningModalOpen(false)} className="text-gray-500 hover:text-gray-300 text-lg leading-none">✕</button>
+                        </div>
+                        {/* Progress dots */}
+                        <div className="flex justify-center gap-1.5 mb-5">
+                          {ESTEPS.map((_, i) => (
+                            <div key={i} className="rounded-full transition-all" style={{ width: i === eveningStep ? 20 : 6, height: 6, background: i < eveningStep ? '#4f46e5' : i === eveningStep ? '#6366f1' : '#374151' }} />
+                          ))}
+                        </div>
+                        {/* Question */}
+                        <h2 className="text-lg font-bold text-white mb-1">{estep.title}</h2>
+                        <p className="text-xs text-gray-500 mb-5">{estep.subtitle}</p>
+                        {/* Options */}
+                        <div className="flex justify-around mb-6">
+                          {estep.options.map(opt => {
+                            const cur = estep.val()
+                            const sel = cur === opt.v
+                            return (
+                              <button key={opt.v} type="button"
+                                onClick={() => estep.set(opt.v as number)}
+                                className="flex flex-col items-center gap-1.5 transition-all"
+                                style={{ opacity: cur != null && !sel ? 0.4 : 1 }}>
+                                <span className={`text-3xl transition-transform ${sel ? 'scale-125' : 'hover:scale-110'}`}>{opt.emoji}</span>
+                                <span className="text-[10px] font-medium" style={{ color: sel ? '#6366f1' : '#6b7280' }}>{opt.label}</span>
+                              </button>
+                            )
+                          })}
+                        </div>
+                        {/* Nav buttons */}
+                        <div className="flex gap-3">
+                          {eveningStep > 0 && (
+                            <button type="button" onClick={() => setEveningStep(s => s - 1)}
+                              className="flex-1 py-3 rounded-2xl text-sm font-semibold text-gray-400 transition-colors"
+                              style={{ background: '#1f2937' }}>
+                              Back
+                            </button>
+                          )}
+                          <button type="button"
+                            onClick={async () => {
+                              if (eIsLast) {
+                                await saveEveningCheckin(eveningDraft)
+                                setEveningModalOpen(false)
+                              } else {
+                                setEveningStep(s => s + 1)
+                              }
+                            }}
+                            disabled={!eCanNext}
+                            className="flex-1 py-3 rounded-2xl text-sm font-bold text-white transition-colors"
+                            style={{ background: eCanNext ? '#4f46e5' : '#374151' }}>
+                            {eIsLast ? (checkinSaving ? 'Saving…' : 'Save Check-in') : 'Next →'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })()}
 
                 {/* Morning check-in modal */}
                 {morningModalOpen && (() => {
