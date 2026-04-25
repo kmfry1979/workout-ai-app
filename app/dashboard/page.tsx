@@ -587,6 +587,8 @@ export default function DashboardPage() {
   const [morningStreak, setMorningStreak] = useState(0)
   const [eveningStreak, setEveningStreak] = useState(0)
   const [checkinSaving, setCheckinSaving] = useState(false)
+  const [journalTags, setJournalTags] = useState<string[]>([])
+  const [journalLoaded, setJournalLoaded] = useState(false)
 
   // Settings + one-time backfill state
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -696,6 +698,30 @@ export default function DashboardPage() {
     setMorningCheckin(tm ? { feeling_score: tm.feeling_score, body_ache_areas: tm.body_ache_areas ?? [], night_wakings: tm.night_wakings, sleep_rating: tm.sleep_rating, energy_level: tm.energy_level, stress_level: tm.stress_level, motivation_level: tm.motivation_level } : null)
     setEveningCheckin(te ? { feeling_score: te.feeling_score } : null)
     setCheckinLoaded(true)
+    // Load today's journal entry alongside check-in
+    const todayForJournal = localDateStr(new Date())
+    const { data: jData } = await supabase
+      .from('daily_journal')
+      .select('tags')
+      .eq('user_id', uid)
+      .eq('journal_date', todayForJournal)
+      .maybeSingle()
+    setJournalTags((jData as { tags?: string[] } | null)?.tags ?? [])
+    setJournalLoaded(true)
+  }
+
+  const toggleJournalTag = async (tag: string) => {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return
+    const today = localDateStr(new Date())
+    const newTags = journalTags.includes(tag)
+      ? journalTags.filter(t => t !== tag)
+      : [...journalTags, tag]
+    setJournalTags(newTags)
+    await supabase.from('daily_journal').upsert(
+      { user_id: user.id, journal_date: today, tags: newTags, updated_at: new Date().toISOString() },
+      { onConflict: 'user_id,journal_date' }
+    )
   }
 
   const saveMorningCheckin = async (draft: MorningCheckinData) => {
@@ -3328,6 +3354,54 @@ export default function DashboardPage() {
                   )
                 })()}
               </>
+            )
+          })()}
+
+          {/* ── Today's Lifestyle Log ─────────────────────────────────── */}
+          {journalLoaded && (() => {
+            const TAGS = [
+              { key: 'alcohol',        emoji: '🍺', label: 'Alcohol' },
+              { key: 'late_night',     emoji: '🌙', label: 'Late Night' },
+              { key: 'high_stress',    emoji: '😰', label: 'Stress' },
+              { key: 'poor_nutrition', emoji: '🍔', label: 'Junk Food' },
+              { key: 'good_nutrition', emoji: '🥗', label: 'Clean Diet' },
+              { key: 'meditation',     emoji: '🧘', label: 'Meditated' },
+              { key: 'cold_exposure',  emoji: '🧊', label: 'Cold' },
+              { key: 'travel',         emoji: '✈️', label: 'Travelling' },
+              { key: 'illness',        emoji: '🤒', label: 'Unwell' },
+            ]
+            return (
+              <div className="bg-gray-900 rounded-2xl p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-xs text-gray-400 uppercase tracking-wider font-semibold">Today&apos;s Lifestyle Log</p>
+                  <p className="text-[10px] text-gray-600">Tap to toggle · Saves automatically</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {TAGS.map(t => {
+                    const active = journalTags.includes(t.key)
+                    return (
+                      <button
+                        key={t.key}
+                        type="button"
+                        onClick={() => toggleJournalTag(t.key)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all"
+                        style={active
+                          ? { background: '#f97316', color: 'white', border: '1px solid #f97316' }
+                          : { background: 'transparent', color: '#9ca3af', border: '1px solid #374151' }
+                        }
+                      >
+                        <span>{t.emoji}</span>
+                        <span>{t.label}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+                {journalTags.length > 0 && (
+                  <p className="text-[10px] text-gray-600 mt-3">
+                    Logged: {journalTags.map(t => TAGS.find(x => x.key === t)?.label ?? t).join(', ')} · Patterns visible in Health → Analytics
+                  </p>
+                )}
+              </div>
             )
           })()}
 

@@ -45,7 +45,9 @@ type HealthData = {
   hrvHistory30: { date: string; hrv: number | null }[]
   stepsHistory28: { date: string; load: number }[]
   sleepHistory30: { date: string; score: number | null }[]
+  sleepHistory7durations: (number | null)[]
   activities90: ActivityDetail[]
+  journalHistory: { date: string; tags: string[] }[]
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -284,6 +286,73 @@ function calcWeeklySummary(stepsHistory28: { date: string; load: number }[], sle
   }
 }
 
+// ─── Sleep Debt ───────────────────────────────────────────────────────────────
+
+const SLEEP_TARGET_SEC = 8 * 3600
+
+function calcSleepDebt(durations: (number | null)[]): { debtSec: number; actualSec: number; targetSec: number; nights: number } | null {
+  const valid = durations.filter((v): v is number => v != null && v > 0)
+  if (valid.length === 0) return null
+  const actualSec = valid.reduce((s, v) => s + v, 0)
+  const targetSec = SLEEP_TARGET_SEC * valid.length
+  return { debtSec: targetSec - actualSec, actualSec, targetSec, nights: valid.length }
+}
+
+// ─── Journal / Lifestyle Correlation ─────────────────────────────────────────
+
+const TAG_META: Record<string, { emoji: string; label: string }> = {
+  alcohol:       { emoji: '🍺', label: 'Alcohol' },
+  late_night:    { emoji: '🌙', label: 'Late Night' },
+  high_stress:   { emoji: '😰', label: 'High Stress' },
+  travel:        { emoji: '✈️', label: 'Travel' },
+  illness:       { emoji: '🤒', label: 'Illness' },
+  poor_nutrition:{ emoji: '🍔', label: 'Poor Nutrition' },
+  good_nutrition:{ emoji: '🥗', label: 'Good Nutrition' },
+  meditation:    { emoji: '🧘', label: 'Meditation' },
+  cold_exposure: { emoji: '🧊', label: 'Cold' },
+}
+
+type TagCorrelation = {
+  tag: string; emoji: string; label: string
+  taggedAvg: number; baselineAvg: number; delta: number; n: number
+}
+
+function calcTagCorrelations(
+  journal: { date: string; tags: string[] }[],
+  hrvHistory: { date: string; hrv: number | null }[]
+): TagCorrelation[] {
+  const hrvMap = new Map(hrvHistory.map(r => [r.date, r.hrv]))
+  const allHRVs = hrvHistory.map(r => r.hrv).filter((v): v is number => v != null)
+  const overallAvg = allHRVs.length > 0 ? allHRVs.reduce((s, v) => s + v, 0) / allHRVs.length : null
+  if (overallAvg == null) return []
+
+  const allTags = new Set<string>()
+  for (const j of journal) j.tags.forEach(t => allTags.add(t))
+
+  const results: TagCorrelation[] = []
+  for (const tag of allTags) {
+    const taggedDates = new Set(journal.filter(j => j.tags.includes(tag)).map(j => j.date))
+    const nonTaggedDates = new Set(journal.filter(j => !j.tags.includes(tag)).map(j => j.date))
+    const taggedHRVs: number[] = []
+    const baselineHRVs: number[] = []
+    for (const [date, hrv] of hrvMap) {
+      if (hrv == null) continue
+      const prevDate = localDateStr(new Date(new Date(date).getTime() - 86400000))
+      if (taggedDates.has(prevDate)) taggedHRVs.push(hrv)
+      else if (nonTaggedDates.has(prevDate)) baselineHRVs.push(hrv)
+    }
+    if (taggedHRVs.length < 3) continue
+    const taggedAvg = taggedHRVs.reduce((s, v) => s + v, 0) / taggedHRVs.length
+    const baselineAvg = baselineHRVs.length >= 2
+      ? baselineHRVs.reduce((s, v) => s + v, 0) / baselineHRVs.length
+      : overallAvg
+    const delta = Math.round((taggedAvg - baselineAvg) * 10) / 10
+    const meta = TAG_META[tag] ?? { emoji: '•', label: tag }
+    results.push({ tag, emoji: meta.emoji, label: meta.label, taggedAvg: Math.round(taggedAvg), baselineAvg: Math.round(baselineAvg), delta, n: taggedHRVs.length })
+  }
+  return results.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
+}
+
 function friendlyActivityType(raw: string | null): string {
   if (!raw) return 'Other'
   // Python dict (all-caps keys): {'TYPEKEY': 'STRENGTH_TRAINING', ...}
@@ -298,6 +367,107 @@ function friendlyActivityType(raw: string | null): string {
     return jsonMatch[1].split('_').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ')
   }
   return raw.replace(/_/g, ' ')
+}
+
+// ─── Sleep Debt Card ─────────────────────────────────────────────────────────
+
+function SleepDebtCard({ debt }: { debt: { debtSec: number; actualSec: number; targetSec: number; nights: number } }) {
+  const fmtH = (sec: number) => {
+    const abs = Math.abs(sec)
+    const h = Math.floor(abs / 3600)
+    const m = Math.floor((abs % 3600) / 60)
+    return h > 0 ? `${h}h ${m}m` : `${m}m`
+  }
+  const pct = Math.min(100, (debt.actualSec / debt.targetSec) * 100)
+  const isDebt = debt.debtSec > 0
+  const color = debt.debtSec > 4 * 3600 ? '#FF0000' : debt.debtSec > 2 * 3600 ? '#f97316' : debt.debtSec > 0 ? '#FFFF00' : '#21FF00'
+
+  // Semicircle gauge
+  const r = 44, cx = 60, cy = 52
+  const circ = Math.PI * r
+  const fill = (pct / 100) * circ
+
+  return (
+    <div className="rounded-3xl p-6 mb-4" style={{ background: '#111111' }}>
+      <div className="flex items-center gap-1 mb-4">
+        <p className="text-xs text-gray-500 uppercase tracking-widest">Sleep Debt</p>
+        <InfoTip text="Rolling 7-night total vs an 8h/night target. Green = on track, yellow = &lt;2h behind, orange = 2–4h behind, red = 4h+ behind." />
+      </div>
+      <div className="flex items-center gap-6">
+        <div className="relative shrink-0">
+          <svg width="120" height="68" viewBox="0 0 120 68">
+            <path d={`M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${cx + r} ${cy}`}
+              fill="none" stroke="#1f2937" strokeWidth="12" strokeLinecap="round" />
+            <path d={`M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${cx + r} ${cy}`}
+              fill="none" stroke={color} strokeWidth="12" strokeLinecap="round"
+              strokeDasharray={`${fill.toFixed(1)} ${circ.toFixed(1)}`}
+              style={{ transition: 'stroke-dasharray 1s ease' }} />
+          </svg>
+          <div className="absolute inset-0 flex flex-col items-center justify-end pb-1">
+            <span className="text-lg font-bold leading-none" style={{ color }}>{Math.round(pct)}%</span>
+          </div>
+        </div>
+        <div className="flex-1">
+          <p className="text-2xl font-bold leading-none mb-1" style={{ color }}>
+            {isDebt ? `−${fmtH(debt.debtSec)}` : `+${fmtH(-debt.debtSec)}`}
+          </p>
+          <p className="text-xs text-gray-400 mb-2">
+            {isDebt ? `behind target · ${debt.nights}-night window` : `sleep surplus · ${debt.nights}-night window`}
+          </p>
+          <div className="space-y-0.5">
+            <p className="text-[10px] text-gray-500">Got: <span className="text-gray-300">{fmtH(debt.actualSec)}</span></p>
+            <p className="text-[10px] text-gray-500">Target: <span className="text-gray-300">{fmtH(debt.targetSec)}</span> ({debt.nights}×8h)</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Lifestyle Impact Card ────────────────────────────────────────────────────
+
+function LifestyleImpactCard({ correlations }: { correlations: TagCorrelation[] }) {
+  if (correlations.length === 0) return (
+    <div className="rounded-3xl p-5 mb-4" style={{ background: '#111111' }}>
+      <div className="flex items-center gap-1 mb-1">
+        <p className="text-xs text-gray-500 uppercase tracking-widest">Lifestyle Impact on HRV</p>
+        <InfoTip text="Log lifestyle factors on your dashboard daily. Once you have 3+ occurrences of a tag, this card shows how each factor affects your next-morning HRV." />
+      </div>
+      <p className="text-xs text-gray-600 mt-2">
+        No data yet. Log lifestyle tags on the dashboard for at least 3 nights to reveal patterns.
+      </p>
+    </div>
+  )
+  const maxAbs = Math.max(...correlations.map(c => Math.abs(c.delta)), 1)
+  return (
+    <div className="rounded-3xl p-5 mb-4" style={{ background: '#111111' }}>
+      <div className="flex items-center gap-1 mb-1">
+        <p className="text-xs text-gray-500 uppercase tracking-widest">Lifestyle Impact on HRV</p>
+        <InfoTip text="Average next-morning HRV on nights you logged each tag vs your baseline. Negative = that factor lowers your HRV. Needs ≥3 logged occurrences per tag." />
+      </div>
+      <p className="text-[10px] text-gray-600 mb-4">Next-day HRV after logging each factor</p>
+      <div className="space-y-4">
+        {correlations.map(c => {
+          const barPct = (Math.abs(c.delta) / maxAbs) * 100
+          const isNeg = c.delta < 0
+          return (
+            <div key={c.tag}>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-sm">{c.emoji} <span className="text-xs text-gray-300">{c.label}</span></span>
+                <span className="text-xs font-semibold" style={{ color: isNeg ? '#FF0000' : '#21FF00' }}>
+                  {isNeg ? '' : '+'}{c.delta}ms <span className="text-gray-600 font-normal">({c.n}×)</span>
+                </span>
+              </div>
+              <div className="w-full bg-gray-800 rounded-full h-2">
+                <div className="h-2 rounded-full" style={{ width: `${barPct}%`, background: isNeg ? '#FF0000' : '#21FF00', opacity: 0.75 }} />
+              </div>
+              <p className="text-[10px] text-gray-600 mt-0.5">{c.taggedAvg}ms avg · baseline {c.baselineAvg}ms</p>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
 }
 
 // ─── Info Tooltip ─────────────────────────────────────────────────────────────
@@ -412,6 +582,7 @@ export default function HealthPage() {
       hrv30Res,
       steps28Res,
       sleep30Res,
+      journalRes,
       acts90Res,
     ] = await Promise.all([
       supabase.from('garmin_daily_health_metrics')
@@ -446,8 +617,11 @@ export default function HealthPage() {
         .select('step_date, moderate_intensity_minutes, vigorous_intensity_minutes, active_minutes')
         .eq('user_id', userId).gte('step_date', twentyEightAgo).order('step_date'),
       supabase.from('garmin_sleep_data')
-        .select('sleep_date, sleep_score')
+        .select('sleep_date, sleep_score, sleep_duration_seconds')
         .eq('user_id', userId).gte('sleep_date', thirtyAgo).order('sleep_date'),
+      supabase.from('daily_journal')
+        .select('journal_date, tags')
+        .eq('user_id', userId).gte('journal_date', thirtyAgo).order('journal_date'),
       supabase.from('garmin_activities')
         .select('activity_type, duration_sec, distance_m, avg_hr, max_hr, calories, start_time')
         .eq('user_id', userId).gte('start_time', ninetyAgo).order('start_time', { ascending: false }).limit(100),
@@ -483,7 +657,8 @@ export default function HealthPage() {
     // Analytics data
     const hrv30 = (hrv30Res.data ?? []) as { metric_date: string; hrv_avg: number | null }[]
     const steps28 = (steps28Res.data ?? []) as { step_date: string; moderate_intensity_minutes: number | null; vigorous_intensity_minutes: number | null; active_minutes: number | null }[]
-    const sleep30 = (sleep30Res.data ?? []) as { sleep_date: string; sleep_score: number | null }[]
+    const sleep30 = (sleep30Res.data ?? []) as { sleep_date: string; sleep_score: number | null; sleep_duration_seconds: number | null }[]
+    const journal30 = (journalRes.data ?? []) as { journal_date: string; tags: string[] }[]
     const acts90 = (acts90Res.data ?? []) as ActivityDetail[]
 
     const stepsHistory28 = steps28.map(r => {
@@ -513,7 +688,9 @@ export default function HealthPage() {
       hrvHistory30: hrv30.map(r => ({ date: r.metric_date, hrv: r.hrv_avg })),
       stepsHistory28,
       sleepHistory30: sleep30.map(r => ({ date: r.sleep_date, score: r.sleep_score })),
+      sleepHistory7durations: sleep30.slice(-7).map(r => r.sleep_duration_seconds ?? null),
       activities90: acts90,
+      journalHistory: journal30.map(r => ({ date: r.journal_date, tags: r.tags })),
     })
     setLoading(false)
   }, [router])
@@ -578,6 +755,8 @@ export default function HealthPage() {
   const acwr = data ? calcACWR(data.stepsHistory28) : null
   const hrvTrend = data ? calcHRVTrend(data.hrvHistory30) : null
   const sleepCorr = data ? calcSleepCorrelation(data.sleepHistory30, data.hrvHistory30) : null
+  const sleepDebt = data ? calcSleepDebt(data.sleepHistory7durations) : null
+  const tagCorrelations = data ? calcTagCorrelations(data.journalHistory, data.hrvHistory30) : []
   const estimatedMaxHR = chronoAge != null ? 220 - chronoAge : 185
   const zones = data ? calcTrainingZones(data.activities90, estimatedMaxHR) : []
   const maxZoneMin = zones.length > 0 ? Math.max(...zones.map(z => z.minutes), 1) : 1
@@ -711,6 +890,9 @@ export default function HealthPage() {
                 </p>
               </div>
             </div>
+
+            {/* Sleep Debt */}
+            {sleepDebt && <SleepDebtCard debt={sleepDebt} />}
 
             {warning.triggered && (
               <div className="mb-4 rounded-2xl p-4 border border-red-500/60" style={{ background: 'rgba(127,0,0,0.25)', boxShadow: '0 0 20px rgba(255,0,0,0.15)' }}>
@@ -852,6 +1034,9 @@ export default function HealthPage() {
                     <p className="text-xs text-gray-600">Need at least 5 paired nights of sleep + HRV data.</p>
                   )}
                 </div>
+
+                {/* Lifestyle Impact */}
+                <LifestyleImpactCard correlations={tagCorrelations} />
 
                 {/* VO2 Max Context */}
                 <div className="rounded-3xl p-5 mb-4" style={{ background: '#111111' }}>
@@ -1040,6 +1225,7 @@ export default function HealthPage() {
               <p><span className="text-gray-300">Strain</span> = Intensity minutes mapped logarithmically to 0–21 scale</p>
               <p><span className="text-gray-300">Early Warning</span> = Respiration &gt;12% above 14-day rolling baseline</p>
               <p><span className="text-gray-300">Bio Age</span> = Chronological age ± adjustments for VO2 max, RHR trend, deep sleep</p>
+              <p><span className="text-gray-300">Sleep Debt</span> = Rolling 7-night actual vs 8h/night target</p>
             </div>
           </div>
         )}
