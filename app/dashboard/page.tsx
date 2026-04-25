@@ -563,9 +563,30 @@ export default function DashboardPage() {
   const [stepGoalInput, setStepGoalInput] = useState('10000')
   const [savingGoal, setSavingGoal] = useState(false)
 
-  const [checkin, setCheckin] = useState<number | null>(null) // 1-5
-  const [checkinSaving, setCheckinSaving] = useState(false)
+  // ── Check-in state ────────────────────────────────────────────────────────
+  type MorningCheckinData = {
+    feeling_score: number | null
+    body_ache_areas: string[]
+    night_wakings: number | null
+    sleep_rating: number | null
+    energy_level: number | null
+    stress_level: number | null
+    motivation_level: number | null
+  }
+  const EMPTY_MORNING: MorningCheckinData = {
+    feeling_score: null, body_ache_areas: [], night_wakings: null,
+    sleep_rating: null, energy_level: null, stress_level: null, motivation_level: null,
+  }
+  const [morningCheckin, setMorningCheckin] = useState<MorningCheckinData | null>(null)
+  const [eveningCheckin, setEveningCheckin] = useState<{ feeling_score: number | null } | null>(null)
+  const [checkinHistory, setCheckinHistory] = useState<{ check_date: string; check_type: string }[]>([])
   const [checkinLoaded, setCheckinLoaded] = useState(false)
+  const [morningModalOpen, setMorningModalOpen] = useState(false)
+  const [morningStep, setMorningStep] = useState(0)
+  const [morningDraft, setMorningDraft] = useState<MorningCheckinData>(EMPTY_MORNING)
+  const [morningStreak, setMorningStreak] = useState(0)
+  const [eveningStreak, setEveningStreak] = useState(0)
+  const [checkinSaving, setCheckinSaving] = useState(false)
 
   // Settings + one-time backfill state
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -635,31 +656,61 @@ export default function DashboardPage() {
     setLastSyncAt(data?.last_successful_sync_at ?? null)
   }
 
+  const calcCheckinStreak = (type: string, history: { check_date: string; check_type: string }[]) => {
+    const dates = history.filter(r => r.check_type === type).map(r => r.check_date).sort().reverse()
+    if (dates.length === 0) return 0
+    let streak = 0
+    const d = new Date(); d.setHours(0, 0, 0, 0)
+    for (const date of dates) {
+      const expected = d.toISOString().split('T')[0]
+      if (date === expected) { streak++; d.setDate(d.getDate() - 1) } else break
+    }
+    return streak
+  }
+
   const loadCheckin = async (uid: string) => {
+    const ago14 = new Date(Date.now() - 14 * 86400000).toISOString().split('T')[0]
     const today = new Date().toISOString().split('T')[0]
     const { data } = await supabase
       .from('daily_checkin')
-      .select('feeling_score')
+      .select('check_date, check_type, feeling_score, body_ache_areas, night_wakings, sleep_rating, energy_level, stress_level, motivation_level')
       .eq('user_id', uid)
-      .eq('check_date', today)
-      .maybeSingle()
-    setCheckin((data as { feeling_score: number } | null)?.feeling_score ?? null)
+      .gte('check_date', ago14)
+      .order('check_date', { ascending: false })
+    type Row = { check_date: string; check_type: string; feeling_score: number | null; body_ache_areas: string[] | null; night_wakings: number | null; sleep_rating: number | null; energy_level: number | null; stress_level: number | null; motivation_level: number | null }
+    const rows = (data ?? []) as Row[]
+    const hist = rows.map(r => ({ check_date: r.check_date, check_type: r.check_type }))
+    setCheckinHistory(hist)
+    setMorningStreak(calcCheckinStreak('morning', hist))
+    setEveningStreak(calcCheckinStreak('evening', hist))
+    const tm = rows.find(r => r.check_date === today && r.check_type === 'morning')
+    const te = rows.find(r => r.check_date === today && r.check_type === 'evening')
+    setMorningCheckin(tm ? { feeling_score: tm.feeling_score, body_ache_areas: tm.body_ache_areas ?? [], night_wakings: tm.night_wakings, sleep_rating: tm.sleep_rating, energy_level: tm.energy_level, stress_level: tm.stress_level, motivation_level: tm.motivation_level } : null)
+    setEveningCheckin(te ? { feeling_score: te.feeling_score } : null)
     setCheckinLoaded(true)
   }
 
-  const saveCheckin = async (score: number) => {
+  const saveMorningCheckin = async (draft: MorningCheckinData) => {
     if (checkinSaving) return
     setCheckinSaving(true)
-    setCheckin(score)
     const today = new Date().toISOString().split('T')[0]
     const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return
+    if (!user) { setCheckinSaving(false); return }
     await supabase.from('daily_checkin').upsert({
-      user_id: user.id,
-      check_date: today,
-      feeling_score: score,
+      user_id: user.id, check_date: today, check_type: 'morning',
+      feeling_score: draft.feeling_score,
+      body_ache_areas: draft.body_ache_areas,
+      night_wakings: draft.night_wakings,
+      sleep_rating: draft.sleep_rating,
+      energy_level: draft.energy_level,
+      stress_level: draft.stress_level,
+      motivation_level: draft.motivation_level,
       updated_at: new Date().toISOString(),
-    }, { onConflict: 'user_id,check_date' })
+    }, { onConflict: 'user_id,check_date,check_type' })
+    setMorningCheckin(draft)
+    const hist = [...checkinHistory.filter(r => !(r.check_date === today && r.check_type === 'morning')), { check_date: today, check_type: 'morning' }]
+    setCheckinHistory(hist)
+    setMorningStreak(calcCheckinStreak('morning', hist))
     setCheckinSaving(false)
   }
 
@@ -3014,39 +3065,254 @@ export default function DashboardPage() {
             )}
           </div>
 
-          {/* Daily Check-in */}
+          {/* ── Daily Check-in Tiles ───────────────────────────────────── */}
           {checkinLoaded && (() => {
-            const feelings = [
-              { score: 1, emoji: '😴', label: 'Drained' },
-              { score: 2, emoji: '😕', label: 'Tired' },
-              { score: 3, emoji: '😐', label: 'OK' },
-              { score: 4, emoji: '😊', label: 'Good' },
-              { score: 5, emoji: '🤩', label: 'Great' },
-            ]
-            return (
-              <div className="rounded-2xl p-4" style={{ background: '#111827', border: '1px solid #1f2937' }}>
-                <div className="flex items-center justify-between mb-3">
-                  <p className="text-xs font-bold tracking-widest text-gray-400">
-                    {checkin ? '✓ TODAY\'S CHECK-IN' : 'HOW DO YOU FEEL TODAY?'}
-                  </p>
-                  {checkin && <span className="text-[10px] text-gray-600">Tap to update</span>}
-                </div>
-                <div className="flex justify-around">
-                  {feelings.map(f => (
-                    <button key={f.score} type="button" onClick={() => saveCheckin(f.score)}
-                      className="flex flex-col items-center gap-1 transition-all"
-                      style={{ opacity: checkin && checkin !== f.score ? 0.35 : 1 }}>
-                      <span className={`text-2xl transition-transform ${checkin === f.score ? 'scale-125' : 'hover:scale-110'}`}>
-                        {f.emoji}
-                      </span>
-                      <span className="text-[9px] font-medium"
-                        style={{ color: checkin === f.score ? '#f97316' : '#4b5563' }}>
-                        {f.label}
-                      </span>
-                    </button>
-                  ))}
-                </div>
+            // Build Mon–Sun week day array for current week
+            const todayDate = new Date(); todayDate.setHours(0,0,0,0)
+            const todayStr = todayDate.toISOString().split('T')[0]
+            const dayOfWeek = (todayDate.getDay() + 6) % 7 // Mon=0 … Sun=6
+            const weekDays = Array.from({ length: 7 }, (_, i) => {
+              const d = new Date(todayDate); d.setDate(todayDate.getDate() - dayOfWeek + i)
+              return { label: ['M','T','W','T','F','S','S'][i], dateStr: d.toISOString().split('T')[0], isFuture: d > todayDate }
+            })
+            const morningDates = new Set(checkinHistory.filter(r => r.check_type === 'morning').map(r => r.check_date))
+            const eveningDates = new Set(checkinHistory.filter(r => r.check_type === 'evening').map(r => r.check_date))
+
+            const lastMorning = checkinHistory.filter(r => r.check_type === 'morning').sort((a,b) => b.check_date.localeCompare(a.check_date))[0]
+            const lastEvening = checkinHistory.filter(r => r.check_type === 'evening').sort((a,b) => b.check_date.localeCompare(a.check_date))[0]
+
+            const fmtLast = (dateStr: string | undefined) => {
+              if (!dateStr) return 'Never'
+              if (dateStr === todayStr) return 'Today'
+              const d = new Date(dateStr + 'T00:00:00')
+              const diff = Math.round((todayDate.getTime() - d.getTime()) / 86400000)
+              if (diff === 1) return 'Yesterday'
+              return `${diff}d ago`
+            }
+
+            const DayBubbles = ({ doneDates }: { doneDates: Set<string> }) => (
+              <div className="flex justify-between mt-3">
+                {weekDays.map((wd, i) => {
+                  const done = doneDates.has(wd.dateStr)
+                  return (
+                    <div key={i} className="flex flex-col items-center gap-1">
+                      <div className="w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-bold"
+                        style={done
+                          ? { background: '#1d4ed8', border: '1px solid #3b82f6' }
+                          : wd.isFuture
+                          ? { background: 'transparent', border: '1px solid #374151' }
+                          : { background: 'transparent', border: '1px solid #f97316' }
+                        }>
+                        {done ? <span className="text-white text-[10px]">✓</span> : <span style={{ color: wd.isFuture ? '#374151' : '#f97316' }}>{wd.label}</span>}
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
+            )
+
+            return (
+              <>
+                <div className="grid grid-cols-2 gap-3">
+                  {/* Morning tile */}
+                  <button type="button" onClick={() => { setMorningDraft(morningCheckin ?? EMPTY_MORNING); setMorningStep(0); setMorningModalOpen(true) }}
+                    className="rounded-2xl p-4 text-left transition-colors hover:opacity-90 active:scale-95"
+                    style={{ background: '#111827', border: '1px solid #1f2937' }}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-[10px] font-bold tracking-widest text-orange-400">🌅 MORNING</span>
+                      {morningCheckin && <span className="text-[9px] text-blue-400 font-bold">✓ DONE</span>}
+                    </div>
+                    <p className="text-[10px] text-gray-500 mb-0.5">Last: <span className="text-gray-300">{fmtLast(lastMorning?.check_date)}</span></p>
+                    <p className="text-[10px] text-gray-500">Streak: <span className="text-orange-400 font-semibold">{morningStreak} {morningStreak === 1 ? 'day' : 'days'}</span></p>
+                    <DayBubbles doneDates={morningDates} />
+                  </button>
+
+                  {/* Evening tile */}
+                  <div className="rounded-2xl p-4" style={{ background: '#111827', border: '1px solid #1f2937', opacity: 0.6 }}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-[10px] font-bold tracking-widest text-indigo-400">🌙 EVENING</span>
+                      {eveningCheckin && <span className="text-[9px] text-blue-400 font-bold">✓ DONE</span>}
+                    </div>
+                    <p className="text-[10px] text-gray-500 mb-0.5">Last: <span className="text-gray-300">{fmtLast(lastEvening?.check_date)}</span></p>
+                    <p className="text-[10px] text-gray-500">Streak: <span className="text-indigo-400 font-semibold">{eveningStreak} {eveningStreak === 1 ? 'day' : 'days'}</span></p>
+                    <DayBubbles doneDates={eveningDates} />
+                    <p className="text-[9px] text-gray-600 mt-2 text-center">Coming soon</p>
+                  </div>
+                </div>
+
+                {/* Morning check-in modal */}
+                {morningModalOpen && (() => {
+                  const STEPS = [
+                    {
+                      key: 'feeling', title: 'How are you feeling?', subtitle: 'Overall energy right now',
+                      options: [
+                        { v: 1, emoji: '😴', label: 'Drained' }, { v: 2, emoji: '😕', label: 'Tired' },
+                        { v: 3, emoji: '😐', label: 'OK' }, { v: 4, emoji: '😊', label: 'Good' },
+                        { v: 5, emoji: '🤩', label: 'Great' },
+                      ],
+                      multi: false,
+                      val: () => morningDraft.feeling_score,
+                      set: (v: number) => setMorningDraft(d => ({ ...d, feeling_score: v })),
+                    },
+                    {
+                      key: 'aches', title: 'Any body aches?', subtitle: 'Tap all that apply — or skip',
+                      options: [
+                        { v: 'legs', emoji: '🦵', label: 'Legs' }, { v: 'arms', emoji: '💪', label: 'Arms' },
+                        { v: 'back', emoji: '🔙', label: 'Back' }, { v: 'neck', emoji: '🫀', label: 'Neck' },
+                        { v: 'shoulders', emoji: '🤷', label: 'Shoulders' }, { v: 'chest', emoji: '💚', label: 'Chest' },
+                        { v: 'feet', emoji: '🦶', label: 'Feet' }, { v: 'head', emoji: '🤕', label: 'Head' },
+                        { v: 'none', emoji: '✅', label: 'None' },
+                      ],
+                      multi: true,
+                      val: () => morningDraft.body_ache_areas,
+                      toggleAche: (v: string) => setMorningDraft(d => {
+                        if (v === 'none') return { ...d, body_ache_areas: ['none'] }
+                        const cur = d.body_ache_areas.filter(a => a !== 'none')
+                        return { ...d, body_ache_areas: cur.includes(v) ? cur.filter(a => a !== v) : [...cur, v] }
+                      }),
+                    },
+                    {
+                      key: 'wakings', title: 'Night wakings', subtitle: 'How many times did you wake up?',
+                      options: [
+                        { v: 0, emoji: '😴', label: '0 — Solid' }, { v: 1, emoji: '1️⃣', label: '1 time' },
+                        { v: 2, emoji: '2️⃣', label: '2 times' }, { v: 3, emoji: '3️⃣', label: '3 times' },
+                        { v: 4, emoji: '😩', label: '4+ times' },
+                      ],
+                      multi: false,
+                      val: () => morningDraft.night_wakings,
+                      set: (v: number) => setMorningDraft(d => ({ ...d, night_wakings: v })),
+                    },
+                    {
+                      key: 'sleep', title: 'Sleep quality', subtitle: 'How restorative did it feel?',
+                      options: [
+                        { v: 1, emoji: '😫', label: 'Terrible' }, { v: 2, emoji: '😕', label: 'Poor' },
+                        { v: 3, emoji: '😐', label: 'OK' }, { v: 4, emoji: '😌', label: 'Good' },
+                        { v: 5, emoji: '✨', label: 'Great' },
+                      ],
+                      multi: false,
+                      val: () => morningDraft.sleep_rating,
+                      set: (v: number) => setMorningDraft(d => ({ ...d, sleep_rating: v })),
+                    },
+                    {
+                      key: 'energy', title: 'Energy level', subtitle: 'Physical energy right now',
+                      options: [
+                        { v: 1, emoji: '🪫', label: 'Empty' }, { v: 2, emoji: '😞', label: 'Low' },
+                        { v: 3, emoji: '⚡', label: 'OK' }, { v: 4, emoji: '🔋', label: 'Good' },
+                        { v: 5, emoji: '🚀', label: 'Charged' },
+                      ],
+                      multi: false,
+                      val: () => morningDraft.energy_level,
+                      set: (v: number) => setMorningDraft(d => ({ ...d, energy_level: v })),
+                    },
+                    {
+                      key: 'stress', title: 'Stress level', subtitle: 'Mental load going into the day',
+                      options: [
+                        { v: 1, emoji: '😌', label: 'Calm' }, { v: 2, emoji: '🙂', label: 'Low' },
+                        { v: 3, emoji: '😐', label: 'Moderate' }, { v: 4, emoji: '😤', label: 'High' },
+                        { v: 5, emoji: '🤯', label: 'Very high' },
+                      ],
+                      multi: false,
+                      val: () => morningDraft.stress_level,
+                      set: (v: number) => setMorningDraft(d => ({ ...d, stress_level: v })),
+                    },
+                    {
+                      key: 'motivation', title: 'Ready to train?', subtitle: 'Motivation to work out today',
+                      options: [
+                        { v: 1, emoji: '🛋️', label: 'Rest day' }, { v: 2, emoji: '😑', label: 'Not really' },
+                        { v: 3, emoji: '😐', label: 'Maybe' }, { v: 4, emoji: '💪', label: 'Yes' },
+                        { v: 5, emoji: '🔥', label: 'Fired up' },
+                      ],
+                      multi: false,
+                      val: () => morningDraft.motivation_level,
+                      set: (v: number) => setMorningDraft(d => ({ ...d, motivation_level: v })),
+                    },
+                  ]
+                  const step = STEPS[morningStep]
+                  const isLast = morningStep === STEPS.length - 1
+                  const canNext = step.key === 'aches'
+                    ? true // aches can always skip
+                    : (step.val() != null && step.val() !== undefined)
+                  return (
+                    <div className="fixed inset-0 z-50 flex items-end justify-center" style={{ background: 'rgba(0,0,0,0.85)' }}
+                      onClick={e => { if (e.target === e.currentTarget) setMorningModalOpen(false) }}>
+                      <div className="w-full max-w-md rounded-t-3xl p-6 pb-10" style={{ background: '#111827', border: '1px solid #1f2937' }}>
+                        {/* Header */}
+                        <div className="flex items-center justify-between mb-4">
+                          <p className="text-[10px] font-bold tracking-widest text-orange-400">🌅 MORNING CHECK-IN</p>
+                          <button type="button" onClick={() => setMorningModalOpen(false)} className="text-gray-500 hover:text-gray-300 text-lg leading-none">✕</button>
+                        </div>
+                        {/* Progress dots */}
+                        <div className="flex justify-center gap-1.5 mb-5">
+                          {STEPS.map((_, i) => (
+                            <div key={i} className="rounded-full transition-all" style={{ width: i === morningStep ? 20 : 6, height: 6, background: i < morningStep ? '#1d4ed8' : i === morningStep ? '#f97316' : '#374151' }} />
+                          ))}
+                        </div>
+                        {/* Question */}
+                        <h2 className="text-lg font-bold text-white mb-1">{step.title}</h2>
+                        <p className="text-xs text-gray-500 mb-5">{step.subtitle}</p>
+                        {/* Options */}
+                        {step.key === 'aches' ? (
+                          <div className="grid grid-cols-3 gap-2 mb-6">
+                            {step.options.map(opt => {
+                              const areas = morningDraft.body_ache_areas
+                              const sel = areas.includes(String(opt.v))
+                              return (
+                                <button key={String(opt.v)} type="button"
+                                  onClick={() => step.toggleAche?.(String(opt.v))}
+                                  className="flex flex-col items-center gap-1.5 py-3 rounded-2xl transition-all"
+                                  style={{ background: sel ? 'rgba(59,130,246,0.25)' : '#1f2937', border: sel ? '1px solid #3b82f6' : '1px solid #374151' }}>
+                                  <span className="text-2xl">{opt.emoji}</span>
+                                  <span className="text-[10px] font-medium" style={{ color: sel ? '#60a5fa' : '#9ca3af' }}>{opt.label}</span>
+                                </button>
+                              )
+                            })}
+                          </div>
+                        ) : (
+                          <div className="flex justify-around mb-6">
+                            {step.options.map(opt => {
+                              const cur = step.val()
+                              const sel = cur === opt.v
+                              return (
+                                <button key={opt.v} type="button"
+                                  onClick={() => step.set?.(opt.v as number)}
+                                  className="flex flex-col items-center gap-1.5 transition-all"
+                                  style={{ opacity: cur != null && !sel ? 0.4 : 1 }}>
+                                  <span className={`text-3xl transition-transform ${sel ? 'scale-125' : 'hover:scale-110'}`}>{opt.emoji}</span>
+                                  <span className="text-[10px] font-medium" style={{ color: sel ? '#f97316' : '#6b7280' }}>{opt.label}</span>
+                                </button>
+                              )
+                            })}
+                          </div>
+                        )}
+                        {/* Nav buttons */}
+                        <div className="flex gap-3">
+                          {morningStep > 0 && (
+                            <button type="button" onClick={() => setMorningStep(s => s - 1)}
+                              className="flex-1 py-3 rounded-2xl text-sm font-semibold text-gray-400 transition-colors"
+                              style={{ background: '#1f2937' }}>
+                              Back
+                            </button>
+                          )}
+                          <button type="button"
+                            onClick={async () => {
+                              if (isLast) {
+                                await saveMorningCheckin(morningDraft)
+                                setMorningModalOpen(false)
+                              } else {
+                                setMorningStep(s => s + 1)
+                              }
+                            }}
+                            disabled={!canNext && step.key !== 'aches'}
+                            className="flex-1 py-3 rounded-2xl text-sm font-bold text-white transition-colors"
+                            style={{ background: canNext || step.key === 'aches' ? '#f97316' : '#374151' }}>
+                            {isLast ? (checkinSaving ? 'Saving…' : 'Save Check-in') : 'Next →'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })()}
+              </>
             )
           })()}
 
