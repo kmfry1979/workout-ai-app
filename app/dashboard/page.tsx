@@ -1033,8 +1033,20 @@ export default function DashboardPage() {
     try {
       const stepsVal = dailySteps?.total_steps ?? metrics?.steps ?? null
       const bodyBatteryEnd = dailyHealth?.body_battery_end ?? metrics?.garmin_body_battery_eod ?? null
-      const readinessScore = metrics ? computeScores(metrics, activities).readiness : null
-      const readinessLbl = readinessScore != null ? readinessLabel(readinessScore) : null
+      // Use identical formula to the Readiness tile and Health page:
+      // 45% HRV (20–120ms range), 35% sleep score, 20% RHR (40–80bpm inverted)
+      const _hrv = dailyHealth?.hrv_avg ?? metrics?.garmin_hrv_nightly_avg ?? null
+      const _sleep = sleepData?.sleep_score ?? metrics?.garmin_sleep_score ?? null
+      const _rhr = metrics?.resting_hr ?? metrics?.resting_heart_rate_bpm ?? null
+      let _rs = 0, _rw = 0
+      if (_hrv != null) { _rs += ((Math.max(20, Math.min(120, _hrv)) - 20) / 100) * 100 * 0.45; _rw += 0.45 }
+      if (_sleep != null) { _rs += _sleep * 0.35; _rw += 0.35 }
+      if (_rhr != null) { _rs += (100 - ((Math.max(40, Math.min(80, _rhr)) - 40) / 40) * 100) * 0.20; _rw += 0.20 }
+      const readinessScore = _rw > 0 ? Math.round(_rs / _rw) : null
+      const readinessLbl = readinessScore == null ? null
+        : readinessScore >= 67 ? 'Recovered'
+        : readinessScore >= 34 ? 'Moderate'
+        : 'Low recovery'
       const recentActs = activities.slice(0, 7).map(a => ({
         type: a.activity_type?.replace(/_/g, ' ') ?? 'activity',
         durationMin: a.duration_sec ? Math.round(a.duration_sec / 60) : null,
@@ -1065,7 +1077,7 @@ export default function DashboardPage() {
             stepGoal: stepGoal,
             spo2: dailyHealth?.spo2_avg ?? metrics?.garmin_spo2_avg ?? metrics?.pulse_ox ?? null,
             respirationAwake: dailyHealth?.respiration_avg_bpm ?? null,
-            respirationSleep: null,
+            respirationSleep: sleepData?.avg_respiration_bpm ?? null,
             intensityMinutes: dailySteps?.moderate_intensity_minutes ?? null,
             intensityGoal: null,
             readinessScore,
