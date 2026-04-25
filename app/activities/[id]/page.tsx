@@ -331,79 +331,92 @@ function RelativeEffort({ raw }: { raw: Record<string, unknown> }) {
   )
 }
 
-// ─── Shared helpers (module level) ────────────────────────────────────────────
+// ─── Pace Chart ───────────────────────────────────────────────────────────────
 
-function localDs(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
-}
+function PaceChart({ activity, raw, paceInsight, paceInsightLoading }: {
+  activity: GarminActivity
+  raw: Record<string, unknown>
+  paceInsight: string | null
+  paceInsightLoading: boolean
+}) {
+  const avgSpeed = raw.averageSpeed as number | undefined
+  const maxSpeed = raw.maxSpeed as number | undefined
 
-function calcActivityStreak(datestrs: string[]): number {
-  const set = new Set(datestrs)
-  const d = new Date(); d.setHours(0,0,0,0)
-  if (!set.has(localDs(d))) d.setDate(d.getDate() - 1) // ok if today not done yet
-  let streak = 0
-  for (let i = 0; i < 366; i++) {
-    if (set.has(localDs(d))) { streak++; d.setDate(d.getDate() - 1) } else break
-  }
-  return streak
-}
-
-// ─── Activity Streak Banner ────────────────────────────────────────────────────
-
-function ActivityStreakBanner({ streak, activityDateStrs }: { streak: number; activityDateStrs: string[] }) {
-  const dateSet = new Set(activityDateStrs)
-  const today = new Date(); today.setHours(0,0,0,0)
-  const todayStr = localDs(today)
-  const dow = (today.getDay() + 6) % 7 // Mon=0
-  const DAY_LABELS = ['M','T','W','T','F','S','S']
-  const weekDays = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(today); d.setDate(today.getDate() - dow + i)
-    const ds = localDs(d)
-    return { label: DAY_LABELS[i], ds, isToday: ds === todayStr, isFuture: d > today, hasActivity: dateSet.has(ds) }
+  const zones = [1, 2, 3, 4, 5].map(i => {
+    const val = raw[`hrTimeInZone_${i}`] ?? raw[`timeInHRZone${i}`]
+    return val != null ? Math.round(Number(val) / 60) : 0
   })
+  const totalZoneMin = zones.reduce((s, v) => s + v, 0)
 
-  return (
-    <div className="bg-gray-900 rounded-2xl px-4 py-3 flex items-center gap-4">
-      <div className="flex flex-col items-center shrink-0">
-        <span className="text-3xl leading-none">🔥</span>
-        <span className="text-orange-400 font-bold text-xl leading-tight">{streak}</span>
-        <span className="text-gray-500 text-[10px] leading-none">{streak === 1 ? 'day' : 'days'}</span>
-      </div>
-      <div className="flex-1 min-w-0">
-        <p className="text-gray-400 text-[11px] font-semibold uppercase tracking-wider mb-2">Activity Streak</p>
-        <div className="flex justify-between">
-          {weekDays.map((wd, i) => (
-            <div key={i} className="flex flex-col items-center gap-1">
-              <span className="text-gray-600 text-[9px]">{wd.label}</span>
-              <div className="w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-bold"
-                style={wd.hasActivity
-                  ? { background: '#f97316', color: 'white' }
-                  : wd.isToday
-                  ? { background: 'transparent', border: '2px solid #f97316', color: '#f97316' }
-                  : wd.isFuture
-                  ? { background: 'transparent', border: '1px solid #1f2937' }
-                  : { background: '#1f2937', color: '#374151' }
-                }>
-                {wd.hasActivity ? '✓' : wd.isToday ? '·' : ''}
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  )
-}
+  const hasData = (avgSpeed && activity.distance_m && activity.distance_m > 100) || totalZoneMin > 0
+  if (!hasData && !paceInsight && !paceInsightLoading) return null
 
-// ─── Pace Insight Card ────────────────────────────────────────────────────────
+  const maxBarMin = Math.max(...zones, 1)
+  const BAR_HEIGHT = 56
 
-function PaceInsightCard({ insight }: { insight: string }) {
   return (
     <div className="bg-gray-900 rounded-2xl p-4">
-      <div className="flex items-center gap-2 mb-3">
-        <div className="w-6 h-6 bg-orange-500 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0">A</div>
-        <p className="text-orange-400 text-xs font-bold uppercase tracking-wider">Athlete Intelligence · Pace</p>
-      </div>
-      <p className="text-gray-200 text-sm leading-relaxed">{insight}</p>
+      <h3 className="text-white font-semibold text-sm mb-4">Pace · Effort Profile</h3>
+
+      {/* Pace summary row */}
+      {avgSpeed && activity.distance_m && activity.distance_m > 100 && (
+        <div className="flex gap-6 mb-4">
+          <div>
+            <p className="text-gray-500 text-[10px] uppercase tracking-wider">Avg Pace</p>
+            <p className="text-white font-bold text-2xl leading-tight">{formatPace(avgSpeed)}</p>
+          </div>
+          {maxSpeed && maxSpeed > avgSpeed && (
+            <div>
+              <p className="text-gray-500 text-[10px] uppercase tracking-wider">Best Pace</p>
+              <p className="text-orange-400 font-bold text-2xl leading-tight">{formatPace(maxSpeed)}</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Zone bar chart */}
+      {totalZoneMin > 0 && (
+        <>
+          <p className="text-gray-600 text-[10px] uppercase tracking-wider mb-3">Effort Distribution</p>
+          <div className="flex items-end gap-1.5" style={{ height: BAR_HEIGHT + 20 }}>
+            {zones.map((min, i) => {
+              const barH = min > 0 ? Math.max(Math.round((min / maxBarMin) * BAR_HEIGHT), 6) : 2
+              return (
+                <div key={i} className="flex-1 flex flex-col items-center justify-end gap-1" style={{ height: BAR_HEIGHT + 20 }}>
+                  {min > 0 && (
+                    <span className="text-[9px] text-gray-500 leading-none">{min}m</span>
+                  )}
+                  <div className="w-full rounded-t-md"
+                    style={{ height: barH, background: min > 0 ? ZONE_STROKE_COLORS[i] : '#1f2937' }} />
+                </div>
+              )
+            })}
+          </div>
+          <div className="flex gap-1.5 mt-1">
+            {['Z1', 'Z2', 'Z3', 'Z4', 'Z5'].map((z, i) => (
+              <div key={i} className="flex-1 text-center text-[9px] text-gray-600">{z}</div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* Athlete Intelligence pace insight */}
+      {(paceInsight || paceInsightLoading) && (
+        <div className={totalZoneMin > 0 ? 'mt-4 pt-4 border-t border-gray-800' : 'mt-1'}>
+          <div className="flex items-center gap-2 mb-2">
+            <div className="w-5 h-5 bg-orange-500 rounded-full flex items-center justify-center text-[10px] font-bold text-white shrink-0">A</div>
+            <p className="text-orange-400 text-[10px] font-bold uppercase tracking-wider">Athlete Intelligence · Pace</p>
+          </div>
+          {paceInsightLoading && !paceInsight ? (
+            <div className="flex items-center gap-2 text-gray-500 text-xs">
+              <span className="w-3 h-3 border border-orange-400 border-t-transparent rounded-full animate-spin" />
+              Analysing pace...
+            </div>
+          ) : paceInsight ? (
+            <p className="text-gray-200 text-sm leading-relaxed">{paceInsight}</p>
+          ) : null}
+        </div>
+      )}
     </div>
   )
 }
@@ -667,8 +680,6 @@ export default function ActivityDetailPage() {
   const [treadmillNotes, setTreadmillNotes] = useState<string | null>(null)
   const [editModalOpen, setEditModalOpen] = useState(false)
   const [paceInsight, setPaceInsight] = useState<string | null>(null)
-  const [activityDateStrs, setActivityDateStrs] = useState<string[]>([])
-  const [activityStreak, setActivityStreak] = useState(0)
 
   useEffect(() => {
     const load = async () => {
@@ -699,18 +710,6 @@ export default function ActivityDetailPage() {
         .order('start_time', { ascending: false })
         .limit(20)
       setRecentActivities((recent ?? []) as Record<string, unknown>[])
-
-      // Fetch 90-day activity dates for streak calculation
-      const ninetyAgo = new Date(Date.now() - 90 * 86400000).toISOString()
-      const { data: streakData } = await supabase
-        .from('garmin_activities')
-        .select('start_time')
-        .eq('user_id', session.session.user.id)
-        .gte('start_time', ninetyAgo)
-        .order('start_time', { ascending: false })
-      const datestrs = [...new Set((streakData ?? []).map((r: { start_time: string }) => localDs(new Date(r.start_time))))]
-      setActivityDateStrs(datestrs)
-      setActivityStreak(calcActivityStreak(datestrs))
 
       setLoading(false)
     }
@@ -812,11 +811,6 @@ export default function ActivityDetailPage() {
         {/* Back */}
         <a href="/activities" className="text-gray-500 text-sm hover:text-gray-300">← Activities</a>
 
-        {/* Activity Streak */}
-        {activityStreak > 0 && (
-          <ActivityStreakBanner streak={activityStreak} activityDateStrs={activityDateStrs} />
-        )}
-
         {/* Header */}
         <div className="bg-gray-900 rounded-2xl p-5">
           <div className="flex items-start gap-3">
@@ -883,8 +877,8 @@ export default function ActivityDetailPage() {
           </button>
         </div>
 
-        {/* Pace Intelligence card */}
-        {paceInsight && <PaceInsightCard insight={paceInsight} />}
+        {/* Pace chart + Athlete Intelligence pace insight */}
+        <PaceChart activity={activity} raw={raw} paceInsight={paceInsight} paceInsightLoading={analysisLoading} />
 
         {/* Primary stats */}
         {stats.length > 0 && (
