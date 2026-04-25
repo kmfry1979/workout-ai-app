@@ -656,21 +656,29 @@ export default function DashboardPage() {
     setLastSyncAt(data?.last_successful_sync_at ?? null)
   }
 
+  const localDateStr = (d: Date) => {
+    const y = d.getFullYear()
+    const m = String(d.getMonth() + 1).padStart(2, '0')
+    const day = String(d.getDate()).padStart(2, '0')
+    return `${y}-${m}-${day}`
+  }
+
   const calcCheckinStreak = (type: string, history: { check_date: string; check_type: string }[]) => {
     const dates = history.filter(r => r.check_type === type).map(r => r.check_date).sort().reverse()
     if (dates.length === 0) return 0
     let streak = 0
     const d = new Date(); d.setHours(0, 0, 0, 0)
     for (const date of dates) {
-      const expected = d.toISOString().split('T')[0]
+      const expected = localDateStr(d)
       if (date === expected) { streak++; d.setDate(d.getDate() - 1) } else break
     }
     return streak
   }
 
   const loadCheckin = async (uid: string) => {
-    const ago14 = new Date(Date.now() - 14 * 86400000).toISOString().split('T')[0]
-    const today = new Date().toISOString().split('T')[0]
+    const ago14d = new Date(); ago14d.setDate(ago14d.getDate() - 14)
+    const ago14 = localDateStr(ago14d)
+    const today = localDateStr(new Date())
     const { data } = await supabase
       .from('daily_checkin')
       .select('check_date, check_type, feeling_score, body_ache_areas, night_wakings, sleep_rating, energy_level, stress_level, motivation_level')
@@ -693,7 +701,7 @@ export default function DashboardPage() {
   const saveMorningCheckin = async (draft: MorningCheckinData) => {
     if (checkinSaving) return
     setCheckinSaving(true)
-    const today = new Date().toISOString().split('T')[0]
+    const today = localDateStr(new Date())
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) { setCheckinSaving(false); return }
     await supabase.from('daily_checkin').upsert({
@@ -3067,13 +3075,20 @@ export default function DashboardPage() {
 
           {/* ── Daily Check-in Tiles ───────────────────────────────────── */}
           {checkinLoaded && (() => {
+            // Use local date (not UTC) to avoid BST/timezone offset shifting the date
+            const localStr = (d: Date) => {
+              const y = d.getFullYear()
+              const m = String(d.getMonth() + 1).padStart(2, '0')
+              const day = String(d.getDate()).padStart(2, '0')
+              return `${y}-${m}-${day}`
+            }
             // Build Mon–Sun week day array for current week
             const todayDate = new Date(); todayDate.setHours(0,0,0,0)
-            const todayStr = todayDate.toISOString().split('T')[0]
+            const todayStr = localStr(todayDate)
             const dayOfWeek = (todayDate.getDay() + 6) % 7 // Mon=0 … Sun=6
             const weekDays = Array.from({ length: 7 }, (_, i) => {
               const d = new Date(todayDate); d.setDate(todayDate.getDate() - dayOfWeek + i)
-              return { label: ['M','T','W','T','F','S','S'][i], dateStr: d.toISOString().split('T')[0], isFuture: d > todayDate }
+              return { label: ['M','T','W','T','F','S','S'][i], dateStr: localStr(d), isFuture: d > todayDate }
             })
             const morningDates = new Set(checkinHistory.filter(r => r.check_type === 'morning').map(r => r.check_date))
             const eveningDates = new Set(checkinHistory.filter(r => r.check_type === 'evening').map(r => r.check_date))
@@ -3233,9 +3248,9 @@ export default function DashboardPage() {
                     ? true // aches can always skip
                     : (step.val() != null && step.val() !== undefined)
                   return (
-                    <div className="fixed inset-0 z-50 flex items-end justify-center" style={{ background: 'rgba(0,0,0,0.85)' }}
+                    <div className="fixed inset-0 z-50 flex items-center justify-center px-4" style={{ background: 'rgba(0,0,0,0.85)' }}
                       onClick={e => { if (e.target === e.currentTarget) setMorningModalOpen(false) }}>
-                      <div className="w-full max-w-md rounded-t-3xl p-6 pb-10" style={{ background: '#111827', border: '1px solid #1f2937' }}>
+                      <div className="w-full max-w-md rounded-3xl p-6 overflow-y-auto" style={{ background: '#111827', border: '1px solid #1f2937', maxHeight: '90vh' }}>
                         {/* Header */}
                         <div className="flex items-center justify-between mb-4">
                           <p className="text-[10px] font-bold tracking-widest text-orange-400">🌅 MORNING CHECK-IN</p>
