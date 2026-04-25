@@ -166,10 +166,10 @@ Pick ONE of: full rest, active recovery (light walk/yoga), easy aerobic, moderat
       }`
 
   const currentStatusInstruction = lateDayDepleted
-    ? `**Current Status**\nOne sentence describing where the athlete is RIGHT NOW — reference body battery (${m.bodyBatteryEnd}) and the fact that they've already trained hard today. Do NOT lead with the morning readiness score.`
-    : `**Current Status**\nOne sentence on overall recovery and readiness today, referencing actual numbers.`
+    ? `**Current Status**\nOne sentence spoken directly to the athlete (use "you/your") describing where they are RIGHT NOW — reference body battery (${m.bodyBatteryEnd}) and the hard training already done today. Warm and honest, not clinical. Do NOT lead with the morning readiness score.`
+    : `**Current Status**\nOne sentence spoken directly to the athlete (use "you/your") on their overall recovery and readiness today, referencing actual numbers. Warm and direct.`
 
-  return `You are an expert sports scientist giving a daily training snapshot. Today is ${today}. ${contextLine}
+  return `You are a warm, knowledgeable personal coach giving a daily training snapshot. Speak directly to the athlete — always use "you" and "your", never "the athlete". Sound like a trusted coach, not a report. Today is ${today}. ${contextLine}
 
 ## Today's Metrics
 ${metricsSection}
@@ -183,15 +183,15 @@ Analyse the data and respond in EXACTLY this format (including the bold section 
 ${currentStatusInstruction}
 
 **Key Signals**
-• [Most important positive or negative signal with the number]
+• [Most important positive or negative signal with the number — use "your"]
 • [Second most important signal with the number]
 • [Third signal if relevant, or omit]
 ${recommendationGuidance}
 
 **Watch Out For**
-One sentence risk or focus area.
+One sentence, spoken to the athlete directly, on the key risk or focus area tonight.
 
-Be direct, warm, and non-preachy. Reference specific numbers. Never prescribe a hard workout later than the current time of day. Total response under 240 words.`
+Be warm, direct, and human — like a coach who knows you well. Reference specific numbers. Never prescribe a hard workout later than the current time of day. Total response under 240 words.`
 }
 
 function buildHealthEnginePrompt(body: HealthEngineRequest): string {
@@ -215,7 +215,7 @@ function buildHealthEnginePrompt(body: HealthEngineRequest): string {
     ? `IMPORTANT CONTEXT: It is the ${timeLabel} and the athlete has already trained hard today (strain ${strain?.toFixed(1)}/21) with their body battery now depleted at ${bodyBatteryEnd}. The morning recovery score of ${recovery != null ? Math.round(recovery) : '—'} was accurate at wake-up but is now outdated — it does NOT reflect the current state. Do NOT recommend more training. Instead, validate the work done and focus entirely on recovery: rest, nutrition, hydration, and sleep.`
     : `It is the ${timeLabel}.`
 
-  return `You are a world-class human performance coach. ${context} Give EXACTLY 2 sentences as a coach speaking directly to the athlete. First sentence: describe their current state with a specific number (if late-day depleted, reference strain and body battery, not just morning recovery). Second sentence: one concrete, specific recommendation (training if fresh, recovery if depleted). Be direct, warm, and human. No bullet points, no headers, no labels.\n\nMetrics:\n${lines}`
+  return `You are a warm, trusted personal coach. ${context} Speak directly to the athlete — use "you" and "your", never "the athlete". Give EXACTLY 2 sentences. First sentence: describe their current state with a specific number (if late-day depleted, reference strain and body battery, not just morning recovery). Second sentence: one concrete, specific recommendation (training if fresh, recovery if depleted). Sound like a coach who genuinely cares, not a report. No bullet points, no headers, no labels.\n\nMetrics:\n${lines}`
 }
 
 export async function POST(req: NextRequest) {
