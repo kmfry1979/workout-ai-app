@@ -14,6 +14,7 @@ export default function ProfilePage() {
   const [tab, setTab] = useState<Tab>('profile')
   const [displayName, setDisplayName] = useState('')
   const [dateOfBirth, setDateOfBirth] = useState('')
+  const [heightCm, setHeightCm] = useState('')
   const [selectedProvider, setSelectedProvider] = useState('')
 
   useEffect(() => {
@@ -28,7 +29,7 @@ export default function ProfilePage() {
 
       const { data, error } = await supabase
         .from('profiles')
-        .select('display_name, name, workout_provider, date_of_birth')
+        .select('display_name, name, workout_provider, date_of_birth, height_cm')
         .eq('user_id', user.id)
         .maybeSingle()
 
@@ -42,6 +43,7 @@ export default function ProfilePage() {
         setDisplayName(data.display_name ?? data.name ?? '')
         setSelectedProvider(data.workout_provider ?? '')
         setDateOfBirth((data as { date_of_birth?: string | null }).date_of_birth ?? '')
+        setHeightCm(String((data as { height_cm?: number | null }).height_cm ?? ''))
       }
 
       setLoading(false)
@@ -86,11 +88,12 @@ export default function ProfilePage() {
       return
     }
 
-    const payload: Record<string, string> = {
+    const payload: Record<string, string | number> = {
       display_name: trimmedName,
       name: trimmedName,
     }
     if (dateOfBirth) payload.date_of_birth = dateOfBirth
+    if (heightCm && !isNaN(parseFloat(heightCm))) payload.height_cm = parseFloat(heightCm)
 
     if (existingProfile) {
       const { error } = await supabase
@@ -216,6 +219,17 @@ export default function ProfilePage() {
               className="w-full rounded-lg border p-3 mb-4"
               value={dateOfBirth}
               onChange={(e) => setDateOfBirth(e.target.value)}
+            />
+            <label className="block text-sm font-medium mb-2">Height <span className="text-gray-400 font-normal">(cm — used for BMI calculation)</span></label>
+            <input
+              type="number"
+              step="0.1"
+              min="100"
+              max="250"
+              className="w-full rounded-lg border p-3 mb-4"
+              value={heightCm}
+              onChange={(e) => setHeightCm(e.target.value)}
+              placeholder="e.g. 178"
             />
 
             <button

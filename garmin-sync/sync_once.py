@@ -548,6 +548,16 @@ def get_spo2_data(api: Garmin, date_iso: str) -> dict[str, Any]:
     return {}
 
 
+def get_weigh_ins_data(api: Garmin, startdate: str, enddate: str) -> dict[str, Any]:
+    """Returns weigh-in entries for the date range from Garmin Connect."""
+    success, data, err = safe_call(api.get_weigh_ins, startdate, enddate)
+    if success and isinstance(data, dict):
+        return data
+    if err:
+        print(f"  Warning: get_weigh_ins failed: {err}")
+    return {}
+
+
 # ---------------------------------------------------------------------------
 # Data normalization
 # ---------------------------------------------------------------------------
@@ -1204,6 +1214,43 @@ def sync_recent_garmin_activities(api: Garmin, user_id: str, connection_id: str)
     return inserted
 
 
+def upsert_weight_snapshots(user_id: str, connection_id: str, weigh_data: dict[str, Any]) -> int:
+    """
+    Upserts weigh-in entries from Garmin get_weigh_ins() response into
+    garmin_weight_snapshots table.  One row per (connection_id, weigh_date).
+    """
+    summaries = weigh_data.get("dailyWeightSummaries") or []
+    count = 0
+    for summary in summaries:
+        date_str = summary.get("summaryDate") or summary.get("calendarDate")
+        if not date_str:
+            continue
+        entries = summary.get("allEntries") or []
+        if not entries:
+            continue
+        # Use the latest entry for this day (first in list is most recent)
+        entry = entries[0]
+        weight_g = as_float(entry.get("weight"))
+        if weight_g is None or weight_g <= 0:
+            continue
+        payload = {
+            "user_id": user_id,
+            "connection_id": connection_id,
+            "weigh_date": date_str,
+            "weight_grams": weight_g,
+            "bmi": as_float(entry.get("bmi")),
+            "body_fat_pct": as_float(entry.get("bodyFat")),
+            "body_water_pct": as_float(entry.get("bodyWater")),
+            "muscle_mass_grams": as_float(entry.get("muscleMass")),
+            "bone_mass_grams": as_float(entry.get("boneMass")),
+            "source_type": entry.get("sourceType"),
+            "raw_payload": entry,
+        }
+        supabase_upsert("garmin_weight_snapshots", payload, on_conflict="connection_id,weigh_date")
+        count += 1
+    return count
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -1290,8 +1337,21 @@ def main() -> None:
         upsert_daily_steps(SUPABASE_USER_ID, connection_id, date_iso, summary, steps_buckets)
         upsert_intraday_body_battery(SUPABASE_USER_ID, connection_id, date_iso, bb)
 
-    progress("Syncing recent activities", stage="activities", percent=97)
+    progress("Syncing recent activities", stage="activities", percent=95)
     activity_count = sync_recent_garmin_activities(api, SUPABASE_USER_ID, connection_id)
+
+    # Sync weigh-ins for the full backfill range at once (more efficient than per-day)
+    if dates_to_sync:
+        start_date = min(dates_to_sync)
+        end_date = max(dates_to_sync)
+        progress(f"Syncing weigh-ins {start_date} → {end_date}", stage="weigh_ins", percent=98)
+        try:
+            weigh_data = get_weigh_ins_data(api, start_date, end_date)
+            weight_count = upsert_weight_snapshots(SUPABASE_USER_ID, connection_id, weigh_data)
+            throttle()
+            print(f"  Upserted {weight_count} weigh-in entries")
+        except Exception as exc:
+            print(f"  Warning: weigh-ins sync failed: {exc}")
 
     update_connection_status(
         connection_id,

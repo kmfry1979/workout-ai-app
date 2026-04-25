@@ -26,6 +26,16 @@ type DailyMetric = {
   steps: number | null
 }
 
+type WeightEntry = {
+  weigh_date: string
+  weight_grams: number
+  bmi: number | null
+  body_fat_pct: number | null
+  body_water_pct: number | null
+  muscle_mass_grams: number | null
+  bone_mass_grams: number | null
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function getTypeKey(a: Activity): string {
@@ -124,6 +134,11 @@ export default function YouPage() {
   const [displayName, setDisplayName] = useState('')
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<'all' | 'run' | 'walk' | 'strength'>('all')
+  const [weightEntries, setWeightEntries] = useState<WeightEntry[]>([])
+  const [heightCm, setHeightCm] = useState<number | null>(null)
+  const [heightInput, setHeightInput] = useState('')
+  const [savingHeight, setSavingHeight] = useState(false)
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null)
 
   useEffect(() => {
     const load = async () => {
@@ -131,12 +146,16 @@ export default function YouPage() {
       if (!data.session) { router.push('/login'); return }
       const user = data.session.user
 
+      setCurrentUserId(user.id)
+
       const { data: profile } = await supabase
         .from('profiles')
-        .select('display_name, name')
+        .select('display_name, name, height_cm')
         .eq('user_id', user.id)
         .maybeSingle()
       setDisplayName(profile?.display_name ?? profile?.name ?? '')
+      const hCm = (profile as { height_cm?: number | null } | null)?.height_cm ?? null
+      setHeightCm(hCm)
 
       // All activities (last 90 days for PRs + weekly stats)
       const ninetyDaysAgo = new Date()
@@ -159,10 +178,64 @@ export default function YouPage() {
         .gte('metric_date', thirtyDaysAgo.toISOString().split('T')[0])
         .order('metric_date', { ascending: true })
       setMetrics((met ?? []) as DailyMetric[])
+
+      // Weight data — from dedicated table (falls back gracefully if not yet created)
+      const ninetyDaysAgoDate = ninetyDaysAgo.toISOString().split('T')[0]
+      const { data: weightRaw } = await supabase
+        .from('garmin_weight_snapshots')
+        .select('weigh_date, weight_grams, bmi, body_fat_pct, body_water_pct, muscle_mass_grams, bone_mass_grams')
+        .eq('user_id', user.id)
+        .gte('weigh_date', ninetyDaysAgoDate)
+        .order('weigh_date', { ascending: true })
+
+      if (weightRaw && weightRaw.length > 0) {
+        setWeightEntries(weightRaw as WeightEntry[])
+      } else {
+        // Fallback: parse body_composition JSONB from daily_health_metrics
+        const { data: legacyMet } = await supabase
+          .from('daily_health_metrics')
+          .select('metric_date, body_composition')
+          .eq('user_id', user.id)
+          .gte('metric_date', ninetyDaysAgoDate)
+          .order('metric_date', { ascending: true })
+
+        const parsed: WeightEntry[] = []
+        for (const row of (legacyMet ?? [])) {
+          const bc = (row as { body_composition?: Record<string, unknown> | null }).body_composition
+          if (!bc) continue
+          // Try multiple known Garmin JSONB shapes
+          const weightEntry = (bc.weightEntry as Record<string, unknown> | undefined) ?? bc
+          const wg = Number(weightEntry.weight ?? weightEntry.weightInGrams ?? weightEntry.weightKg)
+          if (!wg || wg <= 0) continue
+          // Garmin returns weight in grams if > 1000, else kg
+          const weightGrams = wg > 1000 ? wg : wg * 1000
+          parsed.push({
+            weigh_date: (row as { metric_date: string }).metric_date,
+            weight_grams: weightGrams,
+            bmi: Number(weightEntry.bmi) || null,
+            body_fat_pct: Number(weightEntry.percentFat ?? weightEntry.bodyFat) || null,
+            body_water_pct: Number(weightEntry.percentHydration ?? weightEntry.bodyWater) || null,
+            muscle_mass_grams: Number(weightEntry.muscleWeightGrams ?? weightEntry.muscleMass) || null,
+            bone_mass_grams: Number(weightEntry.boneMassGrams ?? weightEntry.boneMass) || null,
+          })
+        }
+        setWeightEntries(parsed)
+      }
+
       setLoading(false)
     }
     load()
   }, [router])
+
+  const saveHeight = async () => {
+    const h = parseFloat(heightInput)
+    if (!h || h < 100 || h > 250 || !currentUserId) return
+    setSavingHeight(true)
+    await supabase.from('profiles').upsert({ user_id: currentUserId, height_cm: h }, { onConflict: 'user_id' })
+    setHeightCm(h)
+    setHeightInput('')
+    setSavingHeight(false)
+  }
 
   if (loading) {
     return (
@@ -259,6 +332,64 @@ export default function YouPage() {
     .filter(m => m.garmin_body_battery_high != null || m.garmin_hrv_nightly_avg != null)
     .slice(-14) // last 14 days
   const maxTrend = Math.max(...trendData.map(m => m.garmin_body_battery_high ?? m.garmin_hrv_nightly_avg ?? 0), 1)
+
+  // ── Weight computations ─────────────────────────────────────────────────────
+  const latestWeight = weightEntries.length > 0 ? weightEntries[weightEntries.length - 1] : null
+  const latestWeightKg = latestWeight ? latestWeight.weight_grams / 1000 : null
+
+  const weightByDate = new Map(weightEntries.map(e => [e.weigh_date, e.weight_grams / 1000]))
+
+  const weightDelta = (daysAgo: number): number | null => {
+    if (!latestWeight) return null
+    const targetDate = new Date(latestWeight.weigh_date)
+    targetDate.setDate(targetDate.getDate() - daysAgo)
+    // Find closest entry within ±3 days of target
+    let closest: number | null = null
+    let closestDiff = 999
+    for (const [date, kg] of weightByDate) {
+      const diff = Math.abs((new Date(date).getTime() - targetDate.getTime()) / 86400000)
+      if (diff < closestDiff && diff <= 3) { closestDiff = diff; closest = kg }
+    }
+    return closest != null ? (latestWeightKg! - closest) : null
+  }
+
+  const delta7 = weightDelta(7)
+  const delta30 = weightDelta(30)
+
+  // Weekly rate of change over last 30 days
+  const weightRateKgPerWeek = (() => {
+    const recent = weightEntries.slice(-30)
+    if (recent.length < 2) return null
+    const first = recent[0], last = recent[recent.length - 1]
+    const days = (new Date(last.weigh_date).getTime() - new Date(first.weigh_date).getTime()) / 86400000
+    if (days < 3) return null
+    return ((last.weight_grams - first.weight_grams) / 1000) / (days / 7)
+  })()
+
+  // BMI
+  const bmi = latestWeightKg != null && heightCm != null
+    ? latestWeightKg / Math.pow(heightCm / 100, 2) : null
+  const bmiLabel = bmi == null ? null
+    : bmi < 18.5 ? 'Underweight'
+    : bmi < 25 ? 'Healthy weight'
+    : bmi < 30 ? 'Overweight'
+    : 'Obese'
+  const bmiColor = bmi == null ? '#9ca3af'
+    : bmi < 18.5 ? '#3b82f6'
+    : bmi < 25 ? '#21c55d'
+    : bmi < 30 ? '#f97316'
+    : '#ef4444'
+
+  // Ideal weight range (BMI 18.5–24.9) if height known
+  const idealWeightRange = heightCm != null ? {
+    min: 18.5 * Math.pow(heightCm / 100, 2),
+    max: 24.9 * Math.pow(heightCm / 100, 2),
+  } : null
+
+  // Latest body fat / muscle mass from the most recent entry that has it
+  const latestBodyFat = [...weightEntries].reverse().find(e => e.body_fat_pct != null)?.body_fat_pct ?? null
+  const latestMuscleMassKg = [...weightEntries].reverse().find(e => e.muscle_mass_grams != null)
+    ?.muscle_mass_grams ? (([...weightEntries].reverse().find(e => e.muscle_mass_grams != null)!.muscle_mass_grams!) / 1000) : null
 
   return (
     <main className="min-h-screen bg-gray-950 pb-24 px-4 py-4">
@@ -410,6 +541,129 @@ export default function YouPage() {
                 </a>
               )}
             </div>
+          </Section>
+        )}
+
+        {/* Weight & Body Composition */}
+        {latestWeightKg != null && (
+          <Section title="⚖️ Weight & Body Composition">
+            {/* Current + deltas */}
+            <div className="grid grid-cols-3 gap-4">
+              <StatBlock
+                label="Current"
+                value={`${latestWeightKg.toFixed(1)} kg`}
+                sub={latestWeight?.weigh_date
+                  ? new Date(latestWeight.weigh_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+                  : undefined}
+              />
+              <StatBlock
+                label="7-day"
+                value={delta7 != null ? `${delta7 >= 0 ? '+' : ''}${delta7.toFixed(1)} kg` : '—'}
+                sub={delta7 != null ? (delta7 < -0.1 ? '↓ down' : delta7 > 0.1 ? '↑ up' : '→ stable') : undefined}
+              />
+              <StatBlock
+                label="30-day"
+                value={delta30 != null ? `${delta30 >= 0 ? '+' : ''}${delta30.toFixed(1)} kg` : '—'}
+                sub={weightRateKgPerWeek != null ? `${weightRateKgPerWeek >= 0 ? '+' : ''}${weightRateKgPerWeek.toFixed(2)} kg/wk` : undefined}
+              />
+            </div>
+
+            {/* Weight sparkline */}
+            {weightEntries.length >= 3 && (
+              <div>
+                <p className="text-gray-500 text-xs mb-1">90-day trend</p>
+                <div className="relative bg-gray-800 rounded-xl overflow-hidden" style={{ height: 52 }}>
+                  {(() => {
+                    const vals = weightEntries.map(e => e.weight_grams / 1000)
+                    const min = Math.min(...vals) - 0.5
+                    const max = Math.max(...vals) + 0.5
+                    const range = max - min || 1
+                    const w = 300, h = 52
+                    const pts = vals.map((v, i) => ({
+                      x: (i / (vals.length - 1)) * w,
+                      y: h - ((v - min) / range) * (h - 6) - 3,
+                    }))
+                    const d = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')
+                    return (
+                      <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="w-full h-full">
+                        <path d={d} fill="none" stroke="#f97316" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                        {/* Latest dot */}
+                        <circle cx={pts[pts.length-1].x} cy={pts[pts.length-1].y} r="3" fill="#f97316" />
+                      </svg>
+                    )
+                  })()}
+                </div>
+                <div className="flex justify-between text-gray-600 text-xs mt-1">
+                  <span>{new Date(weightEntries[0].weigh_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span>
+                  <span>Today</span>
+                </div>
+              </div>
+            )}
+
+            {/* BMI + Ideal range */}
+            {bmi != null ? (
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-gray-800/60 rounded-xl p-3">
+                  <p className="text-gray-500 text-xs mb-1">BMI</p>
+                  <p className="font-bold text-xl" style={{ color: bmiColor }}>{bmi.toFixed(1)}</p>
+                  <p className="text-xs mt-0.5" style={{ color: bmiColor }}>{bmiLabel}</p>
+                </div>
+                {idealWeightRange && (
+                  <div className="bg-gray-800/60 rounded-xl p-3">
+                    <p className="text-gray-500 text-xs mb-1">Healthy range</p>
+                    <p className="text-white font-bold text-sm">{idealWeightRange.min.toFixed(1)}–{idealWeightRange.max.toFixed(1)} kg</p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      {latestWeightKg < idealWeightRange.min
+                        ? `${(idealWeightRange.min - latestWeightKg).toFixed(1)} kg to gain`
+                        : latestWeightKg > idealWeightRange.max
+                        ? `${(latestWeightKg - idealWeightRange.max).toFixed(1)} kg to lose`
+                        : '✓ In range'}
+                    </p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              /* Height not set — inline prompt */
+              <div className="flex items-center gap-2 bg-gray-800/40 rounded-xl p-3">
+                <p className="text-xs text-gray-400 shrink-0">Set height for BMI:</p>
+                <input
+                  type="number"
+                  placeholder="cm"
+                  value={heightInput}
+                  onChange={e => setHeightInput(e.target.value)}
+                  className="flex-1 bg-gray-800 text-white text-sm rounded-lg px-2 py-1.5 outline-none focus:ring-1 focus:ring-orange-500 w-0 min-w-0 placeholder-gray-600"
+                />
+                <button
+                  onClick={saveHeight}
+                  disabled={savingHeight || !heightInput}
+                  className="shrink-0 text-xs px-3 py-1.5 rounded-lg bg-orange-600 hover:bg-orange-500 disabled:opacity-40 text-white transition-colors"
+                >
+                  {savingHeight ? '…' : 'Save'}
+                </button>
+              </div>
+            )}
+
+            {/* Body composition from Garmin scale (if available) */}
+            {(latestBodyFat != null || latestMuscleMassKg != null) && (
+              <div className="grid grid-cols-2 gap-3">
+                {latestBodyFat != null && (
+                  <div className="bg-gray-800/60 rounded-xl p-3">
+                    <p className="text-gray-500 text-xs mb-1">Body Fat</p>
+                    <p className="text-white font-bold text-xl">{latestBodyFat.toFixed(1)}%</p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      {latestBodyFat < 10 ? 'Essential fat' : latestBodyFat < 20 ? 'Athlete' : latestBodyFat < 25 ? 'Fitness' : latestBodyFat < 32 ? 'Average' : 'Above average'}
+                    </p>
+                  </div>
+                )}
+                {latestMuscleMassKg != null && (
+                  <div className="bg-gray-800/60 rounded-xl p-3">
+                    <p className="text-gray-500 text-xs mb-1">Muscle Mass</p>
+                    <p className="text-white font-bold text-xl">{latestMuscleMassKg.toFixed(1)} kg</p>
+                    <p className="text-xs text-gray-500 mt-0.5">From Garmin scale</p>
+                  </div>
+                )}
+              </div>
+            )}
           </Section>
         )}
 
