@@ -66,7 +66,8 @@ api.login()
 
 # ── Get token content ──────────────────────────────────────────────────────────
 
-token_content = api.client.dumps()
+_garth = getattr(api, 'garth', None) or getattr(api, 'client', None)
+token_content = _garth.dumps()
 
 if not token_content or not token_content.strip():
     print("ERROR: token content is empty after login — something went wrong.")
