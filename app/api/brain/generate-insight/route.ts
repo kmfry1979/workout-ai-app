@@ -1,0 +1,325 @@
+import { NextRequest, NextResponse } from 'next/server'
+import { createClient } from '@supabase/supabase-js'
+
+const GROQ_API_KEY = process.env.GROQ_API_KEY ?? ''
+const GROQ_MODEL = process.env.GROQ_MODEL ?? 'llama-3.3-70b-versatile'
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? ''
+const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ?? ''
+
+// ─── Types ─────────────────────────────────────────────────────────────────────
+
+type BrainInsight = {
+  headline: string
+  insight: string
+  suggested_focus: string
+  readiness_score: number
+  readiness_label: 'green' | 'amber' | 'red'
+}
+
+type HealthRow = {
+  metric_date: string
+  hrv_avg: number | null
+  hrv_status: string | null
+  stress_avg: number | null
+  body_battery_end: number | null
+  respiration_avg_bpm: number | null
+  spo2_avg: number | null
+  training_readiness_score: number | null
+  training_readiness_label: string | null
+  training_status_phase: string | null
+}
+
+type SleepRow = {
+  sleep_date: string
+  sleep_score: number | null
+  sleep_duration_seconds: number | null
+  deep_sleep_seconds: number | null
+  rem_sleep_seconds: number | null
+}
+
+type StepsRow = {
+  step_date: string
+  total_steps: number | null
+  active_minutes: number | null
+  vigorous_intensity_minutes: number | null
+}
+
+type ActivityRow = {
+  start_time: string
+  activity_type: string | null
+  duration_sec: number | null
+  distance_m: number | null
+  avg_hr: number | null
+  training_effect: number | null
+}
+
+type WeightRow = {
+  weigh_date: string
+  weight_kg: number
+  body_fat_pct: number | null
+}
+
+// ─── Prompt builder ────────────────────────────────────────────────────────────
+
+function fmtDur(sec: number | null): string {
+  if (sec == null) return '?'
+  return `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`
+}
+
+function buildPrompt(
+  health: HealthRow[],
+  sleep: SleepRow[],
+  steps: StepsRow[],
+  activities: ActivityRow[],
+  weights: WeightRow[],
+  targetDate: string,
+): string {
+  const today = health.find(h => h.metric_date === targetDate) ?? health.at(-1)
+  const todaySleep = sleep.find(s => s.sleep_date === targetDate) ?? sleep.at(-1)
+  const todaySteps = steps.find(s => s.step_date === targetDate) ?? steps.at(-1)
+
+  // 7-day HRV average (excluding today)
+  const hrvHistory = health
+    .filter(h => h.metric_date !== targetDate && h.hrv_avg != null)
+    .map(h => h.hrv_avg!)
+  const hrv7Avg = hrvHistory.length > 0
+    ? Math.round(hrvHistory.reduce((a, b) => a + b, 0) / hrvHistory.length) : null
+
+  // 7-day sleep average
+  const sleepHistory = sleep
+    .filter(s => s.sleep_date !== targetDate && s.sleep_duration_seconds != null)
+    .map(s => s.sleep_duration_seconds!)
+  const sleep7Avg = sleepHistory.length > 0
+    ? Math.round(sleepHistory.reduce((a, b) => a + b, 0) / sleepHistory.length) : null
+
+  const recentActs = activities.slice(0, 5).map(a => {
+    const parts = [
+      a.activity_type?.replace(/_/g, ' ') ?? 'activity',
+      fmtDur(a.duration_sec),
+      a.distance_m ? `${(a.distance_m / 1000).toFixed(1)}km` : null,
+      a.avg_hr ? `${a.avg_hr}bpm` : null,
+      a.training_effect ? `TE ${a.training_effect.toFixed(1)}` : null,
+    ].filter(Boolean)
+    return `- ${new Date(a.start_time).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}: ${parts.join(' · ')}`
+  }).join('\n')
+
+  const latestWeight = weights[0]
+
+  return `You are an elite sports scientist AI generating a daily performance insight for an athlete. Analyse the data below carefully and produce a personalised, specific daily readiness summary.
+
+## Today's Data (${targetDate})
+- HRV: ${today?.hrv_avg ?? '—'}ms ${hrv7Avg ? `(7-day avg: ${hrv7Avg}ms, ${today?.hrv_avg && hrv7Avg ? (((today.hrv_avg - hrv7Avg) / hrv7Avg) * 100).toFixed(0) : '?'}% vs avg)` : ''}
+- HRV status: ${today?.hrv_status ?? '—'}
+- Body Battery: ${today?.body_battery_end ?? '—'}/100
+- Stress avg: ${today?.stress_avg ?? '—'}/100
+- Respiration: ${today?.respiration_avg_bpm ?? '—'} brpm
+- SpO2: ${today?.spo2_avg ?? '—'}%
+- Garmin Training Readiness: ${today?.training_readiness_score ?? '—'}/100 (${today?.training_readiness_label ?? '—'})
+- Training Phase: ${today?.training_status_phase?.replace(/_/g, ' ') ?? '—'}
+
+## Sleep
+- Last night: score ${todaySleep?.sleep_score ?? '—'}/100, duration ${fmtDur(todaySleep?.sleep_duration_seconds ?? null)}, deep ${fmtDur(todaySleep?.deep_sleep_seconds ?? null)}, REM ${fmtDur(todaySleep?.rem_sleep_seconds ?? null)}
+- 7-day sleep avg: ${sleep7Avg ? fmtDur(sleep7Avg) : '—'}
+
+## Activity (today)
+- Steps: ${todaySteps?.total_steps?.toLocaleString() ?? '—'}
+- Active minutes: ${todaySteps?.active_minutes ?? '—'}
+
+## Last 5 Workouts
+${recentActs || '— No recent activities'}
+
+## Weight
+${latestWeight ? `${latestWeight.weight_kg.toFixed(1)} kg${latestWeight.body_fat_pct ? ` · ${latestWeight.body_fat_pct.toFixed(1)}% body fat` : ''} (${latestWeight.weigh_date})` : '— No recent data'}
+
+## Your Task
+Based on ALL the data above, generate a JSON response. Be specific — reference actual numbers.
+
+Rules:
+- "green" label = good recovery, cleared for hard training (HRV normal/above, good sleep, BB > 60)
+- "amber" label = moderate recovery, train but keep intensity moderate (HRV slightly low, ok sleep, BB 35-60)
+- "red" label = poor recovery, rest or very easy only (HRV significantly below avg, poor sleep, BB < 35, or multiple warning signs)
+- readiness_score: your 0-100 overall readiness assessment
+- headline: one punchy sentence (max 15 words) — like a doctor's verdict
+- insight: 2-3 sentences referencing actual numbers explaining WHY you gave that label
+- suggested_focus: one specific training recommendation for today (e.g. "Easy 30-40 min run at conversational pace" or "Full rest — prioritise 9h sleep tonight")
+
+Return ONLY valid JSON, no markdown fences:
+{
+  "headline": "...",
+  "insight": "...",
+  "suggested_focus": "...",
+  "readiness_score": 0-100,
+  "readiness_label": "green|amber|red"
+}`
+}
+
+// ─── Route ─────────────────────────────────────────────────────────────────────
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AdminClient = ReturnType<typeof createClient<any>>
+
+function makeAdmin(): AdminClient {
+  return createClient(SUPABASE_URL, SERVICE_KEY)
+}
+
+export async function POST(req: NextRequest) {
+  if (!GROQ_API_KEY) return NextResponse.json({ error: 'GROQ_API_KEY not set' }, { status: 503 })
+  if (!SUPABASE_URL || !SERVICE_KEY) return NextResponse.json({ error: 'Supabase not configured' }, { status: 503 })
+
+  // Auth: accept service-role key OR user JWT
+  const authHeader = req.headers.get('authorization') ?? ''
+  const token = authHeader.replace(/^Bearer\s+/i, '').trim()
+
+  const admin = makeAdmin()
+
+  if (token && token === SERVICE_KEY) {
+    // Called from sync script with service role key
+    const body = await req.json() as { user_id?: string; date?: string }
+    if (!body.user_id) return NextResponse.json({ error: 'user_id required' }, { status: 400 })
+    const targetDate = body.date ?? new Date().toISOString().split('T')[0]
+    return generateAndStore(admin, body.user_id, targetDate)
+  } else if (token) {
+    // Called from client with user JWT
+    const { data: { user }, error } = await admin.auth.getUser(token)
+    if (error || !user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const body = await req.json().catch(() => ({})) as { date?: string }
+    const targetDate = body.date ?? new Date().toISOString().split('T')[0]
+    return generateAndStore(admin, user.id, targetDate)
+  } else {
+    return NextResponse.json({ error: 'Authorization required' }, { status: 401 })
+  }
+}
+
+// Also support GET for client-side fetch of latest insight
+export async function GET(req: NextRequest) {
+  if (!SUPABASE_URL || !SERVICE_KEY) return NextResponse.json({ error: 'Supabase not configured' }, { status: 503 })
+
+  const authHeader = req.headers.get('authorization') ?? ''
+  const token = authHeader.replace(/^Bearer\s+/i, '').trim()
+  if (!token) return NextResponse.json({ error: 'Authorization required' }, { status: 401 })
+
+  const admin = makeAdmin()
+  const { data: { user }, error } = await admin.auth.getUser(token)
+  if (error || !user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const today = new Date().toISOString().split('T')[0]
+  const { data: row } = await admin
+    .from('daily_insights')
+    .select('insight_date, insight_text, readiness_score, readiness_label, suggested_focus, generated_at')
+    .eq('user_id', user.id)
+    .gte('insight_date', today)
+    .order('insight_date', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  return NextResponse.json({ insight: row ?? null })
+}
+
+async function generateAndStore(
+  admin: AdminClient,
+  userId: string,
+  targetDate: string,
+): Promise<NextResponse> {
+  const sevenAgo = new Date(new Date(targetDate).getTime() - 7 * 86400000).toISOString().split('T')[0]
+
+  // Fetch 7 days of data in parallel
+  const [healthRes, sleepRes, stepsRes, actsRes, weightRes] = await Promise.all([
+    admin.from('garmin_daily_health_metrics')
+      .select('metric_date, hrv_avg, hrv_status, stress_avg, body_battery_end, respiration_avg_bpm, spo2_avg, training_readiness_score, training_readiness_label, training_status_phase')
+      .eq('user_id', userId).gte('metric_date', sevenAgo).order('metric_date', { ascending: true }),
+    admin.from('garmin_sleep_data')
+      .select('sleep_date, sleep_score, sleep_duration_seconds, deep_sleep_seconds, rem_sleep_seconds')
+      .eq('user_id', userId).gte('sleep_date', sevenAgo).order('sleep_date', { ascending: true }),
+    admin.from('garmin_daily_steps')
+      .select('step_date, total_steps, active_minutes, vigorous_intensity_minutes')
+      .eq('user_id', userId).gte('step_date', sevenAgo).order('step_date', { ascending: true }),
+    admin.from('garmin_activities')
+      .select('start_time, activity_type, duration_sec, distance_m, avg_hr, training_effect')
+      .eq('user_id', userId)
+      .gte('start_time', new Date(sevenAgo).toISOString())
+      .order('start_time', { ascending: false }).limit(7),
+    admin.from('garmin_weight_snapshots')
+      .select('weigh_date, weight_kg, body_fat_pct')
+      .eq('user_id', userId).gte('weigh_date', sevenAgo)
+      .order('weigh_date', { ascending: false }).limit(3),
+  ])
+
+  const health = (healthRes.data ?? []) as HealthRow[]
+  const sleep = (sleepRes.data ?? []) as SleepRow[]
+  const stepsData = (stepsRes.data ?? []) as StepsRow[]
+  const activities = (actsRes.data ?? []) as ActivityRow[]
+  const weights = (weightRes.data ?? []) as WeightRow[]
+
+  if (health.length === 0 && sleep.length === 0) {
+    return NextResponse.json({ error: 'No data available to analyse' }, { status: 422 })
+  }
+
+  const prompt = buildPrompt(health, sleep, stepsData, activities, weights, targetDate)
+
+  // Call Groq
+  let groqRes: Response
+  try {
+    groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_API_KEY}` },
+      body: JSON.stringify({
+        model: GROQ_MODEL,
+        messages: [
+          { role: 'system', content: 'You are a sports science AI. Always respond with valid JSON only — no markdown, no explanation, just the JSON object.' },
+          { role: 'user', content: prompt },
+        ],
+        temperature: 0.4,
+        max_tokens: 400,
+      }),
+    })
+  } catch (e: unknown) {
+    return NextResponse.json({ error: `Cannot reach Groq: ${e instanceof Error ? e.message : e}` }, { status: 503 })
+  }
+
+  if (!groqRes.ok) {
+    const text = await groqRes.text()
+    return NextResponse.json({ error: `Groq ${groqRes.status}: ${text}` }, { status: 502 })
+  }
+
+  const groqData = await groqRes.json() as { choices?: { message?: { content?: string } }[] }
+  const raw = groqData.choices?.[0]?.message?.content?.trim() ?? ''
+
+  let parsed: BrainInsight
+  try {
+    // Strip markdown fences if model wraps anyway
+    const clean = raw.replace(/^```json?\s*/i, '').replace(/```\s*$/i, '').trim()
+    parsed = JSON.parse(clean) as BrainInsight
+  } catch {
+    return NextResponse.json({ error: 'Could not parse Groq response', raw }, { status: 502 })
+  }
+
+  // Upsert into daily_insights
+  const { error: upsertErr } = await admin.from('daily_insights').upsert({
+    user_id: userId,
+    insight_date: targetDate,
+    insight_text: parsed.insight,
+    readiness_score: parsed.readiness_score,
+    readiness_label: parsed.readiness_label,
+    suggested_focus: parsed.suggested_focus,
+    generated_at: new Date().toISOString(),
+    raw_context: {
+      health_rows: health.length,
+      sleep_rows: sleep.length,
+      activity_rows: activities.length,
+      headline: parsed.headline,
+    },
+  }, { onConflict: 'user_id,insight_date' })
+
+  if (upsertErr) {
+    console.error('Brain upsert error:', upsertErr)
+  }
+
+  return NextResponse.json({
+    headline: parsed.headline,
+    insight: parsed.insight,
+    suggested_focus: parsed.suggested_focus,
+    readiness_score: parsed.readiness_score,
+    readiness_label: parsed.readiness_label,
+    insight_date: targetDate,
+  })
+}

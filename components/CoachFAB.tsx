@@ -8,6 +8,15 @@ type Message = { role: 'user' | 'assistant'; content: string }
 type Metrics = Record<string, unknown>
 type ActRow = Record<string, unknown>
 
+type BrainInsight = {
+  headline: string
+  insight: string
+  suggested_focus: string
+  readiness_score: number
+  readiness_label: 'green' | 'amber' | 'red'
+  insight_date: string
+}
+
 const STORAGE_KEY = 'coach_memory_v1'
 const MAX_MEMORY = 10 // messages to persist
 
@@ -89,6 +98,7 @@ export function CoachFAB() {
   const [displayName, setDisplayName] = useState('')
   const [greeting, setGreeting] = useState('')
   const [contextReady, setContextReady] = useState(false)
+  const [brainInsight, setBrainInsight] = useState<BrainInsight | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -165,6 +175,33 @@ export function CoachFAB() {
     }
     setMetrics(merged)
     setActivities((acts.data ?? []) as ActRow[])
+
+    // Fetch today's brain insight (stored from last sync)
+    try {
+      const { data: insightRow } = await supabase
+        .from('daily_insights')
+        .select('insight_date, insight_text, readiness_score, readiness_label, suggested_focus, raw_context')
+        .eq('user_id', user.id)
+        .order('insight_date', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      if (insightRow) {
+        const r = insightRow as {
+          insight_date: string; insight_text: string; readiness_score: number
+          readiness_label: 'green' | 'amber' | 'red'; suggested_focus: string
+          raw_context: { headline?: string } | null
+        }
+        setBrainInsight({
+          headline: r.raw_context?.headline ?? '',
+          insight: r.insight_text,
+          suggested_focus: r.suggested_focus,
+          readiness_score: r.readiness_score,
+          readiness_label: r.readiness_label,
+          insight_date: r.insight_date,
+        })
+      }
+    } catch { /* brain insight is optional */ }
+
     setContextReady(true)
     setCtxLoading(false)
   }, [contextReady])
@@ -194,7 +231,18 @@ export function CoachFAB() {
       const res = await fetch('/api/coach/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: newMessages, metrics: metricsCtx, activities: actsCtx }),
+        body: JSON.stringify({
+          messages: newMessages,
+          metrics: metricsCtx,
+          activities: actsCtx,
+          brainInsight: brainInsight ? {
+            headline: brainInsight.headline,
+            insight: brainInsight.insight,
+            suggested_focus: brainInsight.suggested_focus,
+            readiness_score: brainInsight.readiness_score,
+            readiness_label: brainInsight.readiness_label,
+          } : null,
+        }),
       })
       const data = await res.json() as { reply?: string; error?: string }
       if (!res.ok) throw new Error(data.error ?? 'Coach unavailable')
@@ -284,25 +332,57 @@ export function CoachFAB() {
             <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
               {/* Greeting */}
               {!hasMessages && (
-                <div className="mb-4">
-                  <div className="bg-gray-800/80 rounded-2xl rounded-tl-sm px-4 py-3 inline-block max-w-[85%]">
-                    <p className="text-white text-sm">
+                <div className="mb-4 space-y-3">
+                  <div className="bg-gray-800/80 rounded-2xl rounded-tl-sm px-4 py-3 max-w-[90%]">
+                    <p className="text-white text-sm font-medium">
                       {greeting}{displayName ? `, ${displayName}` : ''}! 👋
                     </p>
                     {ctxLoading ? (
                       <p className="text-gray-400 text-xs mt-1">Loading your health data…</p>
-                    ) : contextReady && metrics ? (
+                    ) : brainInsight ? (
+                      <>
+                        {/* Brain insight banner */}
+                        <div className={`mt-2 rounded-xl p-3 border ${
+                          brainInsight.readiness_label === 'green' ? 'border-green-500/30 bg-green-950/30' :
+                          brainInsight.readiness_label === 'amber' ? 'border-orange-500/30 bg-orange-950/30' :
+                          'border-red-500/30 bg-red-950/30'
+                        }`}>
+                          <div className="flex items-center gap-1.5 mb-1">
+                            <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                              brainInsight.readiness_label === 'green' ? 'bg-green-400' :
+                              brainInsight.readiness_label === 'amber' ? 'bg-orange-400' : 'bg-red-400'
+                            }`} />
+                            <span className={`text-[10px] font-bold uppercase tracking-wider ${
+                              brainInsight.readiness_label === 'green' ? 'text-green-400' :
+                              brainInsight.readiness_label === 'amber' ? 'text-orange-400' : 'text-red-400'
+                            }`}>
+                              {brainInsight.readiness_label === 'green' ? 'In the Green' :
+                               brainInsight.readiness_label === 'amber' ? 'Amber — Train Easy' : 'Red — Rest Day'}
+                              {' '}· {brainInsight.readiness_score}/100
+                            </span>
+                          </div>
+                          {brainInsight.headline && (
+                            <p className="text-white text-xs font-semibold leading-snug">{brainInsight.headline}</p>
+                          )}
+                          <p className="text-gray-300 text-xs mt-1 leading-relaxed">{brainInsight.insight}</p>
+                          {brainInsight.suggested_focus && (
+                            <p className="text-gray-400 text-[10px] mt-1.5">
+                              <span className="text-gray-500">Today: </span>{brainInsight.suggested_focus}
+                            </p>
+                          )}
+                        </div>
+                        <p className="text-gray-500 text-xs mt-2">Ask me anything about your training.</p>
+                      </>
+                    ) : contextReady ? (
                       <p className="text-gray-400 text-xs mt-1">
                         {(() => {
-                          const bb = metrics.body_battery as number | null
-                          const hrv = metrics.hrv as number | null
-                          const sleep = metrics.sleep_score as number | null
-                          const bits = []
+                          const bb = metrics?.body_battery as number | null
+                          const hrv = metrics?.hrv as number | null
+                          const bits: string[] = []
                           if (bb != null) bits.push(`Body Battery ${bb}%`)
                           if (hrv != null) bits.push(`HRV ${hrv}ms`)
-                          if (sleep != null) bits.push(`Sleep score ${sleep}`)
                           return bits.length > 0
-                            ? `I can see your stats — ${bits.slice(0, 2).join(', ')}. What would you like to know?`
+                            ? `Stats loaded — ${bits.slice(0, 2).join(', ')}. What would you like to know?`
                             : "I'm ready to help with your training. What would you like to know?"
                         })()}
                       </p>
@@ -313,7 +393,7 @@ export function CoachFAB() {
 
                   {/* Suggested questions */}
                   {!ctxLoading && (
-                    <div className="mt-3 flex flex-wrap gap-2">
+                    <div className="flex flex-wrap gap-2">
                       {suggestions.map(q => (
                         <button
                           key={q}

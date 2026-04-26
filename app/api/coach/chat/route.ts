@@ -45,7 +45,15 @@ type ActivityContext = {
   notes: string | null
 }
 
-function buildSystemPrompt(metrics: MetricsContext | null, activities: ActivityContext[]): string {
+type BrainInsightContext = {
+  headline: string
+  insight: string
+  suggested_focus: string
+  readiness_score: number
+  readiness_label: 'green' | 'amber' | 'red'
+}
+
+function buildSystemPrompt(metrics: MetricsContext | null, activities: ActivityContext[], brain?: BrainInsightContext | null): string {
   const today = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })
 
   let metricsSection = 'No health metrics available for today.'
@@ -116,7 +124,16 @@ Use the athlete's data above to give personalised, data-driven coaching advice. 
 - High stress + low body battery = active recovery (walk, yoga)
 - Good HRV + high body battery = good day for hard training
 
-Be conversational, encouraging, and specific. Reference their actual numbers. Keep responses concise (2-4 sentences unless they ask for more detail). Don't use excessive bullet points — talk like a real coach.`
+Be conversational, encouraging, and specific. Reference their actual numbers. Keep responses concise (2-4 sentences unless they ask for more detail). Don't use excessive bullet points — talk like a real coach.${brain ? `
+
+## AI Brain Insight (generated from full 7-day analysis)
+
+Label: ${brain.readiness_label.toUpperCase()} (score: ${brain.readiness_score}/100)
+Headline: ${brain.headline}
+Analysis: ${brain.insight}
+Today's recommendation: ${brain.suggested_focus}
+
+Use this Brain Insight as authoritative context — it reflects a deep 7-day analysis. Reference it naturally when relevant (e.g. "The brain analysis shows your HRV has been trending down...").` : ''}`
 }
 
 export async function POST(req: NextRequest) {
@@ -128,6 +145,7 @@ export async function POST(req: NextRequest) {
     messages: Message[]
     metrics: MetricsContext | null
     activities: ActivityContext[]
+    brainInsight?: BrainInsightContext | null
   }
 
   try {
@@ -136,8 +154,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
   }
 
-  const { messages, metrics, activities } = body
-  const systemPrompt = buildSystemPrompt(metrics ?? null, activities ?? [])
+  const { messages, metrics, activities, brainInsight } = body
+  const systemPrompt = buildSystemPrompt(metrics ?? null, activities ?? [], brainInsight)
 
   let res: Response
   try {

@@ -1666,6 +1666,34 @@ def main() -> None:
     )
     print(f"  User: {full_name or 'unknown'}")
 
+    # ── Brain: trigger AI daily insight generation ──────────────────────────────
+    app_url = os.getenv("APP_URL", "").rstrip("/")
+    if app_url and SUPABASE_SERVICE_ROLE_KEY:
+        print(f"\nTriggering Brain insight for {date.today().isoformat()}…")
+        try:
+            import requests as _req
+            brain_resp = _req.post(
+                f"{app_url}/api/brain/generate-insight",
+                json={"user_id": SUPABASE_USER_ID, "date": date.today().isoformat()},
+                headers={
+                    "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+                    "Content-Type": "application/json",
+                },
+                timeout=45,
+            )
+            if brain_resp.ok:
+                bd = brain_resp.json()
+                label = bd.get("readiness_label", "?").upper()
+                score = bd.get("readiness_score", "?")
+                headline = (bd.get("headline") or "")[:80]
+                print(f"  Brain: [{label} {score}/100] {headline}")
+            else:
+                print(f"  Brain API {brain_resp.status_code}: {brain_resp.text[:200]}")
+        except Exception as brain_exc:
+            print(f"  Brain trigger failed (non-fatal): {brain_exc}")
+    else:
+        print("\n  Brain insight skipped (APP_URL not set in .env)")
+
 
 if __name__ == "__main__":
     try:
