@@ -1640,11 +1640,17 @@ def main() -> None:
     progress(f"Syncing weigh-ins {weight_start} to {weight_end}", stage="weigh_ins", percent=98)
     try:
         weight_entries = get_weigh_ins_data(api, weight_start, weight_end)
+        print(f"  Weight entries fetched from Garmin: {len(weight_entries)}")
+        if weight_entries:
+            for we in weight_entries[:5]:
+                print(f"    {we.get('calendarDate')}: {we.get('weight_kg')} kg")
         weight_count = upsert_weight_snapshots(SUPABASE_USER_ID, connection_id, weight_entries)
         throttle()
-        print(f"  Upserted {weight_count} weigh-in entries")
+        print(f"  Upserted {weight_count} weigh-in entries to garmin_weight_snapshots")
     except Exception as exc:
+        import traceback
         print(f"  Warning: weigh-ins sync failed: {exc}")
+        print(traceback.format_exc())
 
     # Sync race predictions + personal records (once per run, not per day)
     progress("Syncing race predictions and personal records", stage="predictions", percent=99)
