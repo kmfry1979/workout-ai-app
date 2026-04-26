@@ -1542,7 +1542,10 @@ def main() -> None:
     progress("Logged in to Garmin", stage="login")
 
     # Save refreshed tokens back to Supabase after every successful login
-    save_tokens_to_supabase(SUPABASE_USER_ID, api.client.dumps())
+    # garminconnect >=0.2 uses api.garth instead of api.client
+    _token_obj = getattr(api, 'garth', None) or getattr(api, 'client', None)
+    if _token_obj:
+        save_tokens_to_supabase(SUPABASE_USER_ID, _token_obj.dumps())
 
     full_name = get_user_profile_name(api) or ""
 
