@@ -548,6 +548,38 @@ def get_spo2_data(api: Garmin, date_iso: str) -> dict[str, Any]:
     return {}
 
 
+def get_training_readiness_data(api: Garmin, date_iso: str) -> dict[str, Any]:
+    """
+    Fetch Garmin Training Readiness score (0–100) for a given date.
+    Uses get_morning_training_readiness (AFTER_WAKEUP_RESET context) first,
+    falls back to get_training_readiness with manual filter.
+    """
+    success, data, err = safe_call(api.get_morning_training_readiness, date_iso)
+    if success and isinstance(data, dict) and data:
+        return data
+    # Fallback: get_training_readiness returns a list
+    success2, data2, err2 = safe_call(api.get_training_readiness, date_iso)
+    if success2:
+        if isinstance(data2, list) and data2:
+            morning = [r for r in data2 if isinstance(r, dict) and r.get("inputContext") == "AFTER_WAKEUP_RESET"]
+            return morning[0] if morning else data2[0]
+        if isinstance(data2, dict) and data2:
+            return data2
+    if err:
+        print(f"  Warning: get_training_readiness failed for {date_iso}: {err or err2}")
+    return {}
+
+
+def get_training_status_data(api: Garmin, date_iso: str) -> dict[str, Any]:
+    """Fetch Garmin Training Status phase (PRODUCTIVE / PEAKING / RECOVERY etc.)."""
+    success, data, err = safe_call(api.get_training_status, date_iso)
+    if success and isinstance(data, dict):
+        return data
+    if err:
+        print(f"  Warning: get_training_status failed for {date_iso}: {err}")
+    return {}
+
+
 def get_weigh_ins_data(api: Garmin, startdate: str, enddate: str) -> list[dict[str, Any]]:
     """
     Returns a flat list of normalised weigh-in entries for the date range.
@@ -625,6 +657,58 @@ def get_weigh_ins_data(api: Garmin, startdate: str, enddate: str) -> list[dict[s
 # ---------------------------------------------------------------------------
 # Data normalization
 # ---------------------------------------------------------------------------
+
+def extract_training_metrics(
+    readiness_data: dict[str, Any] | None,
+    status_data: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """
+    Extract training readiness score/label and training status phase from the raw API dicts.
+    """
+    rd = readiness_data or {}
+    sd = status_data or {}
+
+    score = as_int(rd.get("score"))
+    label = (
+        rd.get("scoreQualifierKey")
+        or rd.get("qualifierKey")
+        or rd.get("feedbackPhrase")
+    )
+    # Normalise multi-word label like "TR_FEEDBACK_PHRASE_TEMPO_BENEFICIAL" → just use "PRIME/GOOD/FAIR" if possible
+    qualifier = rd.get("scoreQualifierKey") or rd.get("qualifierKey")
+    if qualifier and not label:
+        label = qualifier
+
+    # Training status phase — may be nested under trainingStatus key or flat
+    ts_obj = sd.get("trainingStatus") or {}
+    phase: Optional[str] = None
+    if isinstance(ts_obj, dict):
+        phase = (
+            ts_obj.get("latestTrainingStatusPhase")
+            or ts_obj.get("trainingStatusPhase")
+            or ts_obj.get("phase")
+        )
+    if not phase:
+        phase = (
+            sd.get("latestTrainingStatusPhase")
+            or sd.get("trainingStatusPhase")
+        )
+
+    # Training load 7-day from trainingLoadBalance
+    tlb = sd.get("trainingLoadBalance") or {}
+    load_7day = as_float(
+        (tlb.get("lastSevenDaysLoad") if isinstance(tlb, dict) else None)
+        or (tlb.get("latestLoadValue") if isinstance(tlb, dict) else None)
+        or sd.get("last7DaysTrainingLoad")
+    )
+
+    return {
+        "training_readiness_score": score,
+        "training_readiness_label": label,
+        "training_status_phase": phase,
+        "training_load_7_day": load_7day,
+    }
+
 
 def extract_sleep_score(sleep_data: dict[str, Any]) -> Optional[int]:
     """Navigate the nested Garmin sleep score structure."""
@@ -1132,23 +1216,30 @@ def upsert_daily_health_extended(
     hrv_data: dict[str, Any],
     bb_readings: list[dict[str, Any]],
     spo2_data: dict[str, Any] | None = None,
+    training_readiness: dict[str, Any] | None = None,
+    training_status: dict[str, Any] | None = None,
 ) -> None:
     """
     Upsert extended daily health metrics into garmin_daily_health_metrics table.
+    Includes Training Readiness score/label and Training Status phase when available.
     """
     extracted = extract_daily_health_metrics(summary, hydration, hrv_data, bb_readings, spo2_data)
+    training_metrics = extract_training_metrics(training_readiness, training_status)
 
     payload = {
         "user_id": user_id,
         "connection_id": connection_id,
         "metric_date": date_iso,
         **extracted,
+        **training_metrics,
         "raw_payload": {
             "summary": summary,
             "hydration": hydration,
             "hrv": hrv_data,
             "body_battery": bb_readings,
             "spo2": spo2_data,
+            "training_readiness": training_readiness,
+            "training_status": training_status,
         },
         "created_at": utc_now_iso(),
     }
@@ -1245,6 +1336,121 @@ def upsert_intraday_body_battery(
     return len(rows)
 
 
+def sync_activity_exercise_sets(api: Garmin, user_id: str, activity_id: str) -> int:
+    """
+    Fetch exercise sets for a single activity and upsert to garmin_exercise_sets.
+    Only called for strength / gym / fitness_equipment type activities.
+    Returns the number of sets upserted.
+    """
+    success, data, err = safe_call(api.get_activity_exercise_sets, activity_id)
+    if not success or not data:
+        if err:
+            print(f"    Warning: get_activity_exercise_sets({activity_id}) failed: {err}")
+        return 0
+
+    if isinstance(data, dict):
+        sets = (
+            data.get("exerciseSets")
+            or data.get("sets")
+            or data.get("exercises")
+            or []
+        )
+    elif isinstance(data, list):
+        sets = data
+    else:
+        return 0
+
+    count = 0
+    for i, s in enumerate(sets):
+        if not isinstance(s, dict):
+            continue
+        exercise_info = s.get("exercises") or s.get("exercise") or {}
+        if isinstance(exercise_info, list) and exercise_info:
+            exercise_info = exercise_info[0]
+        ex_name = (
+            s.get("exerciseName")
+            or s.get("exercise_name")
+            or (exercise_info.get("exerciseName") if isinstance(exercise_info, dict) else None)
+        )
+        category = (
+            s.get("category")
+            or s.get("exerciseCategory")
+            or (exercise_info.get("category") if isinstance(exercise_info, dict) else None)
+        )
+        weight_raw = as_float(s.get("weight") or s.get("weightInKg"))
+        weight_kg = weight_raw / 1000 if weight_raw and weight_raw > 500 else weight_raw
+        payload = {
+            "user_id": user_id,
+            "activity_id": str(activity_id),
+            "set_order": i,
+            "exercise_name": ex_name,
+            "category": category,
+            "weight_kg": weight_kg,
+            "reps": as_int(s.get("repetitionCount") or s.get("reps") or s.get("repetitions")),
+            "duration_sec": as_int(s.get("duration") or s.get("durationInSeconds")),
+            "set_type": s.get("setType") or s.get("type"),
+            "raw_payload": s,
+            "created_at": utc_now_iso(),
+        }
+        try:
+            supabase_upsert("garmin_exercise_sets", payload, on_conflict="activity_id,set_order")
+            count += 1
+        except Exception as exc:
+            print(f"    Warning: failed to upsert exercise set {i}: {exc}")
+    if count:
+        print(f"    Synced {count} exercise sets for activity {activity_id}")
+    return count
+
+
+def sync_profile_predictions(api: Garmin, user_id: str) -> None:
+    """
+    Sync Garmin Race Predictions and Personal Records into profiles table (JSONB columns).
+    Called once per sync run, not per day.
+    """
+    # ── Race Predictions ──────────────────────────────────────────────────────
+    success, data, err = safe_call(api.get_race_predictions)
+    if success and data is not None:
+        try:
+            if isinstance(data, dict):
+                preds = (
+                    data.get("racePredictions")
+                    or data.get("predictions")
+                    or ([data] if data else [])
+                )
+            elif isinstance(data, list):
+                preds = data
+            else:
+                preds = []
+            if preds:
+                supabase_patch(
+                    "profiles",
+                    {"race_predictions": preds},
+                    filters=[("user_id", "eq", user_id)],
+                )
+                print(f"  Saved {len(preds)} race predictions to profile")
+        except Exception as exc:
+            print(f"  Warning: could not save race predictions: {exc}")
+    elif err:
+        print(f"  Warning: get_race_predictions failed: {err}")
+    throttle()
+
+    # ── Personal Records ──────────────────────────────────────────────────────
+    success2, data2, err2 = safe_call(api.get_personal_record)
+    if success2 and data2 is not None:
+        try:
+            prs = data2 if isinstance(data2, list) else [data2]
+            supabase_patch(
+                "profiles",
+                {"personal_records": prs},
+                filters=[("user_id", "eq", user_id)],
+            )
+            print(f"  Saved {len(prs)} personal records to profile")
+        except Exception as exc:
+            print(f"  Warning: could not save personal records: {exc}")
+    elif err2:
+        print(f"  Warning: get_personal_record failed: {err2}")
+
+
 def sync_recent_garmin_activities(api: Garmin, user_id: str, connection_id: str) -> int:
     success, activities, err = safe_call(api.get_activities, 0, ACTIVITY_LIMIT)
     if not success or activities is None:
@@ -1260,6 +1466,8 @@ def sync_recent_garmin_activities(api: Garmin, user_id: str, connection_id: str)
     if not isinstance(activities, list):
         return 0
 
+    STRENGTH_KEYWORDS = {"strength", "gym", "weight", "fitness_equipment", "indoor_climbing"}
+
     inserted = 0
     for activity in activities:
         if not isinstance(activity, dict):
@@ -1274,6 +1482,16 @@ def sync_recent_garmin_activities(api: Garmin, user_id: str, connection_id: str)
             inserted += 1
         except Exception as exc:
             print(f"  Warning: failed to upsert activity {row['provider_activity_id']}: {exc}")
+            continue
+
+        # Sync exercise sets for strength-type activities
+        act_type = str(row.get("activity_type") or "").lower()
+        if any(kw in act_type for kw in STRENGTH_KEYWORDS):
+            try:
+                sync_activity_exercise_sets(api, user_id, row["provider_activity_id"])
+            except Exception as exc:
+                print(f"  Warning: exercise sets sync failed for {row['provider_activity_id']}: {exc}")
+            throttle()
 
     return inserted
 
@@ -1383,6 +1601,14 @@ def main() -> None:
         spo2 = get_spo2_data(api, date_iso)
         throttle()
 
+        progress(f"  training readiness {date_iso}", stage="readiness", days_total=total, day_index=idx)
+        readiness = get_training_readiness_data(api, date_iso)
+        throttle()
+
+        progress(f"  training status {date_iso}", stage="training_status", days_total=total, day_index=idx)
+        tr_status = get_training_status_data(api, date_iso)
+        throttle()
+
         summary = daily.get("summary") or {}
         hydration = daily.get("hydration")
 
@@ -1392,6 +1618,8 @@ def main() -> None:
         upsert_daily_health_extended(
             SUPABASE_USER_ID, connection_id, date_iso,
             summary, hydration, hrv, bb, spo2,
+            training_readiness=readiness,
+            training_status=tr_status,
         )
         upsert_daily_steps(SUPABASE_USER_ID, connection_id, date_iso, summary, steps_buckets)
         upsert_intraday_body_battery(SUPABASE_USER_ID, connection_id, date_iso, bb)
@@ -1411,6 +1639,13 @@ def main() -> None:
         print(f"  Upserted {weight_count} weigh-in entries")
     except Exception as exc:
         print(f"  Warning: weigh-ins sync failed: {exc}")
+
+    # Sync race predictions + personal records (once per run, not per day)
+    progress("Syncing race predictions and personal records", stage="predictions", percent=99)
+    try:
+        sync_profile_predictions(api, SUPABASE_USER_ID)
+    except Exception as exc:
+        print(f"  Warning: profile predictions sync failed: {exc}")
 
     update_connection_status(
         connection_id,

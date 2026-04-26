@@ -5,6 +5,25 @@ import { useRouter } from 'next/navigation'
 import { supabase } from '../../lib/supabase'
 import { BottomNav } from '../../components/BottomNav'
 
+type GarminRacePrediction = {
+  raceTime?: number
+  distance?: string
+  raceDistance?: string
+  predictedTime?: number
+  racePredictionTime?: number
+  courseType?: string
+  [key: string]: unknown
+}
+
+type GarminPersonalRecord = {
+  typeKey?: string
+  typeId?: number
+  value?: number
+  activityId?: number
+  prStartTimeGMT?: string
+  [key: string]: unknown
+}
+
 type Activity = {
   id: string
   activity_type: string | null
@@ -101,6 +120,65 @@ function secsToTime(s: number): string {
   return `${m}:${String(sec).padStart(2, '0')}`
 }
 
+function localDateStr(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function kgToStoneLb(kg: number): { stones: number; lbs: number } {
+  const totalLbs = kg * 2.20462
+  const stones = Math.floor(totalLbs / 14)
+  const lbs = Math.round(totalLbs % 14)
+  // Handle rounding 14lb → carry
+  return lbs === 14 ? { stones: stones + 1, lbs: 0 } : { stones, lbs }
+}
+
+function fmtStoneLb(kg: number): string {
+  const { stones, lbs } = kgToStoneLb(kg)
+  if (stones === 0) return `${lbs}lb`
+  return lbs === 0 ? `${stones}st` : `${stones}st ${lbs}lb`
+}
+
+function fmtWeightDelta(kg: number): string {
+  const totalLbs = Math.abs(kg) * 2.20462
+  if (totalLbs < 14) return `${totalLbs.toFixed(1)}lb`
+  const stones = Math.floor(totalLbs / 14)
+  const remLbs = Math.round(totalLbs % 14)
+  return remLbs > 0 ? `${stones}st ${remLbs}lb` : `${stones}st`
+}
+
+function formatGarminPrediction(p: GarminRacePrediction): { label: string; time: string } | null {
+  const distance = p.raceDistance ?? p.distance ?? ''
+  const timeSec = Number(p.racePredictionTime ?? p.predictedTime ?? p.raceTime ?? 0)
+  if (!distance || !timeSec) return null
+  const label = String(distance).replace(/_/g, ' ').replace(/km/i, 'K')
+  return { label, time: secsToTime(Math.round(timeSec)) }
+}
+
+const PR_TYPE_LABELS: Record<string, string> = {
+  best_mile: '1 Mile',
+  best_5k: '5K',
+  best_10k: '10K',
+  best_half_marathon: 'Half Marathon',
+  best_marathon: 'Marathon',
+  longest_run: 'Longest Run',
+  best_5k_run: '5K',
+  best_10k_run: '10K',
+}
+
+function formatGarminPR(pr: GarminPersonalRecord): { label: string; value: string; date: string } | null {
+  const typeKey = String(pr.typeKey ?? '').toLowerCase()
+  const label = PR_TYPE_LABELS[typeKey] ?? typeKey.replace(/_/g, ' ')
+  if (!label) return null
+  // value is usually in seconds for time-based PRs
+  const val = Number(pr.value ?? 0)
+  if (!val) return null
+  const date = pr.prStartTimeGMT ? new Date(pr.prStartTimeGMT).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : ''
+  // Heuristic: if typeKey includes 'run' or is known distance, value is seconds
+  const isTime = typeKey.includes('run') || typeKey.includes('mile') || typeKey.includes('marathon') || typeKey.includes('k_')
+  const formattedVal = isTime ? secsToTime(Math.round(val)) : val > 1000 ? `${(val / 1000).toFixed(2)} km` : `${val.toFixed(0)} m`
+  return { label, value: formattedVal, date }
+}
+
 const ZONE_COLORS = ['bg-blue-500', 'bg-green-500', 'bg-yellow-500', 'bg-orange-500', 'bg-red-500']
 const ZONE_LABELS = ['Z1', 'Z2', 'Z3', 'Z4', 'Z5']
 
@@ -125,6 +203,56 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   )
 }
 
+function WeightLineChart({ entries }: { entries: { label: string; kg: number | null; isCurrent?: boolean }[] }) {
+  const withData = entries.filter(e => e.kg != null)
+  if (withData.length === 0) {
+    return <div className="text-center text-xs text-gray-600 py-6">No weight readings this period</div>
+  }
+  const kgVals = withData.map(e => e.kg!)
+  const minKg = Math.min(...kgVals) - 0.3
+  const maxKg = Math.max(...kgVals) + 0.3
+  const range = maxKg - minKg || 1
+  const W = 300, H = 72
+  const n = entries.length
+  const pts = entries.map((e, i) => ({
+    x: (i / Math.max(n - 1, 1)) * W,
+    y: e.kg != null ? H - ((e.kg - minKg) / range) * H : null,
+    ...e,
+  }))
+  // Build line path — reconnect across nulls not done (gaps shown)
+  let path = ''
+  for (const pt of pts) {
+    if (pt.y != null) path += path && !path.endsWith(' ') && pts.find(p => p.x < pt.x && p.y == null) ? ` M${pt.x.toFixed(1)},${pt.y.toFixed(1)}` : (path ? ` L${pt.x.toFixed(1)},${pt.y.toFixed(1)}` : `M${pt.x.toFixed(1)},${pt.y.toFixed(1)}`)
+  }
+  const topLabel = fmtStoneLb(maxKg)
+  const botLabel = fmtStoneLb(minKg)
+  return (
+    <div className="bg-gray-800/40 rounded-xl overflow-hidden py-2 px-2">
+      <div className="flex items-stretch gap-1">
+        <div className="flex flex-col justify-between text-[9px] text-gray-600 w-14 shrink-0 text-right">
+          <span>{topLabel}</span>
+          <span>{botLabel}</span>
+        </div>
+        <div className="flex-1">
+          <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="w-full" style={{ height: H }}>
+            <line x1={0} y1={H / 2} x2={W} y2={H / 2} stroke="#374151" strokeWidth="0.5" strokeDasharray="4 4" />
+            {path && <path d={path} fill="none" stroke="#f97316" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />}
+            {pts.filter(p => p.y != null).map((p, i) => (
+              <circle key={i} cx={p.x} cy={p.y!} r={p.isCurrent ? 4.5 : 3}
+                fill="#f97316" stroke={p.isCurrent ? '#ffffff' : '#111827'} strokeWidth={p.isCurrent ? 2 : 1.5} />
+            ))}
+          </svg>
+          <div className="flex justify-between text-[9px] text-gray-600 mt-0.5">
+            <span>{entries[0].label}</span>
+            {n > 6 && <span>{entries[Math.floor(n / 2)].label}</span>}
+            <span>{entries[n - 1].label}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function YouPage() {
@@ -139,6 +267,12 @@ export default function YouPage() {
   const [heightInput, setHeightInput] = useState('')
   const [savingHeight, setSavingHeight] = useState(false)
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
+  const [racePredictions, setRacePredictions] = useState<GarminRacePrediction[] | null>(null)
+  const [garminPRs, setGarminPRs] = useState<GarminPersonalRecord[] | null>(null)
+  const [weightTab, setWeightTab] = useState<'week' | 'month' | 'year'>('week')
+  const [weightWeekOffset, setWeightWeekOffset] = useState(0)
+  const [weightMonthOffset, setWeightMonthOffset] = useState(0)
+  const [weightYearOffset, setWeightYearOffset] = useState(0)
 
   useEffect(() => {
     const load = async () => {
@@ -150,12 +284,15 @@ export default function YouPage() {
 
       const { data: profile } = await supabase
         .from('profiles')
-        .select('display_name, name, height_cm')
+        .select('display_name, name, height_cm, race_predictions, personal_records')
         .eq('user_id', user.id)
         .maybeSingle()
       setDisplayName(profile?.display_name ?? profile?.name ?? '')
       const hCm = (profile as { height_cm?: number | null } | null)?.height_cm ?? null
       setHeightCm(hCm)
+      const profileExt = profile as { race_predictions?: GarminRacePrediction[] | null; personal_records?: GarminPersonalRecord[] | null } | null
+      if (profileExt?.race_predictions?.length) setRacePredictions(profileExt.race_predictions)
+      if (profileExt?.personal_records?.length) setGarminPRs(profileExt.personal_records)
 
       // All activities (last 90 days for PRs + weekly stats)
       const ninetyDaysAgo = new Date()
@@ -452,10 +589,29 @@ export default function YouPage() {
           )}
         </Section>
 
-        {/* Performance Predictions */}
-        {raceTimes && (
+        {/* Garmin Race Predictions (official) */}
+        {racePredictions && racePredictions.length > 0 && (() => {
+          const formatted = racePredictions.map(formatGarminPrediction).filter(Boolean) as { label: string; time: string }[]
+          if (formatted.length === 0) return null
+          return (
+            <Section title="🏅 Race Predictions">
+              <p className="text-gray-500 text-xs">From Garmin Performance Analytics</p>
+              <div className="grid grid-cols-2 gap-3">
+                {formatted.map(r => (
+                  <div key={r.label} className="bg-gray-800/60 rounded-xl p-3">
+                    <p className="text-gray-500 text-xs mb-1">{r.label}</p>
+                    <p className="text-white font-bold text-lg">{r.time}</p>
+                  </div>
+                ))}
+              </div>
+            </Section>
+          )
+        })()}
+
+        {/* VO2-based estimates (fallback when no Garmin predictions) */}
+        {!racePredictions && raceTimes && (
           <Section title="🏅 Performance Predictions">
-            <p className="text-gray-500 text-xs">Based on VO2 Max {latestVo2max?.toFixed(1)}</p>
+            <p className="text-gray-500 text-xs">Estimated from VO2 Max {latestVo2max?.toFixed(1)} · Sync for Garmin predictions</p>
             <div className="grid grid-cols-2 gap-3">
               {[
                 { label: '5K', time: raceTimes.fiveK },
@@ -471,6 +627,27 @@ export default function YouPage() {
             </div>
           </Section>
         )}
+
+        {/* Garmin Personal Records */}
+        {garminPRs && garminPRs.length > 0 && (() => {
+          const formatted = garminPRs.map(formatGarminPR).filter(Boolean) as { label: string; value: string; date: string }[]
+          if (formatted.length === 0) return null
+          return (
+            <Section title="🏆 Personal Records (Garmin)">
+              <div className="space-y-2">
+                {formatted.map((pr, i) => (
+                  <div key={i} className="flex items-center justify-between py-2 border-b border-gray-800 last:border-0">
+                    <div>
+                      <p className="text-white text-sm font-medium">{pr.label}</p>
+                      {pr.date && <p className="text-gray-500 text-xs">{pr.date}</p>}
+                    </div>
+                    <p className="text-orange-400 font-bold">{pr.value}</p>
+                  </div>
+                ))}
+              </div>
+            </Section>
+          )
+        })()}
 
         {/* Training zones */}
         {totalZoneMins > 0 && (
@@ -538,58 +715,144 @@ export default function YouPage() {
         {/* Weight & Body Composition */}
         {latestWeightKg != null && (
           <Section title="⚖️ Weight & Body Composition">
-            {/* Current + deltas */}
+            {/* Current weight (stone/lb) + deltas */}
             <div className="grid grid-cols-3 gap-4">
-              <StatBlock
-                label="Current"
-                value={`${latestWeightKg.toFixed(1)} kg`}
-                sub={latestWeight?.weigh_date
-                  ? new Date(latestWeight.weigh_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
-                  : undefined}
-              />
-              <StatBlock
-                label="7-day"
-                value={delta7 != null ? `${delta7 >= 0 ? '+' : ''}${delta7.toFixed(1)} kg` : '—'}
-                sub={delta7 != null ? (delta7 < -0.1 ? '↓ down' : delta7 > 0.1 ? '↑ up' : '→ stable') : undefined}
-              />
-              <StatBlock
-                label="30-day"
-                value={delta30 != null ? `${delta30 >= 0 ? '+' : ''}${delta30.toFixed(1)} kg` : '—'}
-                sub={weightRateKgPerWeek != null ? `${weightRateKgPerWeek >= 0 ? '+' : ''}${weightRateKgPerWeek.toFixed(2)} kg/wk` : undefined}
-              />
+              <div className="bg-gray-800/60 rounded-xl p-3">
+                <p className="text-gray-500 text-xs mb-1">Current</p>
+                <p className="text-white font-bold text-lg leading-tight">{fmtStoneLb(latestWeightKg)}</p>
+                <p className="text-gray-500 text-[10px] mt-0.5">{latestWeightKg.toFixed(1)} kg</p>
+                {latestWeight?.weigh_date && (
+                  <p className="text-gray-600 text-[10px]">
+                    {new Date(latestWeight.weigh_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+                  </p>
+                )}
+              </div>
+              <div className="bg-gray-800/60 rounded-xl p-3">
+                <p className="text-gray-500 text-xs mb-1">7-day</p>
+                {delta7 != null ? (
+                  <>
+                    <p className={`font-bold text-lg leading-tight ${delta7 < -0.05 ? 'text-green-400' : delta7 > 0.05 ? 'text-red-400' : 'text-gray-300'}`}>
+                      {delta7 >= 0 ? '+' : '−'}{fmtWeightDelta(delta7)}
+                    </p>
+                    <p className="text-gray-500 text-[10px] mt-0.5">{delta7 >= 0 ? '+' : ''}{delta7.toFixed(2)} kg</p>
+                    <p className="text-gray-600 text-[10px]">{delta7 < -0.05 ? '↓ down' : delta7 > 0.05 ? '↑ up' : '→ stable'}</p>
+                  </>
+                ) : <p className="text-gray-600 text-lg">—</p>}
+              </div>
+              <div className="bg-gray-800/60 rounded-xl p-3">
+                <p className="text-gray-500 text-xs mb-1">30-day</p>
+                {delta30 != null ? (
+                  <>
+                    <p className={`font-bold text-lg leading-tight ${delta30 < -0.05 ? 'text-green-400' : delta30 > 0.05 ? 'text-red-400' : 'text-gray-300'}`}>
+                      {delta30 >= 0 ? '+' : '−'}{fmtWeightDelta(delta30)}
+                    </p>
+                    <p className="text-gray-500 text-[10px] mt-0.5">{delta30 >= 0 ? '+' : ''}{delta30.toFixed(2)} kg</p>
+                    {weightRateKgPerWeek != null && (
+                      <p className="text-gray-600 text-[10px]">{weightRateKgPerWeek >= 0 ? '+' : ''}{weightRateKgPerWeek.toFixed(2)} kg/wk</p>
+                    )}
+                  </>
+                ) : <p className="text-gray-600 text-lg">—</p>}
+              </div>
             </div>
 
-            {/* Weight sparkline */}
-            {weightEntries.length >= 3 && (
-              <div>
-                <p className="text-gray-500 text-xs mb-1">90-day trend</p>
-                <div className="relative bg-gray-800 rounded-xl overflow-hidden" style={{ height: 52 }}>
-                  {(() => {
-                    const vals = weightEntries.map(e => e.weight_grams / 1000)
-                    const min = Math.min(...vals) - 0.5
-                    const max = Math.max(...vals) + 0.5
-                    const range = max - min || 1
-                    const w = 300, h = 52
-                    const pts = vals.map((v, i) => ({
-                      x: (i / (vals.length - 1)) * w,
-                      y: h - ((v - min) / range) * (h - 6) - 3,
-                    }))
-                    const d = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')
-                    return (
-                      <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="w-full h-full">
-                        <path d={d} fill="none" stroke="#f97316" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                        {/* Latest dot */}
-                        <circle cx={pts[pts.length-1].x} cy={pts[pts.length-1].y} r="3" fill="#f97316" />
-                      </svg>
-                    )
-                  })()}
+            {/* Week / Month / Year tabs */}
+            {weightEntries.length > 0 && (() => {
+              const today = new Date()
+
+              // Build entries for each tab
+              const buildWeekEntries = (offset: number) => {
+                // Week: Mon–Sun, offset=0 is current week
+                const monday = new Date(today)
+                monday.setDate(today.getDate() - ((today.getDay() + 6) % 7) - offset * 7)
+                monday.setHours(0, 0, 0, 0)
+                const days: { label: string; kg: number | null; isCurrent?: boolean }[] = []
+                for (let i = 0; i < 7; i++) {
+                  const d = new Date(monday)
+                  d.setDate(monday.getDate() + i)
+                  const ds = localDateStr(d)
+                  const isToday = ds === localDateStr(today)
+                  days.push({ label: d.toLocaleDateString('en-GB', { weekday: 'short' }), kg: weightByDate.get(ds) ?? null, isCurrent: isToday })
+                }
+                const weekLabel = monday.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+                const sunday = new Date(monday); sunday.setDate(monday.getDate() + 6)
+                const sunLabel = sunday.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+                return { entries: days, rangeLabel: `${weekLabel} – ${sunLabel}` }
+              }
+
+              const buildMonthEntries = (offset: number) => {
+                // Month: all days in the target month
+                const target = new Date(today.getFullYear(), today.getMonth() - offset, 1)
+                const daysInMonth = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate()
+                const days: { label: string; kg: number | null; isCurrent?: boolean }[] = []
+                for (let i = 1; i <= daysInMonth; i++) {
+                  const d = new Date(target.getFullYear(), target.getMonth(), i)
+                  const ds = localDateStr(d)
+                  const isToday = ds === localDateStr(today)
+                  days.push({ label: String(i), kg: weightByDate.get(ds) ?? null, isCurrent: isToday })
+                }
+                return { entries: days, rangeLabel: target.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' }) }
+              }
+
+              const buildYearEntries = (offset: number) => {
+                // Year: one slot per month, use last available reading in that month
+                const targetYear = today.getFullYear() - offset
+                const months: { label: string; kg: number | null; isCurrent?: boolean }[] = []
+                for (let m = 0; m < 12; m++) {
+                  const monthLabel = new Date(targetYear, m, 1).toLocaleDateString('en-GB', { month: 'short' })
+                  const currentMonth = today.getMonth() === m && today.getFullYear() === targetYear
+                  // Find last reading in this month
+                  let bestKg: number | null = null
+                  for (const [ds, kg] of weightByDate) {
+                    const d = new Date(ds)
+                    if (d.getFullYear() === targetYear && d.getMonth() === m) bestKg = kg
+                  }
+                  months.push({ label: monthLabel, kg: bestKg, isCurrent: currentMonth })
+                }
+                return { entries: months, rangeLabel: String(targetYear) }
+              }
+
+              const { entries: chartEntries, rangeLabel } =
+                weightTab === 'week' ? buildWeekEntries(weightWeekOffset) :
+                weightTab === 'month' ? buildMonthEntries(weightMonthOffset) :
+                buildYearEntries(weightYearOffset)
+
+              const offset = weightTab === 'week' ? weightWeekOffset : weightTab === 'month' ? weightMonthOffset : weightYearOffset
+              const setOffset = weightTab === 'week' ? setWeightWeekOffset : weightTab === 'month' ? setWeightMonthOffset : setWeightYearOffset
+
+              return (
+                <div className="space-y-3">
+                  {/* Tab row */}
+                  <div className="flex gap-2">
+                    {(['week', 'month', 'year'] as const).map(t => (
+                      <button
+                        key={t}
+                        onClick={() => setWeightTab(t)}
+                        className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition-colors ${weightTab === t ? 'bg-orange-600 text-white' : 'bg-gray-800 text-gray-400'}`}
+                      >
+                        {t.charAt(0).toUpperCase() + t.slice(1)}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Navigation row */}
+                  <div className="flex items-center justify-between">
+                    <button
+                      onClick={() => setOffset(o => o + 1)}
+                      className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-800 text-gray-400 hover:text-white hover:bg-gray-700 transition-colors text-lg"
+                    >‹</button>
+                    <span className="text-xs text-gray-400 font-medium">{rangeLabel}</span>
+                    <button
+                      onClick={() => setOffset(o => Math.max(0, o - 1))}
+                      disabled={offset === 0}
+                      className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-800 text-gray-400 hover:text-white hover:bg-gray-700 transition-colors text-lg disabled:opacity-30"
+                    >›</button>
+                  </div>
+
+                  {/* Chart */}
+                  <WeightLineChart entries={chartEntries} />
                 </div>
-                <div className="flex justify-between text-gray-600 text-xs mt-1">
-                  <span>{new Date(weightEntries[0].weigh_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span>
-                  <span>Today</span>
-                </div>
-              </div>
-            )}
+              )
+            })()}
 
             {/* BMI + Ideal range */}
             {bmi != null ? (
@@ -602,12 +865,17 @@ export default function YouPage() {
                 {idealWeightRange && (
                   <div className="bg-gray-800/60 rounded-xl p-3">
                     <p className="text-gray-500 text-xs mb-1">Healthy range</p>
-                    <p className="text-white font-bold text-sm">{idealWeightRange.min.toFixed(1)}–{idealWeightRange.max.toFixed(1)} kg</p>
-                    <p className="text-xs text-gray-500 mt-0.5">
+                    <p className="text-white font-bold text-sm">
+                      {fmtStoneLb(idealWeightRange.min)}–{fmtStoneLb(idealWeightRange.max)}
+                    </p>
+                    <p className="text-[10px] text-gray-500 mt-0.5">
+                      {idealWeightRange.min.toFixed(1)}–{idealWeightRange.max.toFixed(1)} kg
+                    </p>
+                    <p className="text-xs text-gray-400 mt-0.5">
                       {latestWeightKg < idealWeightRange.min
-                        ? `${(idealWeightRange.min - latestWeightKg).toFixed(1)} kg to gain`
+                        ? `${fmtWeightDelta(idealWeightRange.min - latestWeightKg)} to gain`
                         : latestWeightKg > idealWeightRange.max
-                        ? `${(latestWeightKg - idealWeightRange.max).toFixed(1)} kg to lose`
+                        ? `${fmtWeightDelta(latestWeightKg - idealWeightRange.max)} to lose`
                         : '✓ In range'}
                     </p>
                   </div>

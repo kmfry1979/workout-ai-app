@@ -54,6 +54,10 @@ type HealthData = {
   vo2max: number | null
   dob: string | null
   displayName: string | null
+  // Training Readiness + Status (from Garmin)
+  trainingReadinessScore: number | null
+  trainingReadinessLabel: string | null
+  trainingStatusPhase: string | null
   // Analytics
   hrvHistory30: { date: string; hrv: number | null }[]
   stepsHistory28: { date: string; load: number }[]
@@ -513,6 +517,51 @@ function InfoTip({ text }: { text: string }) {
   )
 }
 
+// ─── Training Readiness Helpers ───────────────────────────────────────────────
+
+function readinessColor(score: number): string {
+  if (score >= 75) return '#21FF00'
+  if (score >= 50) return '#f97316'
+  return '#FF0000'
+}
+
+function trainingStatusColor(phase: string): string {
+  const p = phase.toUpperCase()
+  if (p.includes('PEAK')) return '#21FF00'
+  if (p.includes('PRODUCT')) return '#3b82f6'
+  if (p.includes('MAINTAIN')) return '#22c55e'
+  if (p.includes('RECOVERY')) return '#f97316'
+  if (p.includes('OVER')) return '#FF0000'
+  if (p.includes('DETRAIN')) return '#9ca3af'
+  return '#9ca3af'
+}
+
+function trainingStatusDesc(phase: string): string {
+  const p = phase.toUpperCase()
+  if (p.includes('PEAK')) return 'Peak fitness — race-ready'
+  if (p.includes('PRODUCT')) return 'Building fitness effectively'
+  if (p.includes('MAINTAIN')) return 'Holding current fitness level'
+  if (p.includes('RECOVERY')) return 'Body adapting from hard training'
+  if (p.includes('OVER')) return 'Too much stress — rest needed'
+  if (p.includes('DETRAIN')) return 'Fitness may be declining'
+  return 'Monitoring training load'
+}
+
+function readinessLabel(score: number | null, label: string | null): string {
+  if (label) {
+    const l = label.toUpperCase()
+    if (l.includes('PRIME') || l.includes('EXCELLENT')) return 'Prime'
+    if (l.includes('GOOD') || l.includes('HIGH')) return 'Good'
+    if (l.includes('FAIR') || l.includes('MODERATE')) return 'Fair'
+    if (l.includes('LOW') || l.includes('POOR')) return 'Low'
+  }
+  if (score == null) return '—'
+  if (score >= 75) return 'Prime'
+  if (score >= 50) return 'Good'
+  if (score >= 25) return 'Fair'
+  return 'Low'
+}
+
 // ─── Chart Components ─────────────────────────────────────────────────────────
 
 function SparkLine({ values, color = '#f97316', height = 48 }: { values: (number | null)[]; color?: string; height?: number }) {
@@ -626,7 +675,7 @@ export default function HealthPage() {
       acts90Res,
     ] = await Promise.all([
       supabase.from('garmin_daily_health_metrics')
-        .select('hrv_avg, hrv_status, respiration_avg_bpm, stress_avg, body_battery_end')
+        .select('hrv_avg, hrv_status, respiration_avg_bpm, stress_avg, body_battery_end, training_readiness_score, training_readiness_label, training_status_phase')
         .eq('user_id', userId).eq('metric_date', today).maybeSingle(),
       supabase.from('garmin_daily_health_metrics')
         .select('metric_date, respiration_avg_bpm')
@@ -729,6 +778,9 @@ export default function HealthPage() {
       rhr, rhrBaseline, respirationHistory, vo2max,
       dob: profile?.date_of_birth ?? null,
       displayName: profile?.display_name ?? profile?.name ?? null,
+      trainingReadinessScore: (todayHealth as { training_readiness_score?: number | null } | null)?.training_readiness_score ?? null,
+      trainingReadinessLabel: (todayHealth as { training_readiness_label?: string | null } | null)?.training_readiness_label ?? null,
+      trainingStatusPhase: (todayHealth as { training_status_phase?: string | null } | null)?.training_status_phase ?? null,
       hrvHistory30: hrv30.map(r => ({ date: r.metric_date, hrv: r.hrv_avg })),
       stepsHistory28,
       sleepHistory30: sleep30.map(r => ({ date: r.sleep_date, score: r.sleep_score })),
@@ -1051,6 +1103,52 @@ export default function HealthPage() {
                 </p>
               </div>
             </div>
+
+            {/* Garmin Training Readiness + Status */}
+            {(data?.trainingReadinessScore != null || data?.trainingStatusPhase) && (
+              <div className="rounded-3xl p-6 mb-4" style={{ background: '#111111' }}>
+                <div className="flex items-center gap-1 mb-4">
+                  <p className="text-xs text-gray-500 uppercase tracking-widest">Training Readiness</p>
+                  <InfoTip text="Garmin's official readiness score (0–100) calculated from HRV, sleep quality, recent training load, and recovery time. Also shows your current training phase from Garmin's performance analytics." />
+                </div>
+                <div className="flex gap-4 items-start">
+                  {data.trainingReadinessScore != null && (
+                    <div className="shrink-0">
+                      <p className="text-5xl font-bold leading-none" style={{ color: readinessColor(data.trainingReadinessScore) }}>
+                        {data.trainingReadinessScore}
+                      </p>
+                      <p className="text-xs text-gray-500 mt-1">/ 100</p>
+                      <p className="text-xs font-semibold mt-1" style={{ color: readinessColor(data.trainingReadinessScore) }}>
+                        {readinessLabel(data.trainingReadinessScore, data.trainingReadinessLabel)}
+                      </p>
+                    </div>
+                  )}
+                  {data.trainingStatusPhase && (
+                    <div className="flex-1 rounded-2xl p-3" style={{ background: '#1a1a1a' }}>
+                      <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Training Phase</p>
+                      <p className="text-sm font-bold" style={{ color: trainingStatusColor(data.trainingStatusPhase) }}>
+                        {data.trainingStatusPhase.replace(/_/g, ' ')}
+                      </p>
+                      <p className="text-[10px] text-gray-500 mt-1 leading-relaxed">
+                        {trainingStatusDesc(data.trainingStatusPhase)}
+                      </p>
+                    </div>
+                  )}
+                  {data.trainingReadinessScore != null && !data.trainingStatusPhase && (
+                    <div className="flex-1 rounded-2xl p-3" style={{ background: '#1a1a1a' }}>
+                      <p className="text-[10px] text-gray-500 mb-1">What this means</p>
+                      <p className="text-xs text-gray-400 leading-relaxed">
+                        {data.trainingReadinessScore >= 75
+                          ? 'Your body is primed. This is an ideal day for a high-quality or hard training session.'
+                          : data.trainingReadinessScore >= 50
+                          ? 'Good to train. Moderate intensity sessions are well-supported today.'
+                          : 'Lower readiness. A light or easy session is recommended — avoid pushing hard.'}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Sleep Debt */}
             {sleepDebt && <SleepDebtCard debt={sleepDebt} />}

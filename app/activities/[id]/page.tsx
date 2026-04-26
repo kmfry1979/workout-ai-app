@@ -5,6 +5,16 @@ import { useRouter, useParams } from 'next/navigation'
 import { supabase } from '../../../lib/supabase'
 import { BottomNav } from '../../../components/BottomNav'
 
+type ExerciseSet = {
+  set_order: number
+  exercise_name: string | null
+  category: string | null
+  weight_kg: number | null
+  reps: number | null
+  duration_sec: number | null
+  set_type: string | null
+}
+
 type TreadmillSegment = {
   start_min: number
   end_min: number
@@ -699,6 +709,67 @@ function TreadmillEditModal({ activity, onSaved, onDismiss }: {
   )
 }
 
+// ─── Exercise Sets Card ────────────────────────────────────────────────────────
+
+function ExerciseSetsCard({ sets }: { sets: ExerciseSet[] }) {
+  if (sets.length === 0) return null
+
+  // Group by exercise name
+  const order: string[] = []
+  const grouped: Record<string, ExerciseSet[]> = {}
+  for (const s of sets) {
+    const name = (s.exercise_name ?? s.category ?? 'Unknown').replace(/_/g, ' ')
+    if (!grouped[name]) { grouped[name] = []; order.push(name) }
+    grouped[name].push(s)
+  }
+
+  return (
+    <div className="bg-gray-900 rounded-2xl p-4">
+      <h3 className="text-white font-semibold text-sm mb-4">💪 Exercise Sets</h3>
+      <div className="space-y-5">
+        {order.map(name => {
+          const exSets = grouped[name]
+          const activeSets = exSets.filter(s => !s.set_type || s.set_type.toUpperCase() === 'ACTIVE' || s.set_type.toUpperCase() === 'NORMAL')
+          const totalVol = activeSets.reduce((t, s) => t + (s.reps ?? 0) * (s.weight_kg ?? 0), 0)
+          return (
+            <div key={name}>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-gray-200 text-sm font-semibold capitalize">{name.toLowerCase()}</p>
+                {totalVol > 0 && (
+                  <p className="text-[10px] text-gray-500">vol: {totalVol.toFixed(0)} kg</p>
+                )}
+              </div>
+              <div className="space-y-1">
+                {exSets.map((s, i) => {
+                  const isRest = s.set_type?.toUpperCase() === 'REST'
+                  if (isRest) return null
+                  return (
+                    <div key={i} className="flex items-center gap-2 text-xs bg-gray-800/60 rounded-lg px-3 py-2">
+                      <span className="text-gray-500 w-12 shrink-0">Set {i + 1}</span>
+                      {s.reps != null && (
+                        <span className="text-white font-semibold">{s.reps} reps</span>
+                      )}
+                      {s.weight_kg != null && s.weight_kg > 0 && (
+                        <span className="text-gray-300">@ {s.weight_kg.toFixed(1)} kg</span>
+                      )}
+                      {s.duration_sec != null && s.reps == null && (
+                        <span className="text-gray-400">{s.duration_sec}s</span>
+                      )}
+                      {s.reps != null && s.weight_kg != null && s.weight_kg > 0 && (
+                        <span className="text-gray-600 ml-auto">{(s.reps * s.weight_kg).toFixed(0)} kg vol</span>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function ActivityDetailPage() {
@@ -718,6 +789,7 @@ export default function ActivityDetailPage() {
   const [treadmillNotes, setTreadmillNotes] = useState<string | null>(null)
   const [editModalOpen, setEditModalOpen] = useState(false)
   const [paceInsight, setPaceInsight] = useState<string | null>(null)
+  const [exerciseSets, setExerciseSets] = useState<ExerciseSet[]>([])
 
   useEffect(() => {
     const load = async () => {
@@ -736,6 +808,15 @@ export default function ActivityDetailPage() {
       setActivity(act)
       if (act.treadmill_segments) setTreadmillSegments(act.treadmill_segments)
       if (act.ai_activity_summary) setTreadmillNotes(act.ai_activity_summary)
+
+      // Fetch exercise sets (for strength activities — table may not exist yet, fail gracefully)
+      const { data: setsData } = await supabase
+        .from('garmin_exercise_sets')
+        .select('set_order, exercise_name, category, weight_kg, reps, duration_sec, set_type')
+        .eq('user_id', session.session.user.id)
+        .eq('activity_id', id)
+        .order('set_order', { ascending: true })
+      if (setsData && setsData.length > 0) setExerciseSets(setsData as ExerciseSet[])
 
       // Fetch recent activities of same type for comparison (last 20, excluding this one)
       const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString()
@@ -933,6 +1014,9 @@ export default function ActivityDetailPage() {
 
         {/* HR Zone donut + breakdown */}
         <HrZones raw={raw} />
+
+        {/* Exercise Sets (strength activities) */}
+        {exerciseSets.length > 0 && <ExerciseSetsCard sets={exerciseSets} />}
 
         {/* Performance stats (pace, cadence, VO2) */}
         <EffortSummary activity={activity} raw={raw} />
