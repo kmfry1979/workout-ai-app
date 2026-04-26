@@ -228,40 +228,38 @@ async function generateAndStore(
   userId: string,
   targetDate: string,
 ): Promise<NextResponse> {
-  const sevenAgo  = new Date(new Date(targetDate).getTime() -  7 * 86400000).toISOString().split('T')[0]
-  const thirtyAgo = new Date(new Date(targetDate).getTime() - 30 * 86400000).toISOString().split('T')[0]
-
-  // Fetch data — wide windows so we catch whatever exists regardless of how much has been synced
+  // No date-range filter — just get the most recent rows regardless of age.
+  // This way the Brain still works even if sync hasn't run for a while.
   const [healthRes, sleepRes, stepsRes, actsRes, weightRes, legacyRes] = await Promise.all([
     admin.from('garmin_daily_health_metrics')
       .select('metric_date, hrv_avg, hrv_status, stress_avg, body_battery_end, respiration_avg_bpm, spo2_avg, training_readiness_score, training_readiness_label, training_status_phase')
-      .eq('user_id', userId).gte('metric_date', thirtyAgo).order('metric_date', { ascending: true }),
+      .eq('user_id', userId).order('metric_date', { ascending: false }).limit(30),
     admin.from('garmin_sleep_data')
       .select('sleep_date, sleep_score, sleep_duration_seconds, deep_sleep_seconds, rem_sleep_seconds')
-      .eq('user_id', userId).gte('sleep_date', thirtyAgo).order('sleep_date', { ascending: true }),
+      .eq('user_id', userId).order('sleep_date', { ascending: false }).limit(30),
     admin.from('garmin_daily_steps')
       .select('step_date, total_steps, active_minutes, vigorous_intensity_minutes')
-      .eq('user_id', userId).gte('step_date', sevenAgo).order('step_date', { ascending: true }),
+      .eq('user_id', userId).order('step_date', { ascending: false }).limit(7),
     admin.from('garmin_activities')
       .select('start_time, activity_type, duration_sec, distance_m, avg_hr, training_effect')
       .eq('user_id', userId)
-      .gte('start_time', new Date(thirtyAgo).toISOString())
       .order('start_time', { ascending: false }).limit(10),
     admin.from('garmin_weight_snapshots')
       .select('weigh_date, weight_kg, body_fat_pct')
-      .eq('user_id', userId).gte('weigh_date', thirtyAgo)
-      .order('weigh_date', { ascending: false }).limit(3),
-    // Legacy fallback — also widen to 30 days
+      .eq('user_id', userId)
+      .order('weigh_date', { ascending: false }).limit(5),
+    // Legacy fallback — most recent 30 rows, no date filter
     admin.from('daily_health_metrics')
       .select('metric_date, garmin_hrv_nightly_avg, garmin_body_battery_high, garmin_stress_avg, garmin_sleep_score, steps, resting_hr')
-      .eq('user_id', userId).gte('metric_date', thirtyAgo).order('metric_date', { ascending: true }),
+      .eq('user_id', userId).order('metric_date', { ascending: false }).limit(30),
   ])
 
-  let health = (healthRes.data ?? []) as HealthRow[]
-  const sleep = (sleepRes.data ?? []) as SleepRow[]
-  const stepsData = (stepsRes.data ?? []) as StepsRow[]
-  const activities = (actsRes.data ?? []) as ActivityRow[]
-  const weights = (weightRes.data ?? []) as WeightRow[]
+  // Rows came back in descending order; re-sort ascending for trend analysis
+  let health = ((healthRes.data ?? []) as HealthRow[]).reverse()
+  const sleep = ((sleepRes.data ?? []) as SleepRow[]).reverse()
+  const stepsData = ((stepsRes.data ?? []) as StepsRow[]).reverse()
+  const activities = (actsRes.data ?? []) as ActivityRow[]   // keep descending (newest first)
+  const weights = (weightRes.data ?? []) as WeightRow[]      // keep descending (newest first)
 
   // If the new garmin_daily_health_metrics table is empty, map legacy rows into the same shape
   if (health.length === 0) {
@@ -274,7 +272,7 @@ async function generateAndStore(
       steps: number | null
       resting_hr: number | null
     }
-    health = ((legacyRes.data ?? []) as LegacyRow[]).map(r => ({
+    health = ((legacyRes.data ?? []) as LegacyRow[]).reverse().map(r => ({
       metric_date: r.metric_date,
       hrv_avg: r.garmin_hrv_nightly_avg,
       hrv_status: null,
@@ -288,23 +286,26 @@ async function generateAndStore(
     }))
   }
 
-  console.log(`Brain debug — user:${userId} range:${thirtyAgo}→${targetDate} garmin_health:${health.length} legacy:${(legacyRes.data??[]).length} sleep:${sleep.length} acts:${activities.length}`)
+  const debugInfo = {
+    user_id: userId,
+    target_date: targetDate,
+    garmin_health_rows: health.length,
+    legacy_health_rows: (legacyRes.data ?? []).length,
+    sleep_rows: sleep.length,
+    activity_rows: activities.length,
+    weight_rows: weights.length,
+    garmin_health_error: healthRes.error ? `${healthRes.error.code}: ${healthRes.error.message}` : null,
+    legacy_health_error: legacyRes.error ? `${legacyRes.error.code}: ${legacyRes.error.message}` : null,
+    sleep_error: sleepRes.error ? `${sleepRes.error.code}: ${sleepRes.error.message}` : null,
+    activity_error: actsRes.error ? `${actsRes.error.code}: ${actsRes.error.message}` : null,
+    weight_error: weightRes.error ? `${weightRes.error.code}: ${weightRes.error.message}` : null,
+  }
+  console.log('Brain debug', JSON.stringify(debugInfo))
 
   if (health.length === 0 && sleep.length === 0 && activities.length === 0) {
     return NextResponse.json({
       error: 'No data available to analyse',
-      debug: {
-        user_id: userId,
-        date_range: `${thirtyAgo} → ${targetDate}`,
-        garmin_health_rows: (healthRes.data ?? []).length,
-        legacy_health_rows: (legacyRes.data ?? []).length,
-        sleep_rows: (sleepRes.data ?? []).length,
-        activity_rows: activities.length,
-        garmin_health_error: healthRes.error?.message ?? null,
-        legacy_health_error: legacyRes.error?.message ?? null,
-        sleep_error: sleepRes.error?.message ?? null,
-        activity_error: actsRes.error?.message ?? null,
-      }
+      debug: debugInfo,
     }, { status: 422 })
   }
 
