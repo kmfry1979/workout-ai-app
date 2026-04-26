@@ -1691,7 +1691,14 @@ def main() -> None:
                 headline = (bd.get("headline") or "")[:80]
                 print(f"  Brain: [{label} {score}/100] {headline}")
             else:
-                print(f"  Brain API {brain_resp.status_code}: {brain_resp.text[:500]}")
+                import json as _json
+                print(f"  Brain API {brain_resp.status_code}:")
+                try:
+                    parsed = brain_resp.json()
+                    for line in _json.dumps(parsed, indent=2).splitlines():
+                        print(f"    {line}")
+                except Exception:
+                    print(f"    {brain_resp.text}")
         except Exception as brain_exc:
             print(f"  Brain trigger failed (non-fatal): {brain_exc}")
     else:
