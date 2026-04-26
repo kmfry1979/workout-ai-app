@@ -283,17 +283,27 @@ export default function YouPage() {
 
       setCurrentUserId(user.id)
 
+      // Base profile — always safe columns
       const { data: profile } = await supabase
         .from('profiles')
-        .select('display_name, name, height_cm, race_predictions, personal_records')
+        .select('display_name, name, height_cm')
         .eq('user_id', user.id)
         .maybeSingle()
       setDisplayName(profile?.display_name ?? profile?.name ?? '')
       const hCm = (profile as { height_cm?: number | null } | null)?.height_cm ?? null
       setHeightCm(hCm)
-      const profileExt = profile as { race_predictions?: GarminRacePrediction[] | null; personal_records?: GarminPersonalRecord[] | null } | null
-      if (profileExt?.race_predictions?.length) setRacePredictions(profileExt.race_predictions)
-      if (profileExt?.personal_records?.length) setGarminPRs(profileExt.personal_records)
+
+      // Extended columns — may not exist if SQL migration hasn't run yet
+      try {
+        const { data: profileExt } = await supabase
+          .from('profiles')
+          .select('race_predictions, personal_records')
+          .eq('user_id', user.id)
+          .maybeSingle()
+        const ext = profileExt as { race_predictions?: GarminRacePrediction[] | null; personal_records?: GarminPersonalRecord[] | null } | null
+        if (ext?.race_predictions?.length) setRacePredictions(ext.race_predictions)
+        if (ext?.personal_records?.length) setGarminPRs(ext.personal_records)
+      } catch { /* columns don't exist yet — run SQL migration */ }
 
       // All activities (last 90 days for PRs + weekly stats)
       const ninetyDaysAgo = new Date()
@@ -317,34 +327,66 @@ export default function YouPage() {
         .order('metric_date', { ascending: true })
       setMetrics((met ?? []) as DailyMetric[])
 
-      // Weight data — from garmin_weight_snapshots (dedicated weigh-ins API)
+      // Weight data — try garmin_weight_snapshots first (most accurate), then fall back to daily_health_metrics.body_composition
       const ninetyDaysAgoDate = ninetyDaysAgo.toISOString().split('T')[0]
-      const { data: weightRaw } = await supabase
+      let parsed: WeightEntry[] = []
+
+      // Primary: dedicated weigh-ins table
+      const { data: weightRaw, error: weightErr } = await supabase
         .from('garmin_weight_snapshots')
         .select('weigh_date, weight_kg, body_fat_pct, muscle_mass_kg, bone_mass_kg, raw_payload')
         .eq('user_id', user.id)
         .gte('weigh_date', ninetyDaysAgoDate)
         .order('weigh_date', { ascending: true })
 
-      const parsed: WeightEntry[] = (weightRaw ?? []).map(row => {
-        const r = row as {
-          weigh_date: string; weight_kg: number; body_fat_pct: number | null
-          muscle_mass_kg: number | null; bone_mass_kg: number | null
-          raw_payload: Record<string, unknown> | null
+      if (!weightErr && (weightRaw ?? []).length > 0) {
+        parsed = (weightRaw ?? []).map(row => {
+          const r = row as {
+            weigh_date: string; weight_kg: number; body_fat_pct: number | null
+            muscle_mass_kg: number | null; bone_mass_kg: number | null
+            raw_payload: Record<string, unknown> | null
+          }
+          const raw = r.raw_payload ?? {}
+          return {
+            weigh_date: r.weigh_date,
+            weight_grams: r.weight_kg * 1000,
+            bmi: null,
+            body_fat_pct: r.body_fat_pct ?? (Number(raw.percentFat) || null),
+            body_water_pct: Number(raw.percentHydration) || null,
+            muscle_mass_grams: r.muscle_mass_kg ? r.muscle_mass_kg * 1000
+              : (Number(raw.muscleMassGrams) > 0 ? Number(raw.muscleMassGrams) : null),
+            bone_mass_grams: r.bone_mass_kg ? r.bone_mass_kg * 1000
+              : (Number(raw.boneMassGrams) > 0 ? Number(raw.boneMassGrams) : null),
+          }
+        })
+      } else {
+        // Fallback: body_composition JSONB on daily_health_metrics
+        const { data: bodyCompRaw } = await supabase
+          .from('daily_health_metrics')
+          .select('metric_date, body_composition')
+          .eq('user_id', user.id)
+          .gte('metric_date', ninetyDaysAgoDate)
+          .not('body_composition', 'is', null)
+          .order('metric_date', { ascending: true })
+        for (const row of (bodyCompRaw ?? [])) {
+          const bc = (row as { metric_date: string; body_composition: Record<string, unknown> | null }).body_composition
+          if (!bc) continue
+          const weightKg = Number(bc.weight_kg ?? bc.weightKg ?? bc.weight)
+          if (!weightKg || weightKg <= 0) continue
+          const weightKgNorm = weightKg > 500 ? weightKg / 1000 : weightKg
+          parsed.push({
+            weigh_date: (row as { metric_date: string }).metric_date,
+            weight_grams: weightKgNorm * 1000,
+            bmi: Number(bc.bmi) || null,
+            body_fat_pct: Number(bc.body_fat_pct ?? bc.bodyFatPct ?? bc.percentFat ?? bc.bodyFat) || null,
+            body_water_pct: Number(bc.body_water_pct ?? bc.bodyWaterPct ?? bc.percentHydration) || null,
+            muscle_mass_grams: Number(bc.muscle_mass_kg ?? bc.muscleMassKg) > 0
+              ? Number(bc.muscle_mass_kg ?? bc.muscleMassKg) * 1000 : null,
+            bone_mass_grams: Number(bc.bone_mass_kg ?? bc.boneMassKg) > 0
+              ? Number(bc.bone_mass_kg ?? bc.boneMassKg) * 1000 : null,
+          })
         }
-        const raw = r.raw_payload ?? {}
-        return {
-          weigh_date: r.weigh_date,
-          weight_grams: r.weight_kg * 1000,
-          bmi: null, // calculated from height
-          body_fat_pct: r.body_fat_pct ?? (Number(raw.percentFat) || null),
-          body_water_pct: Number(raw.percentHydration) || null,
-          muscle_mass_grams: r.muscle_mass_kg ? r.muscle_mass_kg * 1000
-            : (Number(raw.muscleMassGrams) > 0 ? Number(raw.muscleMassGrams) : null),
-          bone_mass_grams: r.bone_mass_kg ? r.bone_mass_kg * 1000
-            : (Number(raw.boneMassGrams) > 0 ? Number(raw.boneMassGrams) : null),
-        }
-      })
+      }
       setWeightEntries(parsed)
 
       setLoading(false)

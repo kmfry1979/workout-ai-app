@@ -267,138 +267,160 @@ export function CoachFAB() {
 
   return (
     <>
-      {/* Floating button */}
+      {/* Floating button — fixed bottom-right, above nav */}
       <button
         onClick={() => setOpen(o => !o)}
         aria-label="Open AI Coach"
-        className="fixed z-40 shadow-lg transition-all duration-200 active:scale-95"
+        className="fixed z-[60] shadow-2xl transition-transform duration-200 active:scale-95"
         style={{ bottom: '76px', right: '16px' }}
       >
-        <div className="w-14 h-14 rounded-full bg-orange-600 flex items-center justify-center shadow-xl border-2 border-orange-500/50">
-          {open ? (
-            <svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth={2.5} className="w-6 h-6">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          ) : (
-            <svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth={2} className="w-7 h-7">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-            </svg>
-          )}
+        <div className="w-14 h-14 rounded-full bg-orange-600 flex items-center justify-center shadow-xl ring-2 ring-orange-500/40">
+          <svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth={2} className="w-7 h-7">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+          </svg>
         </div>
-        {/* Pulse ring when closed */}
         {!open && (
-          <span className="absolute inset-0 rounded-full bg-orange-500 opacity-30 animate-ping pointer-events-none" />
+          <span className="absolute inset-0 rounded-full bg-orange-500 opacity-25 animate-ping pointer-events-none" />
         )}
       </button>
 
-      {/* Coach modal */}
+      {/* Full-screen modal overlay */}
       {open && (
-        <div className="fixed inset-0 z-40 flex flex-col justify-end" style={{ background: 'rgba(0,0,0,0.5)' }} onClick={() => setOpen(false)}>
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center p-4"
+          style={{ background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(4px)' }}
+          onClick={() => setOpen(false)}
+        >
+          {/* Modal panel — sits centred, fills most of the screen on mobile */}
           <div
-            className="bg-gray-950 rounded-t-3xl flex flex-col border-t border-gray-800"
-            style={{ height: '80vh' }}
+            className="relative flex flex-col bg-gray-950 rounded-3xl border border-gray-800 shadow-2xl w-full"
+            style={{ maxWidth: 480, height: 'min(82vh, 720px)' }}
             onClick={e => e.stopPropagation()}
           >
-            {/* Header */}
-            <div className="flex items-center justify-between px-5 pt-4 pb-3 border-b border-gray-800 flex-shrink-0">
-              <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-full bg-orange-600 flex items-center justify-center">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth={2} className="w-5 h-5">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                  </svg>
+            {/* Header gradient strip */}
+            <div className="flex-shrink-0 rounded-t-3xl px-5 pt-4 pb-3 border-b border-gray-800"
+              style={{ background: 'linear-gradient(135deg, #1a0a00 0%, #111827 100%)' }}>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-orange-600 flex items-center justify-center shadow-lg">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth={2} className="w-5 h-5">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <p className="text-white font-semibold text-sm leading-tight">AI Coach</p>
+                    <p className="text-[10px] mt-0.5">
+                      {ctxLoading
+                        ? <span className="text-orange-400/70">Loading your stats…</span>
+                        : contextReady
+                        ? <span className="text-green-400/80">● Live data connected</span>
+                        : <span className="text-gray-500">Personal fitness coach</span>}
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-white font-semibold text-sm leading-tight">AI Coach</p>
-                  <p className="text-gray-500 text-[10px]">
-                    {ctxLoading ? 'Loading your stats…' : contextReady ? '● Live data connected' : 'Personal fitness coach'}
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                {hasMessages && (
-                  <button onClick={clearMemory} className="text-gray-600 hover:text-gray-400 text-[10px] px-2 py-1 rounded-lg border border-gray-700">
-                    Clear
+                <div className="flex items-center gap-2">
+                  {hasMessages && (
+                    <button
+                      onClick={clearMemory}
+                      className="text-gray-500 hover:text-gray-300 text-[10px] px-2.5 py-1 rounded-lg border border-gray-700 hover:border-gray-500 transition-colors"
+                    >
+                      Clear chat
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setOpen(false)}
+                    className="w-8 h-8 flex items-center justify-center rounded-xl bg-gray-800/60 hover:bg-gray-700 text-gray-400 hover:text-white transition-colors"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
                   </button>
-                )}
-                <button onClick={() => setOpen(false)} className="text-gray-400 hover:text-white p-1">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-5 h-5">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
+                </div>
               </div>
             </div>
 
-            {/* Messages */}
-            <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
-              {/* Greeting */}
+            {/* Messages scroll area */}
+            <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3 min-h-0">
+              {/* Greeting + brain insight */}
               {!hasMessages && (
-                <div className="mb-4 space-y-3">
-                  <div className="bg-gray-800/80 rounded-2xl rounded-tl-sm px-4 py-3 max-w-[90%]">
-                    <p className="text-white text-sm font-medium">
-                      {greeting}{displayName ? `, ${displayName}` : ''}! 👋
-                    </p>
-                    {ctxLoading ? (
-                      <p className="text-gray-400 text-xs mt-1">Loading your health data…</p>
-                    ) : brainInsight ? (
-                      <>
-                        {/* Brain insight banner */}
-                        <div className={`mt-2 rounded-xl p-3 border ${
-                          brainInsight.readiness_label === 'green' ? 'border-green-500/30 bg-green-950/30' :
-                          brainInsight.readiness_label === 'amber' ? 'border-orange-500/30 bg-orange-950/30' :
-                          'border-red-500/30 bg-red-950/30'
-                        }`}>
-                          <div className="flex items-center gap-1.5 mb-1">
-                            <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                              brainInsight.readiness_label === 'green' ? 'bg-green-400' :
-                              brainInsight.readiness_label === 'amber' ? 'bg-orange-400' : 'bg-red-400'
-                            }`} />
-                            <span className={`text-[10px] font-bold uppercase tracking-wider ${
-                              brainInsight.readiness_label === 'green' ? 'text-green-400' :
-                              brainInsight.readiness_label === 'amber' ? 'text-orange-400' : 'text-red-400'
-                            }`}>
-                              {brainInsight.readiness_label === 'green' ? 'In the Green' :
-                               brainInsight.readiness_label === 'amber' ? 'Amber — Train Easy' : 'Red — Rest Day'}
-                              {' '}· {brainInsight.readiness_score}/100
-                            </span>
+                <div className="space-y-3">
+                  <div className="flex gap-2.5">
+                    <div className="w-7 h-7 rounded-xl bg-orange-600/20 border border-orange-600/30 flex items-center justify-center flex-shrink-0 mt-0.5">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="#f97316" strokeWidth={2} className="w-3.5 h-3.5">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                      </svg>
+                    </div>
+                    <div className="flex-1">
+                      <div className="bg-gray-800/70 rounded-2xl rounded-tl-sm px-4 py-3">
+                        <p className="text-white text-sm font-medium">
+                          {greeting}{displayName ? `, ${displayName}` : ''}! 👋
+                        </p>
+
+                        {ctxLoading ? (
+                          <div className="flex items-center gap-2 mt-2">
+                            <div className="flex gap-1">
+                              <span className="w-1.5 h-1.5 bg-orange-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                              <span className="w-1.5 h-1.5 bg-orange-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                              <span className="w-1.5 h-1.5 bg-orange-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                            </div>
+                            <span className="text-gray-400 text-xs">Loading your stats…</span>
                           </div>
-                          {brainInsight.headline && (
-                            <p className="text-white text-xs font-semibold leading-snug">{brainInsight.headline}</p>
-                          )}
-                          <p className="text-gray-300 text-xs mt-1 leading-relaxed">{brainInsight.insight}</p>
-                          {brainInsight.suggested_focus && (
-                            <p className="text-gray-400 text-[10px] mt-1.5">
-                              <span className="text-gray-500">Today: </span>{brainInsight.suggested_focus}
-                            </p>
-                          )}
-                        </div>
-                        <p className="text-gray-500 text-xs mt-2">Ask me anything about your training.</p>
-                      </>
-                    ) : contextReady ? (
-                      <p className="text-gray-400 text-xs mt-1">
-                        {(() => {
-                          const bb = metrics?.body_battery as number | null
-                          const hrv = metrics?.hrv as number | null
-                          const bits: string[] = []
-                          if (bb != null) bits.push(`Body Battery ${bb}%`)
-                          if (hrv != null) bits.push(`HRV ${hrv}ms`)
-                          return bits.length > 0
-                            ? `Stats loaded — ${bits.slice(0, 2).join(', ')}. What would you like to know?`
-                            : "I'm ready to help with your training. What would you like to know?"
-                        })()}
-                      </p>
-                    ) : (
-                      <p className="text-gray-400 text-xs mt-1">I'm ready to help with your training. What would you like to know?</p>
-                    )}
+                        ) : brainInsight ? (
+                          <div className={`mt-3 rounded-xl p-3 border ${
+                            brainInsight.readiness_label === 'green' ? 'border-green-500/30 bg-green-950/40' :
+                            brainInsight.readiness_label === 'amber' ? 'border-orange-500/30 bg-orange-950/40' :
+                            'border-red-500/30 bg-red-950/40'
+                          }`}>
+                            <div className="flex items-center gap-1.5 mb-1.5">
+                              <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                                brainInsight.readiness_label === 'green' ? 'bg-green-400' :
+                                brainInsight.readiness_label === 'amber' ? 'bg-orange-400' : 'bg-red-400'
+                              }`} />
+                              <span className={`text-[10px] font-bold uppercase tracking-wider ${
+                                brainInsight.readiness_label === 'green' ? 'text-green-400' :
+                                brainInsight.readiness_label === 'amber' ? 'text-orange-400' : 'text-red-400'
+                              }`}>
+                                {brainInsight.readiness_label === 'green' ? 'In the Green' :
+                                 brainInsight.readiness_label === 'amber' ? 'Amber — Moderate Day' : 'Red — Rest Day'}
+                                {' '}· {brainInsight.readiness_score}/100
+                              </span>
+                            </div>
+                            {brainInsight.headline && (
+                              <p className="text-white text-xs font-semibold leading-snug mb-1">{brainInsight.headline}</p>
+                            )}
+                            <p className="text-gray-300 text-xs leading-relaxed">{brainInsight.insight}</p>
+                            {brainInsight.suggested_focus && (
+                              <p className="text-gray-400 text-[11px] mt-2 pt-2 border-t border-white/10">
+                                <span className="text-gray-500">Focus: </span>{brainInsight.suggested_focus}
+                              </p>
+                            )}
+                          </div>
+                        ) : (
+                          <p className="text-gray-400 text-sm mt-1">
+                            {(() => {
+                              const bb = metrics?.body_battery as number | null
+                              const hrv = metrics?.hrv as number | null
+                              const bits: string[] = []
+                              if (bb != null) bits.push(`Body Battery ${bb}%`)
+                              if (hrv != null) bits.push(`HRV ${hrv}ms`)
+                              return bits.length > 0
+                                ? `Stats loaded — ${bits.slice(0, 2).join(', ')}. What would you like to know?`
+                                : "I'm ready to help with your training. What would you like to know?"
+                            })()}
+                          </p>
+                        )}
+                      </div>
+                    </div>
                   </div>
 
                   {/* Suggested questions */}
                   {!ctxLoading && (
-                    <div className="flex flex-wrap gap-2">
+                    <div className="flex flex-wrap gap-2 pl-9">
                       {suggestions.map(q => (
                         <button
                           key={q}
                           onClick={() => sendMessage(q)}
-                          className="text-xs px-3 py-1.5 rounded-full border border-orange-600/50 text-orange-400 hover:bg-orange-600/20 transition-colors"
+                          className="text-xs px-3 py-1.5 rounded-full border border-orange-600/40 text-orange-400 bg-orange-950/20 hover:bg-orange-600/20 transition-colors"
                         >
                           {q}
                         </button>
@@ -410,12 +432,19 @@ export function CoachFAB() {
 
               {/* Chat history */}
               {messages.map((m, i) => (
-                <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                <div key={i} className={`flex gap-2.5 ${m.role === 'user' ? 'flex-row-reverse' : ''}`}>
+                  {m.role === 'assistant' && (
+                    <div className="w-7 h-7 rounded-xl bg-orange-600/20 border border-orange-600/30 flex items-center justify-center flex-shrink-0 mt-0.5">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="#f97316" strokeWidth={2} className="w-3.5 h-3.5">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                      </svg>
+                    </div>
+                  )}
                   <div
-                    className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
+                    className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
                       m.role === 'user'
                         ? 'bg-orange-600 text-white rounded-br-sm'
-                        : 'bg-gray-800 text-gray-100 rounded-bl-sm'
+                        : 'bg-gray-800/80 text-gray-100 rounded-tl-sm'
                     }`}
                   >
                     {m.content}
@@ -425,8 +454,13 @@ export function CoachFAB() {
 
               {/* Loading dots */}
               {loading && (
-                <div className="flex justify-start">
-                  <div className="bg-gray-800 rounded-2xl rounded-bl-sm px-4 py-3">
+                <div className="flex gap-2.5">
+                  <div className="w-7 h-7 rounded-xl bg-orange-600/20 border border-orange-600/30 flex items-center justify-center flex-shrink-0">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="#f97316" strokeWidth={2} className="w-3.5 h-3.5">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                    </svg>
+                  </div>
+                  <div className="bg-gray-800/80 rounded-2xl rounded-tl-sm px-4 py-3">
                     <div className="flex gap-1 items-center">
                       <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
                       <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
@@ -436,10 +470,10 @@ export function CoachFAB() {
                 </div>
               )}
 
-              {/* Suggested questions after each assistant reply */}
+              {/* Follow-up chips */}
               {hasMessages && messages[messages.length - 1]?.role === 'assistant' && !loading && (
-                <div className="flex flex-wrap gap-2 pt-1">
-                  {['Tell me more', 'What about tomorrow?', 'Give me a workout'].map(q => (
+                <div className="flex flex-wrap gap-2 pl-9 pt-1">
+                  {['Tell me more', 'What about tomorrow?', 'Give me a workout plan'].map(q => (
                     <button
                       key={q}
                       onClick={() => sendMessage(q)}
@@ -455,8 +489,8 @@ export function CoachFAB() {
             </div>
 
             {/* Input bar */}
-            <div className="flex-shrink-0 px-4 pb-6 pt-3 border-t border-gray-800 bg-gray-950">
-              <div className="flex gap-2 items-end">
+            <div className="flex-shrink-0 px-4 pb-4 pt-3 border-t border-gray-800 rounded-b-3xl bg-gray-950/90">
+              <div className="flex gap-2 items-center">
                 <input
                   ref={inputRef}
                   type="text"
