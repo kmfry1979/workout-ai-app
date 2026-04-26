@@ -1669,6 +1669,33 @@ def main() -> None:
     )
     print(f"  User: {full_name or 'unknown'}")
 
+    # ── Verify data was actually written to Supabase ─────────────────────────────
+    print(f"\nVerifying data in Supabase ({SUPABASE_URL[:40]}…):")
+    for tbl, col in [
+        ("garmin_daily_health_metrics", "metric_date"),
+        ("garmin_sleep_data", "sleep_date"),
+        ("garmin_activities", "start_time"),
+        ("garmin_daily_steps", "step_date"),
+    ]:
+        try:
+            r = SESSION.get(
+                f"{SUPABASE_URL}/rest/v1/{tbl}",
+                params={
+                    "select": col,
+                    "user_id": f"eq.{SUPABASE_USER_ID}",
+                    "order": f"{col}.desc",
+                    "limit": "1",
+                },
+                headers={"Accept": "application/json", "Prefer": "count=exact"},
+                timeout=10,
+            )
+            count_hdr = r.headers.get("Content-Range", "?")
+            rows = r.json() if r.ok else []
+            latest = rows[0].get(col, "none") if rows else "none"
+            print(f"  {tbl}: count={count_hdr}  latest={latest}  status={r.status_code}")
+        except Exception as ve:
+            print(f"  {tbl}: ERROR {ve}")
+
     # ── Brain: trigger AI daily insight generation ──────────────────────────────
     app_url = os.getenv("APP_URL", "").rstrip("/")
     if app_url and SUPABASE_SERVICE_ROLE_KEY:
