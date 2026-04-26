@@ -162,32 +162,40 @@ function makeAdmin(): AdminClient {
   return createClient(SUPABASE_URL, SERVICE_KEY)
 }
 
+/** Decode a JWT payload without verifying signature — just to inspect the role claim. */
+function jwtRole(token: string): string {
+  try {
+    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString())
+    return payload?.role ?? ''
+  } catch {
+    return ''
+  }
+}
+
 export async function POST(req: NextRequest) {
   if (!GROQ_API_KEY) return NextResponse.json({ error: 'GROQ_API_KEY not set' }, { status: 503 })
   if (!SUPABASE_URL || !SERVICE_KEY) return NextResponse.json({ error: 'Supabase not configured' }, { status: 503 })
 
-  // Auth: accept service-role key OR user JWT
   const authHeader = req.headers.get('authorization') ?? ''
   const token = authHeader.replace(/^Bearer\s+/i, '').trim()
+  if (!token) return NextResponse.json({ error: 'Authorization required' }, { status: 401 })
 
   const admin = makeAdmin()
+  const body = await req.json() as { user_id?: string; date?: string }
+  const targetDate = body.date ?? new Date().toISOString().split('T')[0]
 
-  if (token && token === SERVICE_KEY) {
-    // Called from sync script with service role key
-    const body = await req.json() as { user_id?: string; date?: string }
-    if (!body.user_id) return NextResponse.json({ error: 'user_id required' }, { status: 400 })
-    const targetDate = body.date ?? new Date().toISOString().split('T')[0]
+  // Service-role path: token is the service key (exact match) OR JWT with role=service_role
+  const isServiceRole = (SERVICE_KEY && token === SERVICE_KEY) || jwtRole(token) === 'service_role'
+
+  if (isServiceRole) {
+    if (!body.user_id) return NextResponse.json({ error: 'user_id required when calling with service role' }, { status: 400 })
     return generateAndStore(admin, body.user_id, targetDate)
-  } else if (token) {
-    // Called from client with user JWT
-    const { data: { user }, error } = await admin.auth.getUser(token)
-    if (error || !user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    const body = await req.json().catch(() => ({})) as { date?: string }
-    const targetDate = body.date ?? new Date().toISOString().split('T')[0]
-    return generateAndStore(admin, user.id, targetDate)
-  } else {
-    return NextResponse.json({ error: 'Authorization required' }, { status: 401 })
   }
+
+  // User JWT path
+  const { data: { user }, error } = await admin.auth.getUser(token)
+  if (error || !user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  return generateAndStore(admin, user.id, targetDate)
 }
 
 // Also support GET for client-side fetch of latest insight
