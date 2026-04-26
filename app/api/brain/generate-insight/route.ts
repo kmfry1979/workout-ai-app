@@ -288,7 +288,20 @@ async function generateAndStore(
   }
 
   if (health.length === 0 && sleep.length === 0 && activities.length === 0) {
-    return NextResponse.json({ error: 'No data available to analyse' }, { status: 422 })
+    return NextResponse.json({
+      error: 'No data available to analyse',
+      debug: {
+        user_id: userId,
+        date_range: `${sevenAgo} → ${targetDate}`,
+        garmin_health_rows: (healthRes.data ?? []).length,
+        legacy_health_rows: (legacyRes.data ?? []).length,
+        sleep_rows: (sleepRes.data ?? []).length,
+        activity_rows: (actsRes.data ?? []).length,
+        garmin_health_error: healthRes.error?.message ?? null,
+        legacy_health_error: legacyRes.error?.message ?? null,
+        sleep_error: sleepRes.error?.message ?? null,
+      }
+    }, { status: 422 })
   }
 
   const prompt = buildPrompt(health, sleep, stepsData, activities, weights, targetDate)

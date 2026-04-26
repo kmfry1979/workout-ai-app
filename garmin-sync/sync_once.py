@@ -1691,7 +1691,7 @@ def main() -> None:
                 headline = (bd.get("headline") or "")[:80]
                 print(f"  Brain: [{label} {score}/100] {headline}")
             else:
-                print(f"  Brain API {brain_resp.status_code}: {brain_resp.text[:200]}")
+                print(f"  Brain API {brain_resp.status_code}: {brain_resp.text[:500]}")
         except Exception as brain_exc:
             print(f"  Brain trigger failed (non-fatal): {brain_exc}")
     else:
