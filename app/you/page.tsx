@@ -806,233 +806,222 @@ export default function YouPage() {
 
         {/* Weight modal */}
         {showWeightModal && latestWeightKg != null && (
-          <div className="fixed inset-0 z-50 flex flex-col" style={{ background: 'rgba(0,0,0,0.7)' }} onClick={() => setShowWeightModal(false)}>
-            <div className="mt-auto bg-gray-950 rounded-t-3xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
-              {/* Modal header */}
-              <div className="flex items-center justify-between px-5 pt-5 pb-3 border-b border-gray-800 flex-shrink-0">
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
+            onClick={() => setShowWeightModal(false)}
+          >
+            <div
+              className="relative w-full max-w-lg max-h-[85vh] overflow-y-auto bg-gradient-to-br from-orange-950/90 via-gray-900 to-gray-950 rounded-3xl p-6 border border-orange-500/30 shadow-2xl"
+              onClick={e => e.stopPropagation()}
+            >
+              {/* X button */}
+              <button
+                onClick={() => setShowWeightModal(false)}
+                className="absolute top-3 right-3 w-8 h-8 rounded-full bg-gray-800/80 hover:bg-gray-700 text-gray-300 hover:text-white flex items-center justify-center transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+
+              {/* Header */}
+              <div className="flex items-center gap-3 mb-4">
+                <span className="text-2xl">⚖️</span>
                 <div>
-                  <h2 className="text-white font-bold text-lg">⚖️ Weight & Body Composition</h2>
-                  <p className="text-gray-500 text-xs mt-0.5">
-                    {latestWeight?.weigh_date && `Updated ${new Date(latestWeight.weigh_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}`}
-                  </p>
+                  <p className="text-lg font-bold text-white">Weight & Body Composition</p>
+                  <p className="text-sm text-gray-300">Week · Month · Year</p>
                 </div>
-                <button onClick={() => setShowWeightModal(false)} className="text-gray-400 hover:text-white p-1">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-6 h-6">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
               </div>
-              <div className="overflow-y-auto flex-1 px-5 py-4 space-y-5 pb-8">
-                {/* Current weight (stone/lb) + deltas */}
-                <div className="grid grid-cols-3 gap-4">
-              <div className="bg-gray-800/60 rounded-xl p-3">
-                <p className="text-gray-500 text-xs mb-1">Current</p>
-                <p className="text-white font-bold text-lg leading-tight">{fmtStoneLb(latestWeightKg)}</p>
-                <p className="text-gray-500 text-[10px] mt-0.5">{latestWeightKg.toFixed(1)} kg</p>
-                {latestWeight?.weigh_date && (
-                  <p className="text-gray-600 text-[10px]">
-                    {new Date(latestWeight.weigh_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
-                  </p>
-                )}
-              </div>
-              <div className="bg-gray-800/60 rounded-xl p-3">
-                <p className="text-gray-500 text-xs mb-1">7-day</p>
-                {delta7 != null ? (
-                  <>
-                    <p className={`font-bold text-lg leading-tight ${delta7 < -0.05 ? 'text-green-400' : delta7 > 0.05 ? 'text-red-400' : 'text-gray-300'}`}>
-                      {delta7 >= 0 ? '+' : '−'}{fmtWeightDelta(delta7)}
+
+              {/* Stats grid */}
+              <div className="grid grid-cols-3 gap-2 mb-4">
+                <div className="bg-gray-800/80 rounded-xl p-3 text-center">
+                  <p className="text-[10px] text-gray-300 uppercase font-semibold">Current</p>
+                  <p className="text-xl font-bold text-orange-300 mt-0.5 leading-tight">{fmtStoneLb(latestWeightKg)}</p>
+                  <p className="text-[10px] text-gray-500 mt-0.5">{latestWeightKg.toFixed(1)} kg</p>
+                  {latestWeight?.weigh_date && (
+                    <p className="text-[10px] text-gray-600">
+                      {new Date(latestWeight.weigh_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
                     </p>
-                    <p className="text-gray-500 text-[10px] mt-0.5">{delta7 >= 0 ? '+' : ''}{delta7.toFixed(2)} kg</p>
-                    <p className="text-gray-600 text-[10px]">{delta7 < -0.05 ? '↓ down' : delta7 > 0.05 ? '↑ up' : '→ stable'}</p>
-                  </>
-                ) : <p className="text-gray-600 text-lg">—</p>}
+                  )}
+                </div>
+                <div className="bg-gray-800/80 rounded-xl p-3 text-center">
+                  <p className="text-[10px] text-gray-300 uppercase font-semibold">7-day</p>
+                  {delta7 != null ? (
+                    <>
+                      <p className={`text-xl font-bold mt-0.5 leading-tight ${delta7 < -0.05 ? 'text-green-400' : delta7 > 0.05 ? 'text-red-400' : 'text-gray-300'}`}>
+                        {delta7 >= 0 ? '+' : '−'}{fmtWeightDelta(delta7)}
+                      </p>
+                      <p className="text-[10px] text-gray-500 mt-0.5">{delta7 >= 0 ? '+' : ''}{delta7.toFixed(2)} kg</p>
+                      <p className="text-[10px] text-gray-600">{delta7 < -0.05 ? '↓ down' : delta7 > 0.05 ? '↑ up' : '→ stable'}</p>
+                    </>
+                  ) : <p className="text-xl font-bold text-gray-600 mt-0.5">—</p>}
+                </div>
+                <div className="bg-gray-800/80 rounded-xl p-3 text-center">
+                  <p className="text-[10px] text-gray-300 uppercase font-semibold">30-day</p>
+                  {delta30 != null ? (
+                    <>
+                      <p className={`text-xl font-bold mt-0.5 leading-tight ${delta30 < -0.05 ? 'text-green-400' : delta30 > 0.05 ? 'text-red-400' : 'text-gray-300'}`}>
+                        {delta30 >= 0 ? '+' : '−'}{fmtWeightDelta(delta30)}
+                      </p>
+                      <p className="text-[10px] text-gray-500 mt-0.5">{delta30 >= 0 ? '+' : ''}{delta30.toFixed(2)} kg</p>
+                      {weightRateKgPerWeek != null && (
+                        <p className="text-[10px] text-gray-600">{weightRateKgPerWeek >= 0 ? '+' : ''}{weightRateKgPerWeek.toFixed(2)} kg/wk</p>
+                      )}
+                    </>
+                  ) : <p className="text-xl font-bold text-gray-600 mt-0.5">—</p>}
+                </div>
               </div>
-              <div className="bg-gray-800/60 rounded-xl p-3">
-                <p className="text-gray-500 text-xs mb-1">30-day</p>
-                {delta30 != null ? (
-                  <>
-                    <p className={`font-bold text-lg leading-tight ${delta30 < -0.05 ? 'text-green-400' : delta30 > 0.05 ? 'text-red-400' : 'text-gray-300'}`}>
-                      {delta30 >= 0 ? '+' : '−'}{fmtWeightDelta(delta30)}
-                    </p>
-                    <p className="text-gray-500 text-[10px] mt-0.5">{delta30 >= 0 ? '+' : ''}{delta30.toFixed(2)} kg</p>
-                    {weightRateKgPerWeek != null && (
-                      <p className="text-gray-600 text-[10px]">{weightRateKgPerWeek >= 0 ? '+' : ''}{weightRateKgPerWeek.toFixed(2)} kg/wk</p>
-                    )}
-                  </>
-                ) : <p className="text-gray-600 text-lg">—</p>}
-              </div>
-            </div>
 
-            {/* Week / Month / Year tabs */}
-            {weightEntries.length > 0 && (() => {
-              const today = new Date()
+              {/* Tab + chart */}
+              {weightEntries.length > 0 && (() => {
+                const today = new Date()
 
-              // Build entries for each tab
-              const buildWeekEntries = (offset: number) => {
-                // Week: Mon–Sun, offset=0 is current week
-                const monday = new Date(today)
-                monday.setDate(today.getDate() - ((today.getDay() + 6) % 7) - offset * 7)
-                monday.setHours(0, 0, 0, 0)
-                const days: { label: string; kg: number | null; isCurrent?: boolean }[] = []
-                for (let i = 0; i < 7; i++) {
-                  const d = new Date(monday)
-                  d.setDate(monday.getDate() + i)
-                  const ds = localDateStr(d)
-                  const isToday = ds === localDateStr(today)
-                  days.push({ label: d.toLocaleDateString('en-GB', { weekday: 'short' }), kg: weightByDate.get(ds) ?? null, isCurrent: isToday })
-                }
-                const weekLabel = monday.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
-                const sunday = new Date(monday); sunday.setDate(monday.getDate() + 6)
-                const sunLabel = sunday.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
-                return { entries: days, rangeLabel: `${weekLabel} – ${sunLabel}` }
-              }
-
-              const buildMonthEntries = (offset: number) => {
-                // Month: all days in the target month
-                const target = new Date(today.getFullYear(), today.getMonth() - offset, 1)
-                const daysInMonth = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate()
-                const days: { label: string; kg: number | null; isCurrent?: boolean }[] = []
-                for (let i = 1; i <= daysInMonth; i++) {
-                  const d = new Date(target.getFullYear(), target.getMonth(), i)
-                  const ds = localDateStr(d)
-                  const isToday = ds === localDateStr(today)
-                  days.push({ label: String(i), kg: weightByDate.get(ds) ?? null, isCurrent: isToday })
-                }
-                return { entries: days, rangeLabel: target.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' }) }
-              }
-
-              const buildYearEntries = (offset: number) => {
-                // Year: one slot per month, use last available reading in that month
-                const targetYear = today.getFullYear() - offset
-                const months: { label: string; kg: number | null; isCurrent?: boolean }[] = []
-                for (let m = 0; m < 12; m++) {
-                  const monthLabel = new Date(targetYear, m, 1).toLocaleDateString('en-GB', { month: 'short' })
-                  const currentMonth = today.getMonth() === m && today.getFullYear() === targetYear
-                  // Find last reading in this month
-                  let bestKg: number | null = null
-                  for (const [ds, kg] of weightByDate) {
-                    const d = new Date(ds)
-                    if (d.getFullYear() === targetYear && d.getMonth() === m) bestKg = kg
+                const buildWeekEntries = (offset: number) => {
+                  const monday = new Date(today)
+                  monday.setDate(today.getDate() - ((today.getDay() + 6) % 7) - offset * 7)
+                  monday.setHours(0, 0, 0, 0)
+                  const days: { label: string; kg: number | null; isCurrent?: boolean }[] = []
+                  for (let i = 0; i < 7; i++) {
+                    const d = new Date(monday); d.setDate(monday.getDate() + i)
+                    const ds = localDateStr(d)
+                    days.push({ label: d.toLocaleDateString('en-GB', { weekday: 'short' }), kg: weightByDate.get(ds) ?? null, isCurrent: ds === localDateStr(today) })
                   }
-                  months.push({ label: monthLabel, kg: bestKg, isCurrent: currentMonth })
+                  const sunday = new Date(monday); sunday.setDate(monday.getDate() + 6)
+                  return { entries: days, rangeLabel: `${monday.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} – ${sunday.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}` }
                 }
-                return { entries: months, rangeLabel: String(targetYear) }
-              }
 
-              const { entries: chartEntries, rangeLabel } =
-                weightTab === 'week' ? buildWeekEntries(weightWeekOffset) :
-                weightTab === 'month' ? buildMonthEntries(weightMonthOffset) :
-                buildYearEntries(weightYearOffset)
+                const buildMonthEntries = (offset: number) => {
+                  const target = new Date(today.getFullYear(), today.getMonth() - offset, 1)
+                  const daysInMonth = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate()
+                  const days: { label: string; kg: number | null; isCurrent?: boolean }[] = []
+                  for (let i = 1; i <= daysInMonth; i++) {
+                    const d = new Date(target.getFullYear(), target.getMonth(), i)
+                    const ds = localDateStr(d)
+                    days.push({ label: String(i), kg: weightByDate.get(ds) ?? null, isCurrent: ds === localDateStr(today) })
+                  }
+                  return { entries: days, rangeLabel: target.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' }) }
+                }
 
-              const offset = weightTab === 'week' ? weightWeekOffset : weightTab === 'month' ? weightMonthOffset : weightYearOffset
-              const setOffset = weightTab === 'week' ? setWeightWeekOffset : weightTab === 'month' ? setWeightMonthOffset : setWeightYearOffset
+                const buildYearEntries = (offset: number) => {
+                  const targetYear = today.getFullYear() - offset
+                  const months: { label: string; kg: number | null; isCurrent?: boolean }[] = []
+                  for (let m = 0; m < 12; m++) {
+                    let bestKg: number | null = null
+                    for (const [ds, kg] of weightByDate) {
+                      const d = new Date(ds)
+                      if (d.getFullYear() === targetYear && d.getMonth() === m) bestKg = kg
+                    }
+                    months.push({ label: new Date(targetYear, m, 1).toLocaleDateString('en-GB', { month: 'short' }), kg: bestKg, isCurrent: today.getMonth() === m && today.getFullYear() === targetYear })
+                  }
+                  return { entries: months, rangeLabel: String(targetYear) }
+                }
 
-              return (
-                <div className="space-y-3">
-                  {/* Tab row */}
-                  <div className="flex gap-2">
-                    {(['week', 'month', 'year'] as const).map(t => (
-                      <button
-                        key={t}
-                        onClick={() => setWeightTab(t)}
-                        className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition-colors ${weightTab === t ? 'bg-orange-600 text-white' : 'bg-gray-800 text-gray-400'}`}
-                      >
-                        {t.charAt(0).toUpperCase() + t.slice(1)}
-                      </button>
-                    ))}
+                const { entries: chartEntries, rangeLabel } =
+                  weightTab === 'week' ? buildWeekEntries(weightWeekOffset) :
+                  weightTab === 'month' ? buildMonthEntries(weightMonthOffset) :
+                  buildYearEntries(weightYearOffset)
+
+                const offset = weightTab === 'week' ? weightWeekOffset : weightTab === 'month' ? weightMonthOffset : weightYearOffset
+                const setOffset = weightTab === 'week' ? setWeightWeekOffset : weightTab === 'month' ? setWeightMonthOffset : setWeightYearOffset
+
+                return (
+                  <div className="space-y-3 mb-4">
+                    {/* Tab pills — same style as steps modal */}
+                    <div className="flex gap-2">
+                      {(['week', 'month', 'year'] as const).map(t => (
+                        <button
+                          key={t}
+                          onClick={() => setWeightTab(t)}
+                          className={`flex-1 py-1.5 rounded-xl text-xs font-semibold transition-colors ${weightTab === t ? 'bg-orange-600 text-white' : 'bg-gray-800/80 text-gray-400 hover:text-white'}`}
+                        >
+                          {t.charAt(0).toUpperCase() + t.slice(1)}
+                        </button>
+                      ))}
+                    </div>
+                    {/* Navigation */}
+                    <div className="flex items-center justify-between">
+                      <button onClick={() => setOffset(o => o + 1)} className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-800 text-gray-400 hover:text-white hover:bg-gray-700 transition-colors text-lg">‹</button>
+                      <span className="text-xs text-gray-400 font-medium">{rangeLabel}</span>
+                      <button onClick={() => setOffset(o => Math.max(0, o - 1))} disabled={offset === 0} className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-800 text-gray-400 hover:text-white hover:bg-gray-700 transition-colors text-lg disabled:opacity-30">›</button>
+                    </div>
+                    {/* Chart */}
+                    <WeightLineChart entries={chartEntries} />
                   </div>
+                )
+              })()}
 
-                  {/* Navigation row */}
-                  <div className="flex items-center justify-between">
-                    <button
-                      onClick={() => setOffset(o => o + 1)}
-                      className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-800 text-gray-400 hover:text-white hover:bg-gray-700 transition-colors text-lg"
-                    >‹</button>
-                    <span className="text-xs text-gray-400 font-medium">{rangeLabel}</span>
-                    <button
-                      onClick={() => setOffset(o => Math.max(0, o - 1))}
-                      disabled={offset === 0}
-                      className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-800 text-gray-400 hover:text-white hover:bg-gray-700 transition-colors text-lg disabled:opacity-30"
-                    >›</button>
+              {/* BMI + Ideal range */}
+              {bmi != null ? (
+                <div className="grid grid-cols-2 gap-3 mb-4">
+                  <div className="bg-gray-800/80 rounded-xl p-3">
+                    <p className="text-[10px] text-gray-300 uppercase font-semibold mb-1">BMI</p>
+                    <p className="font-bold text-xl" style={{ color: bmiColor }}>{bmi.toFixed(1)}</p>
+                    <p className="text-xs mt-0.5" style={{ color: bmiColor }}>{bmiLabel}</p>
                   </div>
-
-                  {/* Chart */}
-                  <WeightLineChart entries={chartEntries} />
+                  {idealWeightRange && (
+                    <div className="bg-gray-800/80 rounded-xl p-3">
+                      <p className="text-[10px] text-gray-300 uppercase font-semibold mb-1">Healthy range</p>
+                      <p className="text-white font-bold text-sm">{fmtStoneLb(idealWeightRange.min)}–{fmtStoneLb(idealWeightRange.max)}</p>
+                      <p className="text-[10px] text-gray-500 mt-0.5">{idealWeightRange.min.toFixed(1)}–{idealWeightRange.max.toFixed(1)} kg</p>
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        {latestWeightKg < idealWeightRange.min ? `${fmtWeightDelta(idealWeightRange.min - latestWeightKg)} to gain`
+                          : latestWeightKg > idealWeightRange.max ? `${fmtWeightDelta(latestWeightKg - idealWeightRange.max)} to lose`
+                          : '✓ In range'}
+                      </p>
+                    </div>
+                  )}
                 </div>
-              )
-            })()}
-
-            {/* BMI + Ideal range */}
-            {bmi != null ? (
-              <div className="grid grid-cols-2 gap-3">
-                <div className="bg-gray-800/60 rounded-xl p-3">
-                  <p className="text-gray-500 text-xs mb-1">BMI</p>
-                  <p className="font-bold text-xl" style={{ color: bmiColor }}>{bmi.toFixed(1)}</p>
-                  <p className="text-xs mt-0.5" style={{ color: bmiColor }}>{bmiLabel}</p>
+              ) : (
+                <div className="flex items-center gap-2 bg-gray-800/40 rounded-xl p-3 mb-4">
+                  <p className="text-xs text-gray-400 shrink-0">Set height for BMI:</p>
+                  <input
+                    type="number"
+                    placeholder="cm"
+                    value={heightInput}
+                    onChange={e => setHeightInput(e.target.value)}
+                    className="flex-1 bg-gray-800 text-white text-sm rounded-lg px-2 py-1.5 outline-none focus:ring-1 focus:ring-orange-500 w-0 min-w-0 placeholder-gray-600"
+                  />
+                  <button
+                    onClick={saveHeight}
+                    disabled={savingHeight || !heightInput}
+                    className="shrink-0 text-xs px-3 py-1.5 rounded-lg bg-orange-600 hover:bg-orange-500 disabled:opacity-40 text-white transition-colors"
+                  >
+                    {savingHeight ? '…' : 'Save'}
+                  </button>
                 </div>
-                {idealWeightRange && (
-                  <div className="bg-gray-800/60 rounded-xl p-3">
-                    <p className="text-gray-500 text-xs mb-1">Healthy range</p>
-                    <p className="text-white font-bold text-sm">
-                      {fmtStoneLb(idealWeightRange.min)}–{fmtStoneLb(idealWeightRange.max)}
-                    </p>
-                    <p className="text-[10px] text-gray-500 mt-0.5">
-                      {idealWeightRange.min.toFixed(1)}–{idealWeightRange.max.toFixed(1)} kg
-                    </p>
-                    <p className="text-xs text-gray-400 mt-0.5">
-                      {latestWeightKg < idealWeightRange.min
-                        ? `${fmtWeightDelta(idealWeightRange.min - latestWeightKg)} to gain`
-                        : latestWeightKg > idealWeightRange.max
-                        ? `${fmtWeightDelta(latestWeightKg - idealWeightRange.max)} to lose`
-                        : '✓ In range'}
-                    </p>
-                  </div>
-                )}
-              </div>
-            ) : (
-              /* Height not set — inline prompt */
-              <div className="flex items-center gap-2 bg-gray-800/40 rounded-xl p-3">
-                <p className="text-xs text-gray-400 shrink-0">Set height for BMI:</p>
-                <input
-                  type="number"
-                  placeholder="cm"
-                  value={heightInput}
-                  onChange={e => setHeightInput(e.target.value)}
-                  className="flex-1 bg-gray-800 text-white text-sm rounded-lg px-2 py-1.5 outline-none focus:ring-1 focus:ring-orange-500 w-0 min-w-0 placeholder-gray-600"
-                />
-                <button
-                  onClick={saveHeight}
-                  disabled={savingHeight || !heightInput}
-                  className="shrink-0 text-xs px-3 py-1.5 rounded-lg bg-orange-600 hover:bg-orange-500 disabled:opacity-40 text-white transition-colors"
-                >
-                  {savingHeight ? '…' : 'Save'}
-                </button>
-              </div>
-            )}
+              )}
 
-            {/* Body composition from Garmin scale (if available) */}
-            {(latestBodyFat != null || latestMuscleMassKg != null) && (
-              <div className="grid grid-cols-2 gap-3">
-                {latestBodyFat != null && (
-                  <div className="bg-gray-800/60 rounded-xl p-3">
-                    <p className="text-gray-500 text-xs mb-1">Body Fat</p>
-                    <p className="text-white font-bold text-xl">{latestBodyFat.toFixed(1)}%</p>
-                    <p className="text-xs text-gray-500 mt-0.5">
-                      {latestBodyFat < 10 ? 'Essential fat' : latestBodyFat < 20 ? 'Athlete' : latestBodyFat < 25 ? 'Fitness' : latestBodyFat < 32 ? 'Average' : 'Above average'}
-                    </p>
-                  </div>
-                )}
-                {latestMuscleMassKg != null && (
-                  <div className="bg-gray-800/60 rounded-xl p-3">
-                    <p className="text-gray-500 text-xs mb-1">Muscle Mass</p>
-                    <p className="text-white font-bold text-xl">{latestMuscleMassKg.toFixed(1)} kg</p>
-                    <p className="text-xs text-gray-500 mt-0.5">From Garmin scale</p>
-                  </div>
-                )}
-              </div>
-            )}
-              </div>{/* end modal scroll */}
-            </div>{/* end modal sheet */}
+              {/* Body composition */}
+              {(latestBodyFat != null || latestMuscleMassKg != null) && (
+                <div className="grid grid-cols-2 gap-3 mb-4">
+                  {latestBodyFat != null && (
+                    <div className="bg-gray-800/80 rounded-xl p-3">
+                      <p className="text-[10px] text-gray-300 uppercase font-semibold mb-1">Body Fat</p>
+                      <p className="text-white font-bold text-xl">{latestBodyFat.toFixed(1)}%</p>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        {latestBodyFat < 10 ? 'Essential fat' : latestBodyFat < 20 ? 'Athlete' : latestBodyFat < 25 ? 'Fitness' : latestBodyFat < 32 ? 'Average' : 'Above average'}
+                      </p>
+                    </div>
+                  )}
+                  {latestMuscleMassKg != null && (
+                    <div className="bg-gray-800/80 rounded-xl p-3">
+                      <p className="text-[10px] text-gray-300 uppercase font-semibold mb-1">Muscle Mass</p>
+                      <p className="text-white font-bold text-xl">{latestMuscleMassKg.toFixed(1)} kg</p>
+                      <p className="text-xs text-gray-500 mt-0.5">From Garmin scale</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Back button */}
+              <button
+                onClick={() => setShowWeightModal(false)}
+                className="mt-2 w-full bg-gray-800/80 hover:bg-gray-700 text-gray-200 text-sm py-2 rounded-xl transition-colors"
+              >
+                Back to dashboard
+              </button>
+            </div>
           </div>
         )}
 
