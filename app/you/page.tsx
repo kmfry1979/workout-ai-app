@@ -179,48 +179,39 @@ export default function YouPage() {
         .order('metric_date', { ascending: true })
       setMetrics((met ?? []) as DailyMetric[])
 
-      // Weight data — from dedicated table (falls back gracefully if not yet created)
+      // Weight data — from daily_health_metrics.body_composition (already synced)
+      // Format: { "weight_kg": 108.6, "body_fat_pct": 36.5 }
       const ninetyDaysAgoDate = ninetyDaysAgo.toISOString().split('T')[0]
-      const { data: weightRaw } = await supabase
-        .from('garmin_weight_snapshots')
-        .select('weigh_date, weight_grams, bmi, body_fat_pct, body_water_pct, muscle_mass_grams, bone_mass_grams')
+      const { data: bodyCompRaw } = await supabase
+        .from('daily_health_metrics')
+        .select('metric_date, body_composition')
         .eq('user_id', user.id)
-        .gte('weigh_date', ninetyDaysAgoDate)
-        .order('weigh_date', { ascending: true })
+        .gte('metric_date', ninetyDaysAgoDate)
+        .not('body_composition', 'is', null)
+        .order('metric_date', { ascending: true })
 
-      if (weightRaw && weightRaw.length > 0) {
-        setWeightEntries(weightRaw as WeightEntry[])
-      } else {
-        // Fallback: parse body_composition JSONB from daily_health_metrics
-        const { data: legacyMet } = await supabase
-          .from('daily_health_metrics')
-          .select('metric_date, body_composition')
-          .eq('user_id', user.id)
-          .gte('metric_date', ninetyDaysAgoDate)
-          .order('metric_date', { ascending: true })
-
-        const parsed: WeightEntry[] = []
-        for (const row of (legacyMet ?? [])) {
-          const bc = (row as { body_composition?: Record<string, unknown> | null }).body_composition
-          if (!bc) continue
-          // Try multiple known Garmin JSONB shapes
-          const weightEntry = (bc.weightEntry as Record<string, unknown> | undefined) ?? bc
-          const wg = Number(weightEntry.weight ?? weightEntry.weightInGrams ?? weightEntry.weightKg)
-          if (!wg || wg <= 0) continue
-          // Garmin returns weight in grams if > 1000, else kg
-          const weightGrams = wg > 1000 ? wg : wg * 1000
-          parsed.push({
-            weigh_date: (row as { metric_date: string }).metric_date,
-            weight_grams: weightGrams,
-            bmi: Number(weightEntry.bmi) || null,
-            body_fat_pct: Number(weightEntry.percentFat ?? weightEntry.bodyFat) || null,
-            body_water_pct: Number(weightEntry.percentHydration ?? weightEntry.bodyWater) || null,
-            muscle_mass_grams: Number(weightEntry.muscleWeightGrams ?? weightEntry.muscleMass) || null,
-            bone_mass_grams: Number(weightEntry.boneMassGrams ?? weightEntry.boneMass) || null,
-          })
-        }
-        setWeightEntries(parsed)
+      const parsed: WeightEntry[] = []
+      for (const row of (bodyCompRaw ?? [])) {
+        const bc = (row as { metric_date: string; body_composition: Record<string, unknown> | null }).body_composition
+        if (!bc) continue
+        // Primary format from sync: { weight_kg, body_fat_pct }
+        const weightKg = Number(bc.weight_kg ?? bc.weightKg ?? bc.weight)
+        if (!weightKg || weightKg <= 0) continue
+        // Garmin sometimes returns grams (>500 is definitely grams, e.g. 82000)
+        const weightKgNorm = weightKg > 500 ? weightKg / 1000 : weightKg
+        parsed.push({
+          weigh_date: (row as { metric_date: string }).metric_date,
+          weight_grams: weightKgNorm * 1000,
+          bmi: Number(bc.bmi) || null,
+          body_fat_pct: Number(bc.body_fat_pct ?? bc.bodyFatPct ?? bc.percentFat ?? bc.bodyFat) || null,
+          body_water_pct: Number(bc.body_water_pct ?? bc.bodyWaterPct ?? bc.percentHydration) || null,
+          muscle_mass_grams: Number(bc.muscle_mass_kg ?? bc.muscleMassKg) > 0
+            ? Number(bc.muscle_mass_kg ?? bc.muscleMassKg) * 1000 : null,
+          bone_mass_grams: Number(bc.bone_mass_kg ?? bc.boneMassKg) > 0
+            ? Number(bc.bone_mass_kg ?? bc.boneMassKg) * 1000 : null,
+        })
       }
+      setWeightEntries(parsed)
 
       setLoading(false)
     }

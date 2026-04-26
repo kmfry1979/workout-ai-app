@@ -550,10 +550,16 @@ def get_spo2_data(api: Garmin, date_iso: str) -> dict[str, Any]:
 
 def get_weigh_ins_data(api: Garmin, startdate: str, enddate: str) -> list[dict[str, Any]]:
     """
-    Returns a flat list of weigh-in entries for the date range.
-    Tries get_weigh_ins (range) first, then falls back to get_body_composition
-    which covers the same data via a different endpoint.
-    Response key from Garmin is 'dateWeightList'.
+    Returns a flat list of normalised weigh-in entries for the date range.
+
+    Garmin's daily summary (already stored in daily_health_metrics.body_composition)
+    uses the format: {"weight_kg": 108.6, "body_fat_pct": 36.5}
+
+    The dedicated weight-range API uses: {"dateWeightList": [{calendarDate, weight, ...}]}
+    where weight may be in grams (>500) or kg.
+
+    We try both endpoints and normalise everything to {"calendarDate", "weight_kg",
+    "body_fat_pct"} for upsert_weight_snapshots.
     """
     entries: list[dict[str, Any]] = []
 
@@ -561,30 +567,52 @@ def get_weigh_ins_data(api: Garmin, startdate: str, enddate: str) -> list[dict[s
     success, data, err = safe_call(api.get_weigh_ins, startdate, enddate)
     if success and isinstance(data, dict):
         raw_list = data.get("dateWeightList") or []
-        print(f"  get_weigh_ins returned {len(raw_list)} entries (keys: {list(data.keys())[:6]})")
-        entries = [e for e in raw_list if isinstance(e, dict)]
+        print(f"  get_weigh_ins returned {len(raw_list)} entries (top keys: {list(data.keys())[:6]})")
+        for e in raw_list:
+            if not isinstance(e, dict):
+                continue
+            w_raw = as_float(e.get("weight"))
+            if not w_raw or w_raw <= 0:
+                continue
+            # Weight >500 = grams, else already kg
+            w_kg = w_raw / 1000 if w_raw > 500 else w_raw
+            cdate = e.get("calendarDate") or e.get("summaryDate")
+            entries.append({
+                "calendarDate": cdate,
+                "weight_kg": w_kg,
+                "body_fat_pct": as_float(e.get("bodyFat")),
+                "body_water_pct": as_float(e.get("bodyWater")),
+                "muscle_mass_kg": (as_float(e.get("muscleMass")) or 0) / 1000 or None,
+                "bone_mass_kg": (as_float(e.get("boneMass")) or 0) / 1000 or None,
+                "bmi": as_float(e.get("bmi")),
+                "source_type": e.get("sourceType") or "MANUAL",
+            })
     else:
         if err:
             print(f"  Warning: get_weigh_ins failed: {err}")
 
-    # Fallback: /weight/dateRange — different endpoint, same underlying data
+    # Fallback: /weight/dateRange via get_body_composition
     if not entries:
         success2, data2, err2 = safe_call(api.get_body_composition, startdate, enddate)
         if success2 and isinstance(data2, dict):
-            # Body composition returns allMetrics.metricsMap.WEIGHT list
             metrics_map = (data2.get("allMetrics") or {}).get("metricsMap") or {}
             weight_list = metrics_map.get("WEIGHT") or []
             fat_list = metrics_map.get("BODY_FAT") or []
-            fat_by_date = {e.get("calendarDate"): e.get("value") for e in fat_list if isinstance(e, dict)}
+            fat_by_date = {e.get("calendarDate"): as_float(e.get("value"))
+                           for e in fat_list if isinstance(e, dict)}
             for w in weight_list:
                 if not isinstance(w, dict):
                     continue
+                w_raw = as_float(w.get("value"))
+                if not w_raw or w_raw <= 0:
+                    continue
+                w_kg = w_raw / 1000 if w_raw > 500 else w_raw
                 cdate = w.get("calendarDate")
                 entries.append({
                     "calendarDate": cdate,
-                    "weight": w.get("value"),
-                    "bodyFat": fat_by_date.get(cdate),
-                    "sourceType": w.get("sourceType") or "MANUAL",
+                    "weight_kg": w_kg,
+                    "body_fat_pct": fat_by_date.get(cdate),
+                    "source_type": w.get("sourceType") or "MANUAL",
                 })
             print(f"  get_body_composition fallback returned {len(entries)} weight entries")
         else:
@@ -1252,37 +1280,32 @@ def sync_recent_garmin_activities(api: Garmin, user_id: str, connection_id: str)
 
 def upsert_weight_snapshots(user_id: str, connection_id: str, entries: list[dict[str, Any]]) -> int:
     """
-    Upserts weigh-in entries (flat list from get_weigh_ins_data) into
-    garmin_weight_snapshots.  One row per (connection_id, weigh_date).
-    Weight from Garmin is stored internally in grams when > 1000, else kg.
+    Upserts normalised weigh-in entries into garmin_weight_snapshots.
+    Entries come from get_weigh_ins_data() already normalised to weight_kg.
     """
     count = 0
     for entry in entries:
         date_str = entry.get("calendarDate") or entry.get("summaryDate")
         if not date_str:
             continue
-        weight_raw = as_float(entry.get("weight"))
-        if weight_raw is None or weight_raw <= 0:
+        weight_kg = as_float(entry.get("weight_kg"))
+        if weight_kg is None or weight_kg <= 0:
             continue
-        # Garmin stores weight in grams internally (e.g. 82000 = 82 kg).
-        # Values under 500 are likely already in kg (body composition fallback).
-        weight_g = weight_raw if weight_raw > 500 else weight_raw * 1000
-
         payload = {
             "user_id": user_id,
             "connection_id": connection_id,
             "weigh_date": date_str,
-            "weight_grams": weight_g,
+            "weight_grams": round(weight_kg * 1000, 1),
             "bmi": as_float(entry.get("bmi")),
-            "body_fat_pct": as_float(entry.get("bodyFat")),
-            "body_water_pct": as_float(entry.get("bodyWater")),
-            "muscle_mass_grams": as_float(entry.get("muscleMass")),
-            "bone_mass_grams": as_float(entry.get("boneMass")),
-            "source_type": entry.get("sourceType") or "MANUAL",
+            "body_fat_pct": as_float(entry.get("body_fat_pct")),
+            "body_water_pct": as_float(entry.get("body_water_pct")),
+            "muscle_mass_grams": round(entry["muscle_mass_kg"] * 1000, 1) if entry.get("muscle_mass_kg") else None,
+            "bone_mass_grams": round(entry["bone_mass_kg"] * 1000, 1) if entry.get("bone_mass_kg") else None,
+            "source_type": entry.get("source_type") or "MANUAL",
             "raw_payload": entry,
         }
         supabase_upsert("garmin_weight_snapshots", payload, on_conflict="connection_id,weigh_date")
-        print(f"    Weight {date_str}: {weight_g/1000:.1f} kg")
+        print(f"    Weight {date_str}: {weight_kg:.1f} kg")
         count += 1
     return count
 
