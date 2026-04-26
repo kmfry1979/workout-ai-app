@@ -228,32 +228,33 @@ async function generateAndStore(
   userId: string,
   targetDate: string,
 ): Promise<NextResponse> {
-  const sevenAgo = new Date(new Date(targetDate).getTime() - 7 * 86400000).toISOString().split('T')[0]
+  const sevenAgo  = new Date(new Date(targetDate).getTime() -  7 * 86400000).toISOString().split('T')[0]
+  const thirtyAgo = new Date(new Date(targetDate).getTime() - 30 * 86400000).toISOString().split('T')[0]
 
-  // Fetch 7 days of data — garmin_* tables first, legacy daily_health_metrics as fallback
+  // Fetch data — wide windows so we catch whatever exists regardless of how much has been synced
   const [healthRes, sleepRes, stepsRes, actsRes, weightRes, legacyRes] = await Promise.all([
     admin.from('garmin_daily_health_metrics')
       .select('metric_date, hrv_avg, hrv_status, stress_avg, body_battery_end, respiration_avg_bpm, spo2_avg, training_readiness_score, training_readiness_label, training_status_phase')
-      .eq('user_id', userId).gte('metric_date', sevenAgo).order('metric_date', { ascending: true }),
+      .eq('user_id', userId).gte('metric_date', thirtyAgo).order('metric_date', { ascending: true }),
     admin.from('garmin_sleep_data')
       .select('sleep_date, sleep_score, sleep_duration_seconds, deep_sleep_seconds, rem_sleep_seconds')
-      .eq('user_id', userId).gte('sleep_date', sevenAgo).order('sleep_date', { ascending: true }),
+      .eq('user_id', userId).gte('sleep_date', thirtyAgo).order('sleep_date', { ascending: true }),
     admin.from('garmin_daily_steps')
       .select('step_date, total_steps, active_minutes, vigorous_intensity_minutes')
       .eq('user_id', userId).gte('step_date', sevenAgo).order('step_date', { ascending: true }),
     admin.from('garmin_activities')
       .select('start_time, activity_type, duration_sec, distance_m, avg_hr, training_effect')
       .eq('user_id', userId)
-      .gte('start_time', new Date(sevenAgo).toISOString())
-      .order('start_time', { ascending: false }).limit(7),
+      .gte('start_time', new Date(thirtyAgo).toISOString())
+      .order('start_time', { ascending: false }).limit(10),
     admin.from('garmin_weight_snapshots')
       .select('weigh_date, weight_kg, body_fat_pct')
-      .eq('user_id', userId).gte('weigh_date', sevenAgo)
+      .eq('user_id', userId).gte('weigh_date', thirtyAgo)
       .order('weigh_date', { ascending: false }).limit(3),
-    // Legacy fallback table
+    // Legacy fallback — also widen to 30 days
     admin.from('daily_health_metrics')
       .select('metric_date, garmin_hrv_nightly_avg, garmin_body_battery_high, garmin_stress_avg, garmin_sleep_score, steps, resting_hr')
-      .eq('user_id', userId).gte('metric_date', sevenAgo).order('metric_date', { ascending: true }),
+      .eq('user_id', userId).gte('metric_date', thirtyAgo).order('metric_date', { ascending: true }),
   ])
 
   let health = (healthRes.data ?? []) as HealthRow[]
@@ -287,19 +288,22 @@ async function generateAndStore(
     }))
   }
 
+  console.log(`Brain debug — user:${userId} range:${thirtyAgo}→${targetDate} garmin_health:${health.length} legacy:${(legacyRes.data??[]).length} sleep:${sleep.length} acts:${activities.length}`)
+
   if (health.length === 0 && sleep.length === 0 && activities.length === 0) {
     return NextResponse.json({
       error: 'No data available to analyse',
       debug: {
         user_id: userId,
-        date_range: `${sevenAgo} → ${targetDate}`,
+        date_range: `${thirtyAgo} → ${targetDate}`,
         garmin_health_rows: (healthRes.data ?? []).length,
         legacy_health_rows: (legacyRes.data ?? []).length,
         sleep_rows: (sleepRes.data ?? []).length,
-        activity_rows: (actsRes.data ?? []).length,
+        activity_rows: activities.length,
         garmin_health_error: healthRes.error?.message ?? null,
         legacy_health_error: legacyRes.error?.message ?? null,
         sleep_error: sleepRes.error?.message ?? null,
+        activity_error: actsRes.error?.message ?? null,
       }
     }, { status: 422 })
   }
