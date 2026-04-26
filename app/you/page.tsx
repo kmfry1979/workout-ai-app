@@ -332,32 +332,42 @@ export default function YouPage() {
       let parsed: WeightEntry[] = []
 
       // Primary: dedicated weigh-ins table
+      // Note: sync writes weight_grams (integer grams); older rows had weight_kg.
+      // We select both and prefer weight_grams.
       const { data: weightRaw, error: weightErr } = await supabase
         .from('garmin_weight_snapshots')
-        .select('weigh_date, weight_kg, body_fat_pct, muscle_mass_kg, bone_mass_kg, raw_payload')
+        .select('weigh_date, weight_grams, weight_kg, body_fat_pct, muscle_mass_grams, muscle_mass_kg, bone_mass_grams, bone_mass_kg, raw_payload')
         .eq('user_id', user.id)
         .gte('weigh_date', ninetyDaysAgoDate)
         .order('weigh_date', { ascending: true })
 
       if (!weightErr && (weightRaw ?? []).length > 0) {
-        parsed = (weightRaw ?? []).map(row => {
+        parsed = (weightRaw ?? []).flatMap(row => {
           const r = row as {
-            weigh_date: string; weight_kg: number; body_fat_pct: number | null
-            muscle_mass_kg: number | null; bone_mass_kg: number | null
+            weigh_date: string
+            weight_grams: number | null; weight_kg: number | null
+            body_fat_pct: number | null
+            muscle_mass_grams: number | null; muscle_mass_kg: number | null
+            bone_mass_grams: number | null; bone_mass_kg: number | null
             raw_payload: Record<string, unknown> | null
           }
+          // Use weight_grams if present (synced by sync_once.py), else fall back to weight_kg column
+          const grams = r.weight_grams ?? (r.weight_kg != null ? r.weight_kg * 1000 : null)
+          if (!grams || grams <= 0) return []   // skip malformed rows
           const raw = r.raw_payload ?? {}
-          return {
+          return [{
             weigh_date: r.weigh_date,
-            weight_grams: r.weight_kg * 1000,
+            weight_grams: grams,
             bmi: null,
             body_fat_pct: r.body_fat_pct ?? (Number(raw.percentFat) || null),
             body_water_pct: Number(raw.percentHydration) || null,
-            muscle_mass_grams: r.muscle_mass_kg ? r.muscle_mass_kg * 1000
-              : (Number(raw.muscleMassGrams) > 0 ? Number(raw.muscleMassGrams) : null),
-            bone_mass_grams: r.bone_mass_kg ? r.bone_mass_kg * 1000
-              : (Number(raw.boneMassGrams) > 0 ? Number(raw.boneMassGrams) : null),
-          }
+            muscle_mass_grams: r.muscle_mass_grams
+              ?? (r.muscle_mass_kg ? r.muscle_mass_kg * 1000 : null)
+              ?? (Number(raw.muscleMassGrams) > 0 ? Number(raw.muscleMassGrams) : null),
+            bone_mass_grams: r.bone_mass_grams
+              ?? (r.bone_mass_kg ? r.bone_mass_kg * 1000 : null)
+              ?? (Number(raw.boneMassGrams) > 0 ? Number(raw.boneMassGrams) : null),
+          }]
         })
       } else {
         // Fallback: body_composition JSONB on daily_health_metrics

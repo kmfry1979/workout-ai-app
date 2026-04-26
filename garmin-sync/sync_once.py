@@ -1514,11 +1514,14 @@ def upsert_weight_snapshots(user_id: str, connection_id: str, entries: list[dict
             "connection_id": connection_id,
             "weigh_date": date_str,
             "weight_grams": round(weight_kg * 1000, 1),
+            "weight_kg": round(weight_kg, 3),   # keep both columns in sync
             "bmi": as_float(entry.get("bmi")),
             "body_fat_pct": as_float(entry.get("body_fat_pct")),
             "body_water_pct": as_float(entry.get("body_water_pct")),
             "muscle_mass_grams": round(entry["muscle_mass_kg"] * 1000, 1) if entry.get("muscle_mass_kg") else None,
+            "muscle_mass_kg": entry.get("muscle_mass_kg"),
             "bone_mass_grams": round(entry["bone_mass_kg"] * 1000, 1) if entry.get("bone_mass_kg") else None,
+            "bone_mass_kg": entry.get("bone_mass_kg"),
             "source_type": entry.get("source_type") or "MANUAL",
             "raw_payload": entry,
         }
