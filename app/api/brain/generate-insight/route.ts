@@ -230,8 +230,8 @@ async function generateAndStore(
 ): Promise<NextResponse> {
   const sevenAgo = new Date(new Date(targetDate).getTime() - 7 * 86400000).toISOString().split('T')[0]
 
-  // Fetch 7 days of data in parallel
-  const [healthRes, sleepRes, stepsRes, actsRes, weightRes] = await Promise.all([
+  // Fetch 7 days of data — garmin_* tables first, legacy daily_health_metrics as fallback
+  const [healthRes, sleepRes, stepsRes, actsRes, weightRes, legacyRes] = await Promise.all([
     admin.from('garmin_daily_health_metrics')
       .select('metric_date, hrv_avg, hrv_status, stress_avg, body_battery_end, respiration_avg_bpm, spo2_avg, training_readiness_score, training_readiness_label, training_status_phase')
       .eq('user_id', userId).gte('metric_date', sevenAgo).order('metric_date', { ascending: true }),
@@ -250,15 +250,44 @@ async function generateAndStore(
       .select('weigh_date, weight_kg, body_fat_pct')
       .eq('user_id', userId).gte('weigh_date', sevenAgo)
       .order('weigh_date', { ascending: false }).limit(3),
+    // Legacy fallback table
+    admin.from('daily_health_metrics')
+      .select('metric_date, garmin_hrv_nightly_avg, garmin_body_battery_high, garmin_stress_avg, garmin_sleep_score, steps, resting_hr')
+      .eq('user_id', userId).gte('metric_date', sevenAgo).order('metric_date', { ascending: true }),
   ])
 
-  const health = (healthRes.data ?? []) as HealthRow[]
+  let health = (healthRes.data ?? []) as HealthRow[]
   const sleep = (sleepRes.data ?? []) as SleepRow[]
   const stepsData = (stepsRes.data ?? []) as StepsRow[]
   const activities = (actsRes.data ?? []) as ActivityRow[]
   const weights = (weightRes.data ?? []) as WeightRow[]
 
-  if (health.length === 0 && sleep.length === 0) {
+  // If the new garmin_daily_health_metrics table is empty, map legacy rows into the same shape
+  if (health.length === 0) {
+    type LegacyRow = {
+      metric_date: string
+      garmin_hrv_nightly_avg: number | null
+      garmin_body_battery_high: number | null
+      garmin_stress_avg: number | null
+      garmin_sleep_score: number | null
+      steps: number | null
+      resting_hr: number | null
+    }
+    health = ((legacyRes.data ?? []) as LegacyRow[]).map(r => ({
+      metric_date: r.metric_date,
+      hrv_avg: r.garmin_hrv_nightly_avg,
+      hrv_status: null,
+      stress_avg: r.garmin_stress_avg,
+      body_battery_end: r.garmin_body_battery_high,
+      respiration_avg_bpm: null,
+      spo2_avg: null,
+      training_readiness_score: null,
+      training_readiness_label: null,
+      training_status_phase: null,
+    }))
+  }
+
+  if (health.length === 0 && sleep.length === 0 && activities.length === 0) {
     return NextResponse.json({ error: 'No data available to analyse' }, { status: 422 })
   }
 
