@@ -45,7 +45,21 @@ ALTER TABLE profiles
 --   { name: string, distance_km: number, target_sec: number, race_date: string }
 
 -- -----------------------------------------------------------------------------
--- 3. garmin_daily_health_metrics — add Training Readiness columns if missing
+-- 3. garmin_weight_snapshots — ensure both weight_grams and weight_kg exist
+--    sync_once.py writes weight_grams; old rows may only have weight_kg
+-- -----------------------------------------------------------------------------
+ALTER TABLE garmin_weight_snapshots
+    ADD COLUMN IF NOT EXISTS weight_grams     NUMERIC(10,1),
+    ADD COLUMN IF NOT EXISTS weight_kg        NUMERIC(8,3),
+    ADD COLUMN IF NOT EXISTS muscle_mass_grams NUMERIC(10,1),
+    ADD COLUMN IF NOT EXISTS bone_mass_grams  NUMERIC(10,1);
+
+-- Back-fill weight_kg from weight_grams for any rows that only have one
+UPDATE garmin_weight_snapshots SET weight_kg = weight_grams / 1000 WHERE weight_kg IS NULL AND weight_grams IS NOT NULL;
+UPDATE garmin_weight_snapshots SET weight_grams = weight_kg * 1000 WHERE weight_grams IS NULL AND weight_kg IS NOT NULL;
+
+-- -----------------------------------------------------------------------------
+-- 5. garmin_daily_health_metrics — add Training Readiness columns if missing
 --    (added by sync_once.py but may not be in schema yet)
 -- -----------------------------------------------------------------------------
 ALTER TABLE garmin_daily_health_metrics

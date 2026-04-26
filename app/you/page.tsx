@@ -332,14 +332,33 @@ export default function YouPage() {
       let parsed: WeightEntry[] = []
 
       // Primary: dedicated weigh-ins table
-      // Note: sync writes weight_grams (integer grams); older rows had weight_kg.
-      // We select both and prefer weight_grams.
-      const { data: weightRaw, error: weightErr } = await supabase
-        .from('garmin_weight_snapshots')
-        .select('weigh_date, weight_grams, weight_kg, body_fat_pct, muscle_mass_grams, muscle_mass_kg, bone_mass_grams, bone_mass_kg, raw_payload')
-        .eq('user_id', user.id)
-        .gte('weigh_date', ninetyDaysAgoDate)
-        .order('weigh_date', { ascending: true })
+      // sync_once.py writes weight_grams (grams as integer) AND weight_kg.
+      // Older rows may only have weight_kg. raw_payload always has weight_kg too.
+      // We try the full column list; if the column doesn't exist Supabase errors —
+      // in that case we retry with just weight_kg + raw_payload.
+      let weightRaw: Record<string, unknown>[] | null = null
+      let weightErr: { message: string } | null = null;
+      {
+        const res1 = await supabase
+          .from('garmin_weight_snapshots')
+          .select('weigh_date, weight_grams, weight_kg, body_fat_pct, muscle_mass_grams, muscle_mass_kg, bone_mass_grams, bone_mass_kg, raw_payload')
+          .eq('user_id', user.id)
+          .gte('weigh_date', ninetyDaysAgoDate)
+          .order('weigh_date', { ascending: true })
+        if (!res1.error) {
+          weightRaw = (res1.data ?? []) as Record<string, unknown>[]
+        } else {
+          // weight_grams or other column may not exist — fall back to minimal select
+          const res2 = await supabase
+            .from('garmin_weight_snapshots')
+            .select('weigh_date, weight_kg, body_fat_pct, muscle_mass_kg, bone_mass_kg, raw_payload')
+            .eq('user_id', user.id)
+            .gte('weigh_date', ninetyDaysAgoDate)
+            .order('weigh_date', { ascending: true })
+          weightRaw = (res2.data ?? []) as Record<string, unknown>[]
+          weightErr = res2.error
+        }
+      }
 
       if (!weightErr && (weightRaw ?? []).length > 0) {
         parsed = (weightRaw ?? []).flatMap(row => {
@@ -351,10 +370,13 @@ export default function YouPage() {
             bone_mass_grams: number | null; bone_mass_kg: number | null
             raw_payload: Record<string, unknown> | null
           }
-          // Use weight_grams if present (synced by sync_once.py), else fall back to weight_kg column
-          const grams = r.weight_grams ?? (r.weight_kg != null ? r.weight_kg * 1000 : null)
-          if (!grams || grams <= 0) return []   // skip malformed rows
           const raw = r.raw_payload ?? {}
+          // Priority: weight_grams col → weight_kg col → raw_payload.weight_kg
+          const rawPayloadKg = Number(raw.weight_kg ?? raw.weightKg) || null
+          const grams = r.weight_grams
+            ?? (r.weight_kg != null && r.weight_kg > 0 ? r.weight_kg * 1000 : null)
+            ?? (rawPayloadKg != null && rawPayloadKg > 0 ? (rawPayloadKg > 500 ? rawPayloadKg : rawPayloadKg * 1000) : null)
+          if (!grams || grams <= 0) return []
           return [{
             weigh_date: r.weigh_date,
             weight_grams: grams,
