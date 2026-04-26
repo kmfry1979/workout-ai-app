@@ -273,6 +273,7 @@ export default function YouPage() {
   const [weightWeekOffset, setWeightWeekOffset] = useState(0)
   const [weightMonthOffset, setWeightMonthOffset] = useState(0)
   const [weightYearOffset, setWeightYearOffset] = useState(0)
+  const [showWeightModal, setShowWeightModal] = useState(false)
 
   useEffect(() => {
     const load = async () => {
@@ -316,38 +317,34 @@ export default function YouPage() {
         .order('metric_date', { ascending: true })
       setMetrics((met ?? []) as DailyMetric[])
 
-      // Weight data — from daily_health_metrics.body_composition (already synced)
-      // Format: { "weight_kg": 108.6, "body_fat_pct": 36.5 }
+      // Weight data — from garmin_weight_snapshots (dedicated weigh-ins API)
       const ninetyDaysAgoDate = ninetyDaysAgo.toISOString().split('T')[0]
-      const { data: bodyCompRaw } = await supabase
-        .from('daily_health_metrics')
-        .select('metric_date, body_composition')
+      const { data: weightRaw } = await supabase
+        .from('garmin_weight_snapshots')
+        .select('weigh_date, weight_kg, body_fat_pct, muscle_mass_kg, bone_mass_kg, raw_payload')
         .eq('user_id', user.id)
-        .gte('metric_date', ninetyDaysAgoDate)
-        .not('body_composition', 'is', null)
-        .order('metric_date', { ascending: true })
+        .gte('weigh_date', ninetyDaysAgoDate)
+        .order('weigh_date', { ascending: true })
 
-      const parsed: WeightEntry[] = []
-      for (const row of (bodyCompRaw ?? [])) {
-        const bc = (row as { metric_date: string; body_composition: Record<string, unknown> | null }).body_composition
-        if (!bc) continue
-        // Primary format from sync: { weight_kg, body_fat_pct }
-        const weightKg = Number(bc.weight_kg ?? bc.weightKg ?? bc.weight)
-        if (!weightKg || weightKg <= 0) continue
-        // Garmin sometimes returns grams (>500 is definitely grams, e.g. 82000)
-        const weightKgNorm = weightKg > 500 ? weightKg / 1000 : weightKg
-        parsed.push({
-          weigh_date: (row as { metric_date: string }).metric_date,
-          weight_grams: weightKgNorm * 1000,
-          bmi: Number(bc.bmi) || null,
-          body_fat_pct: Number(bc.body_fat_pct ?? bc.bodyFatPct ?? bc.percentFat ?? bc.bodyFat) || null,
-          body_water_pct: Number(bc.body_water_pct ?? bc.bodyWaterPct ?? bc.percentHydration) || null,
-          muscle_mass_grams: Number(bc.muscle_mass_kg ?? bc.muscleMassKg) > 0
-            ? Number(bc.muscle_mass_kg ?? bc.muscleMassKg) * 1000 : null,
-          bone_mass_grams: Number(bc.bone_mass_kg ?? bc.boneMassKg) > 0
-            ? Number(bc.bone_mass_kg ?? bc.boneMassKg) * 1000 : null,
-        })
-      }
+      const parsed: WeightEntry[] = (weightRaw ?? []).map(row => {
+        const r = row as {
+          weigh_date: string; weight_kg: number; body_fat_pct: number | null
+          muscle_mass_kg: number | null; bone_mass_kg: number | null
+          raw_payload: Record<string, unknown> | null
+        }
+        const raw = r.raw_payload ?? {}
+        return {
+          weigh_date: r.weigh_date,
+          weight_grams: r.weight_kg * 1000,
+          bmi: null, // calculated from height
+          body_fat_pct: r.body_fat_pct ?? (Number(raw.percentFat) || null),
+          body_water_pct: Number(raw.percentHydration) || null,
+          muscle_mass_grams: r.muscle_mass_kg ? r.muscle_mass_kg * 1000
+            : (Number(raw.muscleMassGrams) > 0 ? Number(raw.muscleMassGrams) : null),
+          bone_mass_grams: r.bone_mass_kg ? r.bone_mass_kg * 1000
+            : (Number(raw.boneMassGrams) > 0 ? Number(raw.boneMassGrams) : null),
+        }
+      })
       setWeightEntries(parsed)
 
       setLoading(false)
@@ -712,11 +709,80 @@ export default function YouPage() {
           </Section>
         )}
 
-        {/* Weight & Body Composition */}
+        {/* Weight — compact tile, click for modal */}
         {latestWeightKg != null && (
-          <Section title="⚖️ Weight & Body Composition">
-            {/* Current weight (stone/lb) + deltas */}
-            <div className="grid grid-cols-3 gap-4">
+          <Section title="⚖️ Weight">
+            <button
+              onClick={() => setShowWeightModal(true)}
+              className="w-full text-left"
+            >
+              <div className="bg-gray-800/60 rounded-2xl p-4 flex items-start justify-between active:bg-gray-700/60 transition-colors">
+                <div className="flex-1">
+                  <p className="text-white font-bold text-3xl leading-none">{fmtStoneLb(latestWeightKg)}</p>
+                  <p className="text-gray-500 text-xs mt-1">{latestWeightKg.toFixed(1)} kg</p>
+                  {/* Change row */}
+                  {delta7 != null && (
+                    <p className={`text-sm font-medium mt-2 ${delta7 < -0.05 ? 'text-green-400' : delta7 > 0.05 ? 'text-red-400' : 'text-gray-400'}`}>
+                      {delta7 >= 0 ? '+' : '−'}{fmtWeightDelta(delta7)} <span className="text-gray-500 text-xs font-normal">since last week</span>
+                    </p>
+                  )}
+                  <div className="flex gap-4 mt-3">
+                    {bmi != null && (
+                      <div>
+                        <p className="text-gray-500 text-[10px]">BMI</p>
+                        <p className="font-bold text-sm" style={{ color: bmiColor }}>{bmi.toFixed(1)}</p>
+                      </div>
+                    )}
+                    {latestBodyFat != null && (
+                      <div>
+                        <p className="text-gray-500 text-[10px]">Body Fat</p>
+                        <p className="text-white font-bold text-sm">{latestBodyFat.toFixed(1)}%</p>
+                      </div>
+                    )}
+                    {latestMuscleMassKg != null && (
+                      <div>
+                        <p className="text-gray-500 text-[10px]">Muscle</p>
+                        <p className="text-white font-bold text-sm">{latestMuscleMassKg.toFixed(1)} kg</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div className="flex flex-col items-end gap-2 ml-3">
+                  {latestWeight?.weigh_date && (
+                    <p className="text-gray-600 text-[10px]">
+                      Updated {new Date(latestWeight.weigh_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+                    </p>
+                  )}
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-5 h-5 text-gray-600 mt-1">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                  </svg>
+                </div>
+              </div>
+            </button>
+          </Section>
+        )}
+
+        {/* Weight modal */}
+        {showWeightModal && latestWeightKg != null && (
+          <div className="fixed inset-0 z-50 flex flex-col" style={{ background: 'rgba(0,0,0,0.7)' }} onClick={() => setShowWeightModal(false)}>
+            <div className="mt-auto bg-gray-950 rounded-t-3xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+              {/* Modal header */}
+              <div className="flex items-center justify-between px-5 pt-5 pb-3 border-b border-gray-800 flex-shrink-0">
+                <div>
+                  <h2 className="text-white font-bold text-lg">⚖️ Weight & Body Composition</h2>
+                  <p className="text-gray-500 text-xs mt-0.5">
+                    {latestWeight?.weigh_date && `Updated ${new Date(latestWeight.weigh_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}`}
+                  </p>
+                </div>
+                <button onClick={() => setShowWeightModal(false)} className="text-gray-400 hover:text-white p-1">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-6 h-6">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              <div className="overflow-y-auto flex-1 px-5 py-4 space-y-5 pb-8">
+                {/* Current weight (stone/lb) + deltas */}
+                <div className="grid grid-cols-3 gap-4">
               <div className="bg-gray-800/60 rounded-xl p-3">
                 <p className="text-gray-500 text-xs mb-1">Current</p>
                 <p className="text-white font-bold text-lg leading-tight">{fmtStoneLb(latestWeightKg)}</p>
@@ -923,7 +989,9 @@ export default function YouPage() {
                 )}
               </div>
             )}
-          </Section>
+              </div>{/* end modal scroll */}
+            </div>{/* end modal sheet */}
+          </div>
         )}
 
         {/* Monthly fitness trend */}
