@@ -15,6 +15,7 @@ export default function ProfilePage() {
   const [displayName, setDisplayName] = useState('')
   const [dateOfBirth, setDateOfBirth] = useState('')
   const [heightCm, setHeightCm] = useState('')
+  const [fiveKTime, setFiveKTime] = useState('')   // "MM:SS" display format
   const [selectedProvider, setSelectedProvider] = useState('')
 
   useEffect(() => {
@@ -29,7 +30,7 @@ export default function ProfilePage() {
 
       const { data, error } = await supabase
         .from('profiles')
-        .select('display_name, name, workout_provider, date_of_birth, height_cm')
+        .select('display_name, name, workout_provider, date_of_birth, height_cm, threshold_5k_sec')
         .eq('user_id', user.id)
         .maybeSingle()
 
@@ -44,6 +45,10 @@ export default function ProfilePage() {
         setSelectedProvider(data.workout_provider ?? '')
         setDateOfBirth((data as { date_of_birth?: string | null }).date_of_birth ?? '')
         setHeightCm(String((data as { height_cm?: number | null }).height_cm ?? ''))
+        const sec5k = (data as { threshold_5k_sec?: number | null }).threshold_5k_sec
+        if (sec5k && sec5k > 0) {
+          setFiveKTime(`${Math.floor(sec5k / 60)}:${String(sec5k % 60).padStart(2, '0')}`)
+        }
       }
 
       setLoading(false)
@@ -88,12 +93,22 @@ export default function ProfilePage() {
       return
     }
 
+    // Parse "MM:SS" or "M:SS" into total seconds
+    const parse5kSec = (t: string): number | null => {
+      const m = t.trim().match(/^(\d{1,2}):(\d{2})$/)
+      if (!m) return null
+      const s = parseInt(m[1]) * 60 + parseInt(m[2])
+      return s > 60 && s < 7200 ? s : null
+    }
+
     const payload: Record<string, string | number> = {
       display_name: trimmedName,
       name: trimmedName,
     }
     if (dateOfBirth) payload.date_of_birth = dateOfBirth
     if (heightCm && !isNaN(parseFloat(heightCm))) payload.height_cm = parseFloat(heightCm)
+    const fiveKSec = parse5kSec(fiveKTime)
+    if (fiveKSec) payload.threshold_5k_sec = fiveKSec
 
     if (existingProfile) {
       const { error } = await supabase
@@ -230,6 +245,19 @@ export default function ProfilePage() {
               value={heightCm}
               onChange={(e) => setHeightCm(e.target.value)}
               placeholder="e.g. 178"
+            />
+
+            <label className="block text-sm font-medium mb-1">
+              5K Reference Time <span className="text-gray-400 font-normal">(sets pace zone boundaries on activity pages)</span>
+            </label>
+            <p className="text-xs text-gray-400 mb-2">Enter your current 5K time or target. Used to compute threshold-based pace zones (Z1–Z6). Format: MM:SS e.g. 39:04</p>
+            <input
+              type="text"
+              className="w-full rounded-lg border p-3 mb-4 font-mono"
+              value={fiveKTime}
+              onChange={(e) => setFiveKTime(e.target.value)}
+              placeholder="e.g. 39:04"
+              pattern="\d{1,2}:\d{2}"
             />
 
             <button

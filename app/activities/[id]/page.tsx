@@ -1208,17 +1208,25 @@ export default function ActivityDetailPage() {
         .order('set_order', { ascending: true })
       if (setsData && setsData.length > 0) setExerciseSets(setsData as ExerciseSet[])
 
-      // Fetch race predictions from profile (used for pace zone boundaries)
+      // Fetch pace zone config from profile:
+      // - threshold_5k_sec: manually set by user (highest priority)
+      // - race_predictions: populated by Garmin sync (fallback)
       const { data: profileData } = await supabase
         .from('profiles')
-        .select('race_predictions')
+        .select('threshold_5k_sec, race_predictions')
         .eq('user_id', session.session.user.id)
         .single()
-      if (profileData?.race_predictions) {
-        const preds = Array.isArray(profileData.race_predictions)
-          ? profileData.race_predictions
-          : (profileData.race_predictions as Record<string, unknown>).racePredictions
-        if (Array.isArray(preds)) setRacePredictions(preds as Record<string, unknown>[])
+      if (profileData) {
+        const manual5k = (profileData as { threshold_5k_sec?: number | null }).threshold_5k_sec
+        if (manual5k && manual5k > 0) {
+          // Manual 5K time set by user — highest priority, stored as [{ distance:5, time:sec }]
+          setRacePredictions([{ distance: 5, time: manual5k }])
+        } else if (profileData.race_predictions) {
+          const preds = Array.isArray(profileData.race_predictions)
+            ? profileData.race_predictions
+            : (profileData.race_predictions as Record<string, unknown>).racePredictions
+          if (Array.isArray(preds)) setRacePredictions(preds as Record<string, unknown>[])
+        }
       }
 
       // Fetch recent activities of same type for comparison (last 20, excluding this one)

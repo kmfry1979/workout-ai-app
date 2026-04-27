@@ -34,9 +34,13 @@ CREATE POLICY daily_insights_select_own
 -- 2. profiles — add weekly_plan, race_goal, and race_predictions JSONB columns
 -- -----------------------------------------------------------------------------
 ALTER TABLE profiles
-    ADD COLUMN IF NOT EXISTS weekly_plan      JSONB,
-    ADD COLUMN IF NOT EXISTS race_goal        JSONB,
-    ADD COLUMN IF NOT EXISTS race_predictions JSONB;
+    ADD COLUMN IF NOT EXISTS weekly_plan       JSONB,
+    ADD COLUMN IF NOT EXISTS race_goal         JSONB,
+    ADD COLUMN IF NOT EXISTS race_predictions  JSONB,
+    ADD COLUMN IF NOT EXISTS threshold_5k_sec  INTEGER;
+-- threshold_5k_sec: user-entered 5K time in seconds (e.g. 39:04 = 2344)
+-- Used as highest-priority source for pace zone boundaries on activity pages.
+-- Set via Profile → "5K Reference Time" field.
 -- race_predictions shape: array of { distance: number (km), time: number (sec), ... }
 -- populated by sync_once.py → sync_profile_predictions → api.get_race_predictions()
 
