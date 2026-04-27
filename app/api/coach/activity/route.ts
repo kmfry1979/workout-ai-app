@@ -111,6 +111,8 @@ HEADLINE: [One punchy sentence (max 15 words) comparing this session to their ty
 
 PACE_INSIGHT: [${isRun ? `2-3 sentences specifically about their pacing strategy and effort distribution. Reference the avg pace number. Describe how their HR zones reveal pacing pattern — e.g. did they go out hard and fade, hold steady, or build? What does the pace + zone combo suggest about how the session was run? Write conversationally: "You held a steady Z2 effort for most of this run…". No bullet points.` : `2-3 sentences about the effort distribution and intensity pattern for this ${type} session. Reference HR zones and training effect. Describe the effort shape (steady, intervals, progressive etc). Write conversationally.`}]
 
+HR_INSIGHT: [2-3 sentences specifically about heart rate patterns. Mention the dominant HR zone by name and percentage. Comment on how HR drifted or held steady over the activity. Reference the avg (${avgHr ?? '–'} bpm) and max (${maxHr ?? '–'} bpm) HR and what they indicate about effort level. Write conversationally, e.g. "Your heart rate stayed steady in the Endurance zone for most of the run (78%)…". No bullet points.]
+
 BODY:
 [Paragraph 1 — 3-4 sentences: Describe what the data says. Reference HR zones, pace/distance vs recent average, training effect score (1=minor, 5=overreaching). Be specific with numbers.]
 
@@ -168,12 +170,14 @@ export async function POST(req: NextRequest) {
   if (!text) return NextResponse.json({ error: data.error?.message ?? 'No response from Groq' }, { status: 502 })
 
   // Parse structured sections from the response
-  const headlineMatch = text.match(/HEADLINE:\s*(.+?)(?:\n|PACE_INSIGHT:|$)/i)
-  const paceInsightMatch = text.match(/PACE_INSIGHT:\s*([\s\S]+?)(?:\n\n|BODY:|$)/i)
+  const headlineMatch = text.match(/HEADLINE:\s*(.+?)(?:\n|PACE_INSIGHT:|HR_INSIGHT:|$)/i)
+  const paceInsightMatch = text.match(/PACE_INSIGHT:\s*([\s\S]+?)(?:\n\n|HR_INSIGHT:|BODY:|$)/i)
+  const hrInsightMatch = text.match(/HR_INSIGHT:\s*([\s\S]+?)(?:\n\n|BODY:|$)/i)
   const bodyMatch = text.match(/BODY:\s*([\s\S]+)/i)
   const headline = headlineMatch?.[1]?.trim() ?? text.split('\n')[0].trim()
   const paceInsight = paceInsightMatch?.[1]?.trim().replace(/\n/g, ' ') ?? null
+  const hrInsight = hrInsightMatch?.[1]?.trim().replace(/\n/g, ' ') ?? null
   const bodyText = bodyMatch?.[1]?.trim() ?? text.replace(/HEADLINE:.+\n?/i, '').trim()
 
-  return NextResponse.json({ headline, paceInsight, analysis: bodyText })
+  return NextResponse.json({ headline, paceInsight, hrInsight, analysis: bodyText })
 }

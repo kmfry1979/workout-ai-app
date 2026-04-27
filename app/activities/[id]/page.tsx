@@ -346,6 +346,207 @@ function RelativeEffort({ raw }: { raw: Record<string, unknown> }) {
   )
 }
 
+// ─── Heart Rate Chart + AI Card ───────────────────────────────────────────────
+
+type LapPoint = { cumDistKm: number; hr: number }
+
+/** Build per-lap HR points from raw_payload.laps */
+function buildLapHRPoints(laps: unknown[]): LapPoint[] {
+  const points: LapPoint[] = []
+  let cumDist = 0
+  for (const lap of laps) {
+    const l = lap as Record<string, unknown>
+    const hr = Number(l.averageHR ?? l.avgHR ?? l.averageHeartRate ?? 0)
+    const dist = Number(l.distance ?? l.totalDistance ?? 0)
+    if (hr > 0 && dist > 0) {
+      cumDist += dist / 1000
+      points.push({ cumDistKm: cumDist, hr })
+    }
+  }
+  return points
+}
+
+function HRChart({ points, avgHr, maxHr }: { points: LapPoint[]; avgHr: number; maxHr: number }) {
+  if (points.length < 2) return null
+
+  const W = 300
+  const H = 80
+  const PAD_L = 2
+  const PAD_R = 2
+  const PAD_T = 6
+  const PAD_B = 2
+
+  const totalDist = points[points.length - 1].cumDistKm
+  const hrValues = points.map(p => p.hr)
+  const hrMin = Math.max(40, Math.min(...hrValues) - 15)
+  const hrMax = Math.max(...hrValues) + 10
+
+  const xScale = (dist: number) => PAD_L + ((dist / totalDist) * (W - PAD_L - PAD_R))
+  const yScale = (hr: number) => PAD_T + ((hrMax - hr) / (hrMax - hrMin)) * (H - PAD_T - PAD_B)
+
+  // Build step-chart path: hold each lap's HR until the next lap starts
+  let pathD = ''
+  for (let i = 0; i < points.length; i++) {
+    const x = xScale(points[i].cumDistKm)
+    const y = yScale(points[i].hr)
+    if (i === 0) {
+      pathD += `M ${xScale(0)},${y} L ${x},${y}`
+    } else {
+      // Step: vertical then horizontal
+      const prevY = yScale(points[i - 1].hr)
+      pathD += ` L ${x},${prevY} L ${x},${y}`
+    }
+  }
+  // Extend to end then close area
+  pathD += ` L ${xScale(totalDist)},${yScale(points[points.length - 1].hr)}`
+  const closePath = ` L ${xScale(totalDist)},${H} L ${xScale(0)},${H} Z`
+
+  const avgY = yScale(avgHr)
+
+  // X-axis tick every 1 km
+  const kmTicks: number[] = []
+  for (let km = 1; km <= Math.floor(totalDist); km++) kmTicks.push(km)
+
+  // Y-axis grid lines at round HR values
+  const hrStep = (hrMax - hrMin) > 60 ? 20 : 10
+  const hrGridLines: number[] = []
+  for (let h = Math.ceil(hrMin / hrStep) * hrStep; h <= hrMax; h += hrStep) hrGridLines.push(h)
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: 80 }} preserveAspectRatio="none">
+      {/* Subtle HR grid lines */}
+      {hrGridLines.map(h => (
+        <line key={h} x1={PAD_L} y1={yScale(h)} x2={W - PAD_R} y2={yScale(h)}
+          stroke="#374151" strokeWidth="0.5" strokeDasharray="2,3" />
+      ))}
+
+      {/* Filled area */}
+      <path d={pathD + closePath} fill="rgba(239,68,68,0.25)" />
+
+      {/* Top line */}
+      <path d={pathD} fill="none" stroke="#f87171" strokeWidth="1.5" strokeLinejoin="round" />
+
+      {/* Avg HR dashed line */}
+      <line x1={PAD_L} y1={avgY} x2={W - PAD_R} y2={avgY}
+        stroke="#ffffff" strokeWidth="1" strokeDasharray="4,3" opacity="0.6" />
+
+      {/* X-axis km ticks */}
+      {kmTicks.map(km => (
+        <line key={km} x1={xScale(km)} y1={H - 3} x2={xScale(km)} y2={H}
+          stroke="#4b5563" strokeWidth="0.8" />
+      ))}
+    </svg>
+  )
+}
+
+function HRCard({ activity, raw, hrInsight, hrInsightLoading }: {
+  activity: GarminActivity
+  raw: Record<string, unknown>
+  hrInsight: string | null
+  hrInsightLoading: boolean
+}) {
+  const avgHr = activity.avg_hr
+  const maxHr = activity.max_hr
+  if (!avgHr && !maxHr && !hrInsight && !hrInsightLoading) return null
+
+  const laps = raw.laps as unknown[] | undefined
+  const points = laps && laps.length >= 2 ? buildLapHRPoints(laps) : []
+
+  // HR zone distribution for the stats row
+  const hrZoneSec = [1, 2, 3, 4, 5].map(i => {
+    const val = raw[`hrTimeInZone_${i}`] ?? raw[`timeInHRZone${i}`]
+    return val != null ? Number(val) : 0
+  })
+  const totalHRSec = hrZoneSec.reduce((s, v) => s + v, 0)
+  const dominantZoneIdx = totalHRSec > 0 ? hrZoneSec.indexOf(Math.max(...hrZoneSec)) : -1
+  const HR_ZONE_NAMES = ['Warm Up', 'Easy', 'Aerobic', 'Threshold', 'Max']
+  const HR_ZONE_COLORS_LIST = ['#6b7280', '#3b82f6', '#22c55e', '#f97316', '#ef4444']
+
+  return (
+    <div className="bg-gray-900 rounded-2xl overflow-hidden">
+      {/* Chart area */}
+      {points.length >= 2 && avgHr && maxHr && (
+        <div className="px-4 pt-4 pb-1">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-white font-semibold text-sm">Heart Rate</h3>
+            {dominantZoneIdx >= 0 && (
+              <span className="text-[10px] px-2 py-0.5 rounded-full font-medium"
+                style={{ backgroundColor: HR_ZONE_COLORS_LIST[dominantZoneIdx] + '33', color: HR_ZONE_COLORS_LIST[dominantZoneIdx] }}>
+                Mostly {HR_ZONE_NAMES[dominantZoneIdx]}
+              </span>
+            )}
+          </div>
+
+          {/* Y-axis labels float left of chart */}
+          <div className="relative">
+            <div className="absolute left-0 top-0 bottom-0 flex flex-col justify-between pointer-events-none" style={{ width: 28 }}>
+              <span className="text-gray-600 text-[8px] leading-none">{maxHr}</span>
+              <span className="text-gray-600 text-[8px] leading-none">{avgHr}</span>
+              <span className="text-gray-600 text-[8px] leading-none">bpm</span>
+            </div>
+            <div className="ml-7">
+              <HRChart points={points} avgHr={avgHr} maxHr={maxHr} />
+            </div>
+          </div>
+
+          {/* X-axis distance labels */}
+          <div className="ml-7 flex justify-between mt-0.5">
+            {[...Array(Math.floor(points[points.length - 1].cumDistKm) + 1)].map((_, i) => (
+              i % 1 === 0 && (
+                <span key={i} className="text-gray-600 text-[8px]">
+                  {i === 0 ? '' : `${i} km`}
+                </span>
+              )
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Stats row */}
+      <div className="px-4 py-3 flex gap-6 border-t border-gray-800">
+        {avgHr && (
+          <div>
+            <p className="text-gray-500 text-[10px] uppercase tracking-wider">Avg Heart Rate</p>
+            <p className="text-white font-bold text-xl">{avgHr} <span className="text-gray-500 text-sm font-normal">bpm</span></p>
+          </div>
+        )}
+        {maxHr && (
+          <div>
+            <p className="text-gray-500 text-[10px] uppercase tracking-wider">Max Heart Rate</p>
+            <p className="text-white font-bold text-xl">{maxHr} <span className="text-gray-500 text-sm font-normal">bpm</span></p>
+          </div>
+        )}
+        {dominantZoneIdx >= 0 && totalHRSec > 0 && (
+          <div>
+            <p className="text-gray-500 text-[10px] uppercase tracking-wider">Peak Zone</p>
+            <p className="font-bold text-xl" style={{ color: HR_ZONE_COLORS_LIST[dominantZoneIdx] }}>
+              Z{dominantZoneIdx + 1}
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* Athlete Intelligence — HR insight */}
+      {(hrInsight || hrInsightLoading) && (
+        <div className="px-4 pb-4 pt-0 border-t border-gray-800">
+          <div className="flex items-center gap-2 mb-2 pt-3">
+            <div className="w-5 h-5 bg-orange-500 rounded-full flex items-center justify-center text-[10px] font-bold text-white shrink-0">A</div>
+            <p className="text-orange-400 text-[10px] font-bold uppercase tracking-wider">Athlete Intelligence</p>
+          </div>
+          {hrInsightLoading && !hrInsight ? (
+            <div className="flex items-center gap-2 text-gray-500 text-xs">
+              <span className="w-3 h-3 border border-orange-400 border-t-transparent rounded-full animate-spin" />
+              Analysing heart rate...
+            </div>
+          ) : hrInsight ? (
+            <p className="text-gray-200 text-sm leading-relaxed">{hrInsight}</p>
+          ) : null}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Pace Zones Card ──────────────────────────────────────────────────────────
 //
 // Zone boundaries are derived from the user's Garmin 5K predicted time, matching
@@ -913,6 +1114,7 @@ export default function ActivityDetailPage() {
   const [treadmillNotes, setTreadmillNotes] = useState<string | null>(null)
   const [editModalOpen, setEditModalOpen] = useState(false)
   const [paceInsight, setPaceInsight] = useState<string | null>(null)
+  const [hrInsight, setHrInsight] = useState<string | null>(null)
   const [exerciseSets, setExerciseSets] = useState<ExerciseSet[]>([])
   const [racePredictions, setRacePredictions] = useState<Record<string, unknown>[] | null>(null)
 
@@ -998,6 +1200,7 @@ export default function ActivityDetailPage() {
         else {
           setAnalysis({ headline: d.headline ?? '', body: d.analysis ?? '' })
           if (d.paceInsight) setPaceInsight(d.paceInsight)
+          if (d.hrInsight) setHrInsight(d.hrInsight)
           setAnalysisGeneratedAt(new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }))
         }
       })
@@ -1055,8 +1258,7 @@ export default function ActivityDetailPage() {
     activity.duration_sec ? { label: 'Duration', value: formatDuration(activity.duration_sec) } : null,
     activity.distance_m && activity.distance_m > 100 ? { label: 'Distance', value: formatDistance(activity.distance_m) } : null,
     avgSpeed && activity.distance_m && activity.distance_m > 100 ? { label: 'Avg Pace', value: formatPace(avgSpeed), highlight: true } : null,
-    activity.avg_hr ? { label: 'Avg HR', value: `${activity.avg_hr} bpm` } : null,
-    activity.max_hr ? { label: 'Max HR', value: `${activity.max_hr} bpm` } : null,
+    // Avg HR / Max HR shown in dedicated HRCard above — skip here to avoid duplication
     activity.calories ? { label: 'Calories', value: `${Math.round(activity.calories)} kcal` } : null,
     steps && steps > 20 ? { label: 'Steps', value: steps.toLocaleString() } : null,
   ].filter(Boolean) as { label: string; value: string; highlight?: boolean }[]
@@ -1133,6 +1335,9 @@ export default function ActivityDetailPage() {
             </div>
           </button>
         </div>
+
+        {/* Heart Rate chart + AI HR insight */}
+        <HRCard activity={activity} raw={raw} hrInsight={hrInsight} hrInsightLoading={analysisLoading} />
 
         {/* Pace Zones + Athlete Intelligence pace insight */}
         <PaceZonesCard activity={activity} raw={raw} treadmillSegments={treadmillSegments} paceInsight={paceInsight} paceInsightLoading={analysisLoading} racePredictions={racePredictions} />
