@@ -589,25 +589,42 @@ function extract5KTimeSec(preds: Record<string, unknown>[] | null): number | nul
 }
 
 /**
- * Derive threshold pace (sec/km) from multiple sources, best → fallback.
+ * Derive 5K-equivalent pace (sec/km) from multiple sources, best → fallback.
+ * All zone boundaries are expressed as multiples of this pace (calibrated from
+ * Garmin's actual zone model with a 5K reference).
  *
  * Priority:
- *   1. raw.lactateThresholdSpeed (m/s) — Garmin embeds this directly in every
- *      activity summary and it is exactly the speed Garmin uses for pace zones.
- *   2. profiles.race_predictions 5K time ÷ 5 — good proxy for threshold pace.
- *   3. null — zone bars won't show if neither is available.
+ *   1. raw.lactateThresholdSpeed (m/s) — Garmin embeds this in some activities.
+ *      Multiply by 1.065 to convert LT pace to equivalent 5K pace (LT is ~6.5%
+ *      slower than 5K pace for most runners).
+ *   2. profiles.race_predictions 5K time ÷ 5 — direct 5K pace.
+ *   3. raw.vO2MaxValue → estimate 5K pace via Jack Daniels VDOT formula:
+ *      5K_pace ≈ 947 × e^(−0.01991 × VO2Max)  (error ±15 sec/km, ±1 zone width)
+ *      This works for VO2Max range 20–80 ml/kg/min.
  */
 function deriveThresholdPaceSec(
   raw: Record<string, unknown>,
   racePredictions: Record<string, unknown>[] | null,
-): { paceSec: number; source: 'lts' | '5k' } | null {
-  // Source 1: lactateThresholdSpeed from activity payload (m/s → sec/km)
+): { paceSec: number; source: 'lts' | '5k' | 'vo2max' } | null {
+  // Source 1: lactateThresholdSpeed (m/s) → LT pace → equivalent 5K pace
   const lts = Number(raw.lactateThresholdSpeed ?? raw.lactateThresholdBikingSpeed ?? 0)
-  if (lts > 0.5) return { paceSec: Math.round(1000 / lts), source: 'lts' }
+  if (lts > 0.5) {
+    const ltPaceSec = 1000 / lts
+    // LT pace is ~6.5% slower than 5K pace; convert so zone multipliers remain valid
+    return { paceSec: Math.round(ltPaceSec / 1.065), source: 'lts' }
+  }
 
   // Source 2: race predictions 5K time → pace
   const p5kSec = extract5KTimeSec(racePredictions)
   if (p5kSec) return { paceSec: Math.round(p5kSec / 5), source: '5k' }
+
+  // Source 3: VO2Max → estimated 5K pace (Jack Daniels VDOT empirical formula)
+  const vo2max = Number(raw.vO2MaxValue ?? raw.vo2MaxValue ?? raw.maxVO2 ?? 0)
+  if (vo2max >= 20 && vo2max <= 85) {
+    // Formula calibrated from Daniels VDOT table (35→472, 45→372, 60→287 sec/km)
+    const estimated5kPaceSec = Math.round(947 * Math.exp(-0.01991 * vo2max))
+    return { paceSec: estimated5kPaceSec, source: 'vo2max' }
+  }
 
   return null
 }
@@ -720,6 +737,8 @@ function PaceZonesCard({ activity, raw, treadmillSegments, paceInsight, paceInsi
   const thresholdLabel = thresholdPaceSec
     ? thresholdSource === 'lts'
       ? `Lactate threshold ${formatSecPerKm(thresholdPaceSec)} /km`
+      : thresholdSource === 'vo2max'
+      ? `VO₂Max-estimated 5K pace ${formatSecPerKm(thresholdPaceSec)} /km`
       : `Predicted 5K pace ${formatSecPerKm(thresholdPaceSec)} /km`
     : avgPaceSecPerKm
     ? `Avg pace ${formatSecPerKm(avgPaceSecPerKm)} /km (no threshold data)`
