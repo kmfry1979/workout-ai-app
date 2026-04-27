@@ -392,7 +392,7 @@ export default function YouPage() {
           }]
         })
       } else {
-        // Fallback: body_composition JSONB on daily_health_metrics
+        // Fallback A: body_composition JSONB on daily_health_metrics (old sync table)
         const { data: bodyCompRaw } = await supabase
           .from('daily_health_metrics')
           .select('metric_date, body_composition')
@@ -418,6 +418,45 @@ export default function YouPage() {
               ? Number(bc.bone_mass_kg ?? bc.boneMassKg) * 1000 : null,
           })
         }
+
+        // Fallback B: garmin_daily_health_metrics.raw_payload.summary — the newer sync
+        // table. The daily Garmin summary sometimes includes bodyWeight (in grams) or
+        // bodyCompositionSummary. This covers dates synced after the schema update.
+        const { data: gdhmRows } = await supabase
+          .from('garmin_daily_health_metrics')
+          .select('metric_date, raw_payload')
+          .eq('user_id', user.id)
+          .gte('metric_date', ninetyDaysAgoDate)
+          .order('metric_date', { ascending: true })
+
+        const existingDates = new Set(parsed.map(p => p.weigh_date))
+        for (const row of (gdhmRows ?? [])) {
+          const rp = row as { metric_date: string; raw_payload: Record<string, unknown> | null }
+          if (existingDates.has(rp.metric_date)) continue  // already have weight for this date
+          const summary = (rp.raw_payload?.summary ?? {}) as Record<string, unknown>
+          // Garmin embeds weight in grams in bodyWeight or under bodyCompositionSummary
+          const bodyComp = (summary.bodyCompositionSummary ?? summary.bodyComposition ?? {}) as Record<string, unknown>
+          const rawGrams = Number(summary.bodyWeight ?? summary.weighInGrams ?? bodyComp.weight ?? 0)
+          const rawKg = Number(summary.bodyWeightKg ?? bodyComp.weight_kg ?? bodyComp.weightKg ?? 0)
+          let weightKg = 0
+          if (rawGrams > 500) weightKg = rawGrams / 1000
+          else if (rawKg > 0) weightKg = rawKg
+          if (weightKg < 30 || weightKg > 300) continue  // sanity check
+          existingDates.add(rp.metric_date)
+          parsed.push({
+            weigh_date: rp.metric_date,
+            weight_grams: weightKg * 1000,
+            bmi: Number(bodyComp.bmi) || null,
+            body_fat_pct: Number(bodyComp.percentFat ?? bodyComp.bodyFatPct) || null,
+            body_water_pct: Number(bodyComp.percentHydration ?? bodyComp.bodyWaterPct) || null,
+            muscle_mass_grams: Number(bodyComp.muscleMassKg ?? bodyComp.muscle_mass_kg) > 0
+              ? Number(bodyComp.muscleMassKg ?? bodyComp.muscle_mass_kg) * 1000 : null,
+            bone_mass_grams: Number(bodyComp.boneMassKg ?? bodyComp.bone_mass_kg) > 0
+              ? Number(bodyComp.boneMassKg ?? bodyComp.bone_mass_kg) * 1000 : null,
+          })
+        }
+        // Sort chronologically after merging both fallback sources
+        parsed.sort((a, b) => a.weigh_date.localeCompare(b.weigh_date))
       }
       setWeightEntries(parsed)
 

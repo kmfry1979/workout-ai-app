@@ -663,13 +663,14 @@ function calcTreadmillPaceZones(segments: TreadmillSegment[], boundaryBase: numb
   return zones
 }
 
-function PaceZonesCard({ activity, raw, treadmillSegments, paceInsight, paceInsightLoading, racePredictions }: {
+function PaceZonesCard({ activity, raw, treadmillSegments, paceInsight, paceInsightLoading, racePredictions, recentActivities }: {
   activity: GarminActivity
   raw: Record<string, unknown>
   treadmillSegments: TreadmillSegment[] | null
   paceInsight: string | null
   paceInsightLoading: boolean
   racePredictions: Record<string, unknown>[] | null
+  recentActivities: Record<string, unknown>[]
 }) {
   const avgSpeed = raw.averageSpeed as number | undefined
   const maxSpeed = raw.maxSpeed as number | undefined
@@ -679,8 +680,18 @@ function PaceZonesCard({ activity, raw, treadmillSegments, paceInsight, paceInsi
 
   // ── Determine zone distribution source ──────────────────────────────────────
   const laps = raw.laps as unknown[] | undefined
+
+  // If this activity has no VO2Max (e.g. treadmill), borrow from a recent GPS run.
+  // recentActivities is already loaded; GPS runs always have vO2MaxValue in raw_payload.
+  const vo2maxFromRecent = recentActivities
+    .map(a => Number((a.raw_payload as Record<string, unknown>)?.vO2MaxValue ?? 0))
+    .find(v => v >= 20 && v <= 85) ?? 0
+  const rawForThreshold: Record<string, unknown> = vo2maxFromRecent > 0 && !Number(raw.vO2MaxValue)
+    ? { ...raw, vO2MaxValue: vo2maxFromRecent }
+    : raw
+
   // Derive threshold pace from lactateThresholdSpeed (best) or 5K prediction (fallback)
-  const thresholdResult = deriveThresholdPaceSec(raw, racePredictions)
+  const thresholdResult = deriveThresholdPaceSec(rawForThreshold, racePredictions)
   const thresholdPaceSec = thresholdResult?.paceSec ?? null   // sec/km at lactate threshold
   const thresholdSource = thresholdResult?.source ?? null
 
@@ -1392,7 +1403,7 @@ export default function ActivityDetailPage() {
         <HRCard activity={activity} raw={raw} hrInsight={hrInsight} hrInsightLoading={analysisLoading} />
 
         {/* Pace Zones + Athlete Intelligence pace insight */}
-        <PaceZonesCard activity={activity} raw={raw} treadmillSegments={treadmillSegments} paceInsight={paceInsight} paceInsightLoading={analysisLoading} racePredictions={racePredictions} />
+        <PaceZonesCard activity={activity} raw={raw} treadmillSegments={treadmillSegments} paceInsight={paceInsight} paceInsightLoading={analysisLoading} racePredictions={racePredictions} recentActivities={recentActivities} />
 
         {/* Primary stats */}
         {stats.length > 0 && (

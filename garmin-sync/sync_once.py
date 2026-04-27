@@ -1668,6 +1668,35 @@ def main() -> None:
         upsert_daily_steps(SUPABASE_USER_ID, connection_id, date_iso, summary, steps_buckets)
         upsert_intraday_body_battery(SUPABASE_USER_ID, connection_id, date_iso, bb)
 
+        # Extract weight from daily summary as a fallback for accounts where
+        # get_weigh_ins returns nothing. Garmin embeds bodyWeight (grams) in the
+        # daily user summary when a weigh-in was recorded that day.
+        daily_weight_g = as_float(
+            pick_first(summary, ["bodyWeight", "weighInGrams", "weightInGrams"])
+        )
+        if daily_weight_g and daily_weight_g > 10000:  # grams, sanity: >10 kg
+            weight_kg_val = round(daily_weight_g / 1000, 3)
+            bc = pick_first(summary, ["bodyCompositionSummary", "bodyComposition"]) or {}
+            bc = bc if isinstance(bc, dict) else {}
+            weight_snapshot = {
+                "user_id": SUPABASE_USER_ID,
+                "connection_id": connection_id,
+                "weigh_date": date_iso,
+                "weight_grams": round(daily_weight_g, 1),
+                "weight_kg": weight_kg_val,
+                "bmi": as_float(bc.get("bmi")),
+                "body_fat_pct": as_float(pick_first(bc, ["percentFat", "bodyFatPct", "body_fat_pct"])),
+                "body_water_pct": as_float(pick_first(bc, ["percentHydration", "bodyWaterPct"])),
+                "muscle_mass_grams": round(as_float(bc.get("muscleMassKg", 0) or 0) * 1000, 1) or None,
+                "muscle_mass_kg": as_float(bc.get("muscleMassKg")),
+                "bone_mass_grams": round(as_float(bc.get("boneMassKg", 0) or 0) * 1000, 1) or None,
+                "bone_mass_kg": as_float(bc.get("boneMassKg")),
+                "source_type": "DAILY_SUMMARY",
+                "raw_payload": {"summary_weight": daily_weight_g, "body_composition": bc},
+            }
+            supabase_upsert("garmin_weight_snapshots", weight_snapshot, on_conflict="connection_id,weigh_date")
+            print(f"  Weight from daily summary {date_iso}: {weight_kg_val:.1f} kg")
+
     progress("Syncing recent activities", stage="activities", percent=95)
     activity_count = sync_recent_garmin_activities(api, SUPABASE_USER_ID, connection_id)
 
