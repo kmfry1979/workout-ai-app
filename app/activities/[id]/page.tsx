@@ -577,7 +577,7 @@ const HR_ZONE_DEFS = [
 /** Extract 5K predicted time in seconds from race_predictions JSONB array */
 function extract5KTimeSec(preds: Record<string, unknown>[] | null): number | null {
   if (!preds) return null
-  // Garmin returns distance in metres (5000) or as a race type string
+  // Garmin returns distance in metres (5000), km (5), or as a race type string
   const p = preds.find(r =>
     r.distance === 5000 || r.distance === 5 ||
     String(r.raceType ?? r.type ?? r.name ?? '').toLowerCase().includes('5k') ||
@@ -586,6 +586,30 @@ function extract5KTimeSec(preds: Record<string, unknown>[] | null): number | nul
   if (!p) return null
   const sec = Number(p.time ?? p.seconds ?? p.predictedTime ?? p.timeSec ?? 0)
   return sec > 60 ? sec : null
+}
+
+/**
+ * Derive threshold pace (sec/km) from multiple sources, best → fallback.
+ *
+ * Priority:
+ *   1. raw.lactateThresholdSpeed (m/s) — Garmin embeds this directly in every
+ *      activity summary and it is exactly the speed Garmin uses for pace zones.
+ *   2. profiles.race_predictions 5K time ÷ 5 — good proxy for threshold pace.
+ *   3. null — zone bars won't show if neither is available.
+ */
+function deriveThresholdPaceSec(
+  raw: Record<string, unknown>,
+  racePredictions: Record<string, unknown>[] | null,
+): { paceSec: number; source: 'lts' | '5k' } | null {
+  // Source 1: lactateThresholdSpeed from activity payload (m/s → sec/km)
+  const lts = Number(raw.lactateThresholdSpeed ?? raw.lactateThresholdBikingSpeed ?? 0)
+  if (lts > 0.5) return { paceSec: Math.round(1000 / lts), source: 'lts' }
+
+  // Source 2: race predictions 5K time → pace
+  const p5kSec = extract5KTimeSec(racePredictions)
+  if (p5kSec) return { paceSec: Math.round(p5kSec / 5), source: '5k' }
+
+  return null
 }
 
 /** Compute seconds spent in each of the 6 Garmin-style pace zones from lap data */
@@ -638,17 +662,19 @@ function PaceZonesCard({ activity, raw, treadmillSegments, paceInsight, paceInsi
 
   // ── Determine zone distribution source ──────────────────────────────────────
   const laps = raw.laps as unknown[] | undefined
-  const p5kSec = extract5KTimeSec(racePredictions)  // e.g. 2344 → 5K pace = 468.8 sec/km
-  const p5kPaceSec = p5kSec ? p5kSec / 5 : null     // sec per km at 5K race pace
+  // Derive threshold pace from lactateThresholdSpeed (best) or 5K prediction (fallback)
+  const thresholdResult = deriveThresholdPaceSec(raw, racePredictions)
+  const thresholdPaceSec = thresholdResult?.paceSec ?? null   // sec/km at lactate threshold
+  const thresholdSource = thresholdResult?.source ?? null
 
   type ZoneMode = 'gps_pace' | 'treadmill_pace' | 'hr_fallback'
   let mode: ZoneMode = 'hr_fallback'
   let zoneSec: number[] = []
   let zoneDefs: typeof PACE_ZONE_DEFS | typeof HR_ZONE_DEFS = HR_ZONE_DEFS
 
-  if (laps && laps.length > 0 && p5kPaceSec) {
-    // Best case: real GPS laps + 5K prediction → authentic Garmin-style pace zones
-    zoneSec = calcPaceZonesFromLaps(laps, p5kPaceSec)
+  if (laps && laps.length > 0 && thresholdPaceSec) {
+    // Best case: real GPS laps + threshold pace → authentic Garmin-style pace zones
+    zoneSec = calcPaceZonesFromLaps(laps, thresholdPaceSec)
     if (zoneSec.some(v => v > 0)) {
       mode = 'gps_pace'
       zoneDefs = PACE_ZONE_DEFS
@@ -656,10 +682,10 @@ function PaceZonesCard({ activity, raw, treadmillSegments, paceInsight, paceInsi
   }
 
   if (mode === 'hr_fallback' && treadmillSegments && treadmillSegments.length > 0) {
-    // Treadmill: use 5K prediction as boundary base (same zones as GPS) if available,
-    // otherwise fall back to avg pace for boundary. This ensures 7:19/km avg maps to
-    // Z4 Threshold rather than Z3 Tempo when the user's threshold pace is ~7:49/km.
-    const boundaryBase = p5kPaceSec ?? avgPaceSecPerKm
+    // Treadmill: use threshold pace as boundary base (same zones as GPS) if available,
+    // otherwise fall back to avg pace. This ensures 7:19/km avg maps to Z4 Threshold
+    // rather than Z3 Tempo when lactate threshold is ~7:49/km.
+    const boundaryBase = thresholdPaceSec ?? avgPaceSecPerKm
     const computed = boundaryBase ? calcTreadmillPaceZones(treadmillSegments, boundaryBase) : []
     if (computed.some(v => v > 0)) {
       zoneSec = computed
@@ -680,8 +706,8 @@ function PaceZonesCard({ activity, raw, treadmillSegments, paceInsight, paceInsi
   const totalSec = zoneSec.reduce((s, v) => s + v, 0)
   if (!isRun && totalSec === 0 && !paceInsight && !paceInsightLoading) return null
 
-  // Pace range labels — use the same boundary base that was used to compute zones
-  const labelBase = mode !== 'hr_fallback' ? (p5kPaceSec ?? avgPaceSecPerKm) : null
+  // Pace range labels — use threshold pace (same base used to compute zones)
+  const labelBase = mode !== 'hr_fallback' ? (thresholdPaceSec ?? avgPaceSecPerKm) : null
   const paceRangeLabels: string[] = labelBase
     ? PACE_ZONE_DEFS.map((z, i) => {
         if (i === 0) return `<${formatSecPerKm(labelBase * z.hiMult)} /km`
@@ -690,16 +716,18 @@ function PaceZonesCard({ activity, raw, treadmillSegments, paceInsight, paceInsi
       })
     : Array(zoneDefs.length).fill('')
 
-  // Subtitle line
-  const subtitleBase = p5kSec
-    ? `Based on predicted 5K of ${Math.floor(p5kSec / 60)}:${String(Math.round(p5kSec % 60)).padStart(2, '0')}`
+  // Subtitle line — shows which data source determined zone boundaries
+  const thresholdLabel = thresholdPaceSec
+    ? thresholdSource === 'lts'
+      ? `Lactate threshold ${formatSecPerKm(thresholdPaceSec)} /km`
+      : `Predicted 5K pace ${formatSecPerKm(thresholdPaceSec)} /km`
     : avgPaceSecPerKm
-    ? `Based on avg pace ${formatSecPerKm(avgPaceSecPerKm)} /km`
+    ? `Avg pace ${formatSecPerKm(avgPaceSecPerKm)} /km (no threshold data)`
     : null
   const subtitle = mode === 'gps_pace'
-    ? subtitleBase ?? 'GPS pace zones'
+    ? thresholdLabel ?? 'GPS lap data'
     : mode === 'treadmill_pace'
-    ? `Treadmill · ${subtitleBase ?? 'speed segments'}`
+    ? `Treadmill · ${thresholdLabel ?? 'speed segments'}`
     : 'Heart rate zone distribution'
 
   return (

@@ -31,11 +31,14 @@ CREATE POLICY daily_insights_select_own
     USING (auth.uid() = user_id);
 
 -- -----------------------------------------------------------------------------
--- 2. profiles — add weekly_plan and race_goal JSONB columns
+-- 2. profiles — add weekly_plan, race_goal, and race_predictions JSONB columns
 -- -----------------------------------------------------------------------------
 ALTER TABLE profiles
-    ADD COLUMN IF NOT EXISTS weekly_plan JSONB,
-    ADD COLUMN IF NOT EXISTS race_goal   JSONB;
+    ADD COLUMN IF NOT EXISTS weekly_plan      JSONB,
+    ADD COLUMN IF NOT EXISTS race_goal        JSONB,
+    ADD COLUMN IF NOT EXISTS race_predictions JSONB;
+-- race_predictions shape: array of { distance: number (km), time: number (sec), ... }
+-- populated by sync_once.py → sync_profile_predictions → api.get_race_predictions()
 
 -- weekly_plan shape:
 --   { generated_at: string, week_start: string,
