@@ -1451,6 +1451,33 @@ def sync_profile_predictions(api: Garmin, user_id: str) -> None:
         print(f"  Warning: get_personal_record failed: {err2}")
 
 
+_RUN_TYPE_KEYWORDS = frozenset({
+    "running", "run", "jogging", "jog", "trail_running", "treadmill",
+    "indoor_running", "track_running", "virtual_run", "ultra_run",
+    "obstacle_run", "street_running",
+})
+
+
+def fetch_activity_laps(api: Garmin, activity_id: str) -> list[dict[str, Any]]:
+    """
+    Fetch lap/split data for a single activity.
+    Returns list of lapDTO dicts, each with at minimum averageSpeed + duration.
+    """
+    success, data, err = safe_call(api.get_activity_splits, activity_id)
+    if not success or not isinstance(data, dict):
+        if err:
+            print(f"    Note: splits unavailable for activity {activity_id}: {err}")
+        return []
+    laps = (
+        data.get("lapDTOs")
+        or data.get("laps")
+        or data.get("splits")
+        or data.get("splitSummaries")
+        or []
+    )
+    return [lap for lap in laps if isinstance(lap, dict)]
+
+
 def sync_recent_garmin_activities(api: Garmin, user_id: str, connection_id: str) -> int:
     success, activities, err = safe_call(api.get_activities, 0, ACTIVITY_LIMIT)
     if not success or activities is None:
@@ -1477,6 +1504,18 @@ def sync_recent_garmin_activities(api: Garmin, user_id: str, connection_id: str)
         if not row["provider_activity_id"]:
             continue
 
+        act_type_lower = str(row.get("activity_type") or "").lower()
+        is_run = any(kw in act_type_lower for kw in _RUN_TYPE_KEYWORDS)
+
+        # For running activities, fetch lap/split data so the app can compute
+        # real pace zone distribution (Garmin-style threshold-based zones).
+        if is_run:
+            laps = fetch_activity_laps(api, row["provider_activity_id"])
+            if laps:
+                row["raw_payload"] = {**row["raw_payload"], "laps": laps}
+                print(f"    Fetched {len(laps)} laps for activity {row['provider_activity_id']}")
+            throttle()
+
         try:
             supabase_upsert("garmin_activities", row, on_conflict="connection_id,provider_activity_id")
             inserted += 1
@@ -1485,8 +1524,7 @@ def sync_recent_garmin_activities(api: Garmin, user_id: str, connection_id: str)
             continue
 
         # Sync exercise sets for strength-type activities
-        act_type = str(row.get("activity_type") or "").lower()
-        if any(kw in act_type for kw in STRENGTH_KEYWORDS):
+        if any(kw in act_type_lower for kw in STRENGTH_KEYWORDS):
             try:
                 sync_activity_exercise_sets(api, user_id, row["provider_activity_id"])
             except Exception as exc:

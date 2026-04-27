@@ -346,69 +346,168 @@ function RelativeEffort({ raw }: { raw: Record<string, unknown> }) {
   )
 }
 
-// ─── HR Zones + Pace Card ──────────────────────────────────────────────────────
-// NOTE: Garmin's activity summary API returns HR zone times (hrTimeInZone_1..5),
-// not pace zone times. We show them accurately as "HR Zones". True pace zone
-// distribution (e.g. Garmin's threshold-based pace zones) would require fetching
-// detailed per-second activity metrics — a future enhancement.
+// ─── Pace Zones Card ──────────────────────────────────────────────────────────
+//
+// Zone boundaries are derived from the user's Garmin 5K predicted time, matching
+// Garmin's threshold-based pace zone model. Distribution comes from lap data
+// fetched during sync (raw_payload.laps).  Falls back to HR zone distribution
+// when lap data isn't available (older activities or non-GPS runs).
 
-const HR_ZONE_COLORS = ['#6b7280', '#3b82f6', '#22c55e', '#f97316', '#ef4444']
-const HR_ZONE_LABELS = ['Z1 Warm Up', 'Z2 Easy', 'Z3 Aerobic', 'Z4 Threshold', 'Z5 Max']
-const HR_ZONE_DESCRIPTIONS = ['Very light', 'Light effort', 'Moderate effort', 'Hard effort', 'Maximum effort']
+// Zone definitions ordered fastest → slowest (Garmin display order: Z6 at top)
+// Multipliers are of 5K pace (sec/km). Smaller multiplier = faster speed.
+const PACE_ZONE_DEFS = [
+  { label: 'Z6 Anaerobic', shortLabel: 'Z6', color: '#7c3aed', loMult: 0,    hiMult: 0.86  },
+  { label: 'Z5 VO₂ Max',   shortLabel: 'Z5', color: '#ef4444', loMult: 0.86, hiMult: 0.92  },
+  { label: 'Z4 Threshold', shortLabel: 'Z4', color: '#f97316', loMult: 0.92, hiMult: 0.98  },
+  { label: 'Z3 Tempo',     shortLabel: 'Z3', color: '#22c55e', loMult: 0.98, hiMult: 1.10  },
+  { label: 'Z2 Aerobic',   shortLabel: 'Z2', color: '#3b82f6', loMult: 1.10, hiMult: 1.28  },
+  { label: 'Z1 Recovery',  shortLabel: 'Z1', color: '#6b7280', loMult: 1.28, hiMult: Infinity },
+] as const
 
-function PaceZonesCard({ activity, raw, treadmillSegments, paceInsight, paceInsightLoading }: {
+// HR zone fallback (5 zones, index 0 = Z1 slowest)
+const HR_ZONE_DEFS = [
+  { label: 'Z1 Warm Up',   color: '#6b7280' },
+  { label: 'Z2 Easy',      color: '#3b82f6' },
+  { label: 'Z3 Aerobic',   color: '#22c55e' },
+  { label: 'Z4 Threshold', color: '#f97316' },
+  { label: 'Z5 Max',       color: '#ef4444' },
+] as const
+
+/** Extract 5K predicted time in seconds from race_predictions JSONB array */
+function extract5KTimeSec(preds: Record<string, unknown>[] | null): number | null {
+  if (!preds) return null
+  // Garmin returns distance in metres (5000) or as a race type string
+  const p = preds.find(r =>
+    r.distance === 5000 || r.distance === 5 ||
+    String(r.raceType ?? r.type ?? r.name ?? '').toLowerCase().includes('5k') ||
+    String(r.raceType ?? r.type ?? r.name ?? '').toLowerCase().includes('5000')
+  )
+  if (!p) return null
+  const sec = Number(p.time ?? p.seconds ?? p.predictedTime ?? p.timeSec ?? 0)
+  return sec > 60 ? sec : null
+}
+
+/** Compute seconds spent in each of the 6 Garmin-style pace zones from lap data */
+function calcPaceZonesFromLaps(laps: unknown[], p5kSec: number): number[] {
+  const zones = [0, 0, 0, 0, 0, 0]  // index 0 = Z6 (fastest)
+  for (const lap of laps) {
+    const l = lap as Record<string, unknown>
+    const speed = Number(l.averageSpeed ?? l.avgSpeed ?? 0)
+    if (speed <= 0) continue
+    const paceSec = 1000 / speed    // sec/km
+    const dur = Number(l.duration ?? l.movingDuration ?? l.elapsedDuration ?? 0)
+    if (dur <= 0) continue
+    // Match pace to zone (boundaries are multiples of P5K)
+    const idx = PACE_ZONE_DEFS.findIndex(z => paceSec >= p5kSec * z.loMult && paceSec < p5kSec * z.hiMult)
+    if (idx >= 0) zones[idx] += dur
+  }
+  return zones
+}
+
+/** Compute seconds in 5 treadmill pace zones from segment speeds (relative to avg pace) */
+function calcTreadmillPaceZones(segments: TreadmillSegment[], avgPaceSecPerKm: number): number[] {
+  // Use 5-zone relative model for treadmill (no GPS, no 5K prediction needed)
+  const bounds = [avgPaceSecPerKm * 0.86, avgPaceSecPerKm * 0.92, avgPaceSecPerKm * 0.98, avgPaceSecPerKm * 1.10, avgPaceSecPerKm * 1.28]
+  const zones = [0, 0, 0, 0, 0, 0]
+  for (const seg of segments) {
+    if (!seg.speed_kmh || seg.speed_kmh <= 0) continue
+    const segPace = 3600 / seg.speed_kmh
+    const dur = (seg.end_min - seg.start_min) * 60
+    const idx = PACE_ZONE_DEFS.findIndex(z => segPace >= avgPaceSecPerKm * z.loMult && segPace < avgPaceSecPerKm * z.hiMult)
+    if (idx >= 0) zones[idx] += dur
+  }
+  return zones
+}
+
+function PaceZonesCard({ activity, raw, treadmillSegments, paceInsight, paceInsightLoading, racePredictions }: {
   activity: GarminActivity
   raw: Record<string, unknown>
   treadmillSegments: TreadmillSegment[] | null
   paceInsight: string | null
   paceInsightLoading: boolean
+  racePredictions: Record<string, unknown>[] | null
 }) {
   const avgSpeed = raw.averageSpeed as number | undefined
   const maxSpeed = raw.maxSpeed as number | undefined
-
-  // HR zone times (seconds) from Garmin — this is what the API actually provides
-  const hrZoneSec = [1, 2, 3, 4, 5].map(i => {
-    const val = raw[`hrTimeInZone_${i}`] ?? raw[`timeInHRZone${i}`]
-    return val != null ? Number(val) : 0
-  })
+  const isRun = activity.distance_m != null && activity.distance_m > 100 && avgSpeed
 
   const avgPaceSecPerKm = avgSpeed && avgSpeed > 0 ? Math.round(1000 / avgSpeed) : null
 
-  // For treadmill: derive zone distribution from segment speeds since GPS isn't used
-  let zoneSec = hrZoneSec
-  const usingTreadmillPace = treadmillSegments && treadmillSegments.length > 0 && avgPaceSecPerKm
-  if (usingTreadmillPace) {
-    const b = avgPaceSecPerKm!
-    const bounds = [b * 1.25, b * 1.10, b * 1.00, b * 0.90]
-    const computed = [0, 0, 0, 0, 0]
-    for (const seg of treadmillSegments!) {
-      if (!seg.speed_kmh || seg.speed_kmh <= 0) continue
-      const segPace = 3600 / seg.speed_kmh
-      const dur = (seg.end_min - seg.start_min) * 60
-      const idx = segPace > bounds[0] ? 0 : segPace > bounds[1] ? 1 : segPace > bounds[2] ? 2 : segPace > bounds[3] ? 3 : 4
-      computed[idx] += dur
+  // ── Determine zone distribution source ──────────────────────────────────────
+  const laps = raw.laps as unknown[] | undefined
+  const p5kSec = extract5KTimeSec(racePredictions)  // e.g. 2344 → 5K pace = 468.8 sec/km
+  const p5kPaceSec = p5kSec ? p5kSec / 5 : null     // sec per km at 5K race pace
+
+  type ZoneMode = 'gps_pace' | 'treadmill_pace' | 'hr_fallback'
+  let mode: ZoneMode = 'hr_fallback'
+  let zoneSec: number[] = []
+  let zoneDefs: typeof PACE_ZONE_DEFS | typeof HR_ZONE_DEFS = HR_ZONE_DEFS
+
+  if (laps && laps.length > 0 && p5kPaceSec) {
+    // Best case: real GPS laps + 5K prediction → authentic Garmin-style pace zones
+    zoneSec = calcPaceZonesFromLaps(laps, p5kPaceSec)
+    if (zoneSec.some(v => v > 0)) {
+      mode = 'gps_pace'
+      zoneDefs = PACE_ZONE_DEFS
     }
-    if (computed.some(v => v > 0)) zoneSec = computed
+  }
+
+  if (mode === 'hr_fallback' && treadmillSegments && treadmillSegments.length > 0 && avgPaceSecPerKm) {
+    // Treadmill: speed segments → relative pace zones
+    const computed = calcTreadmillPaceZones(treadmillSegments, avgPaceSecPerKm)
+    if (computed.some(v => v > 0)) {
+      zoneSec = computed
+      mode = 'treadmill_pace'
+      zoneDefs = PACE_ZONE_DEFS
+    }
+  }
+
+  if (mode === 'hr_fallback') {
+    // Fallback: HR zone times from Garmin, shown in ascending order (Z1 slow → Z5 fast)
+    zoneSec = [1, 2, 3, 4, 5].map(i => {
+      const val = raw[`hrTimeInZone_${i}`] ?? raw[`timeInHRZone${i}`]
+      return val != null ? Number(val) : 0
+    })
+    zoneDefs = HR_ZONE_DEFS
   }
 
   const totalSec = zoneSec.reduce((s, v) => s + v, 0)
-  const isRun = activity.distance_m != null && activity.distance_m > 100 && avgSpeed
   if (!isRun && totalSec === 0 && !paceInsight && !paceInsightLoading) return null
 
-  // Dominant zone
-  const dominantIdx = zoneSec.indexOf(Math.max(...zoneSec))
+  // Build pace range labels for GPS/treadmill pace zones (not HR fallback)
+  const paceRangeLabels: string[] = mode !== 'hr_fallback' && p5kPaceSec
+    ? PACE_ZONE_DEFS.map((z, i) => {
+        if (i === 0) return `<${formatSecPerKm(p5kPaceSec * z.hiMult)} /km`
+        if (i === 5) return `>${formatSecPerKm(p5kPaceSec * z.loMult)} /km`
+        return `${formatSecPerKm(p5kPaceSec * z.loMult)}–${formatSecPerKm(p5kPaceSec * z.hiMult)} /km`
+      })
+    : mode === 'treadmill_pace' && avgPaceSecPerKm
+    ? PACE_ZONE_DEFS.map((z, i) => {
+        if (i === 0) return `<${formatSecPerKm(avgPaceSecPerKm * z.hiMult)} /km`
+        if (i === 5) return `>${formatSecPerKm(avgPaceSecPerKm * z.loMult)} /km`
+        return `${formatSecPerKm(avgPaceSecPerKm * z.loMult)}–${formatSecPerKm(avgPaceSecPerKm * z.hiMult)} /km`
+      })
+    : Array(zoneDefs.length).fill('')
+
+  // Subtitle line
+  const subtitle = mode === 'gps_pace' && p5kSec
+    ? `Based on predicted 5K of ${Math.floor(p5kSec / 60)}:${String(Math.round(p5kSec % 60)).padStart(2, '0')}`
+    : mode === 'treadmill_pace'
+    ? 'Based on treadmill speed segments'
+    : 'Heart rate zone distribution'
 
   return (
     <div className="bg-gray-900 rounded-2xl p-4">
       {/* Header */}
-      <div className="flex items-start justify-between mb-1">
+      <div className="flex items-start justify-between mb-0.5">
         <h3 className="text-white font-semibold text-sm">
-          {usingTreadmillPace ? 'Pace Zones' : 'HR Zones'}
+          {mode === 'hr_fallback' ? 'HR Zones' : 'Pace Zones'}
         </h3>
-        {!usingTreadmillPace && totalSec > 0 && (
+        {mode === 'hr_fallback' && totalSec > 0 && (
           <span className="text-[9px] text-gray-600 uppercase tracking-wider">from heart rate</span>
         )}
       </div>
+      <p className="text-[10px] text-gray-500 mb-4">{subtitle}</p>
 
       {/* Avg + Best pace */}
       {isRun && avgSpeed && (
@@ -423,45 +522,53 @@ function PaceZonesCard({ activity, raw, treadmillSegments, paceInsight, paceInsi
               <p className="text-orange-400 font-bold text-2xl leading-tight">{formatPace(maxSpeed)}</p>
             </div>
           )}
-          {totalSec > 0 && (
-            <div>
-              <p className="text-gray-500 text-[10px] uppercase tracking-wider">Dominant Zone</p>
-              <p className="font-bold text-2xl leading-tight" style={{ color: HR_ZONE_COLORS[dominantIdx] }}>
-                {HR_ZONE_LABELS[dominantIdx].split(' ')[0]}
-              </p>
-            </div>
-          )}
         </div>
       )}
 
-      {/* Horizontal zone bars */}
+      {/* Zone bars */}
       {totalSec > 0 && (
         <div className="space-y-2.5 mb-4">
           {zoneSec.map((sec, i) => {
+            const def = (zoneDefs as readonly { label: string; color: string }[])[i]
             const pct = totalSec > 0 ? Math.round((sec / totalSec) * 100) : 0
             const mins = Math.floor(sec / 60)
-            const timeLabel = sec > 0 ? (mins >= 60 ? `${Math.floor(mins/60)}h ${mins%60}m` : `${mins}m`) : ''
+            const durLabel = sec > 0
+              ? (mins >= 60 ? `${Math.floor(mins/60)}h ${mins%60}m` : mins > 0 ? `${mins}m` : '<1m')
+              : ''
             return (
               <div key={i} className="flex items-center gap-2">
-                <span className="text-gray-400 text-xs w-24 shrink-0">{HR_ZONE_LABELS[i]}</span>
+                <span className="text-gray-400 text-xs w-24 shrink-0">{def.label}</span>
                 <div className="flex-1 bg-gray-800 rounded-full h-5 overflow-hidden">
                   <div
                     className="h-5 rounded-full flex items-center justify-end pr-1.5 transition-all duration-700"
                     style={{
-                      width: `${Math.max(pct > 0 ? 8 : 0, pct)}%`,
-                      backgroundColor: HR_ZONE_COLORS[i],
-                      minWidth: pct > 0 ? 26 : 0,
+                      width: `${Math.max(pct > 0 ? 6 : 0, pct)}%`,
+                      backgroundColor: def.color,
+                      minWidth: pct > 0 ? 24 : 0,
                     }}
                   >
-                    {pct >= 10 && <span className="text-white text-[9px] font-bold">{pct}%</span>}
+                    {pct >= 12 && <span className="text-white text-[9px] font-bold">{pct}%</span>}
                   </div>
                 </div>
-                <span className="text-gray-600 text-[9px] w-16 text-right shrink-0 leading-tight">
-                  {pct > 0 ? `${pct}% · ${timeLabel}` : ''}
+                <span className="text-gray-600 text-[9px] w-24 text-right shrink-0 leading-tight">
+                  {pct > 0 ? (paceRangeLabels[i] || durLabel) : ''}
                 </span>
               </div>
             )
           })}
+        </div>
+      )}
+
+      {/* Pace range legend (GPS mode only, shown below bars) */}
+      {mode === 'gps_pace' && totalSec > 0 && (
+        <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 mb-3 border-t border-gray-800 pt-3">
+          {PACE_ZONE_DEFS.map((z, i) => (
+            <div key={i} className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: z.color }} />
+              <span className="text-gray-500 text-[9px]">{z.label}</span>
+              <span className="text-gray-600 text-[9px] ml-auto">{paceRangeLabels[i]}</span>
+            </div>
+          ))}
         </div>
       )}
 
@@ -807,6 +914,7 @@ export default function ActivityDetailPage() {
   const [editModalOpen, setEditModalOpen] = useState(false)
   const [paceInsight, setPaceInsight] = useState<string | null>(null)
   const [exerciseSets, setExerciseSets] = useState<ExerciseSet[]>([])
+  const [racePredictions, setRacePredictions] = useState<Record<string, unknown>[] | null>(null)
 
   useEffect(() => {
     const load = async () => {
@@ -834,6 +942,19 @@ export default function ActivityDetailPage() {
         .eq('activity_id', id)
         .order('set_order', { ascending: true })
       if (setsData && setsData.length > 0) setExerciseSets(setsData as ExerciseSet[])
+
+      // Fetch race predictions from profile (used for pace zone boundaries)
+      const { data: profileData } = await supabase
+        .from('profiles')
+        .select('race_predictions')
+        .eq('user_id', session.session.user.id)
+        .single()
+      if (profileData?.race_predictions) {
+        const preds = Array.isArray(profileData.race_predictions)
+          ? profileData.race_predictions
+          : (profileData.race_predictions as Record<string, unknown>).racePredictions
+        if (Array.isArray(preds)) setRacePredictions(preds as Record<string, unknown>[])
+      }
 
       // Fetch recent activities of same type for comparison (last 20, excluding this one)
       const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString()
@@ -1014,7 +1135,7 @@ export default function ActivityDetailPage() {
         </div>
 
         {/* Pace Zones + Athlete Intelligence pace insight */}
-        <PaceZonesCard activity={activity} raw={raw} treadmillSegments={treadmillSegments} paceInsight={paceInsight} paceInsightLoading={analysisLoading} />
+        <PaceZonesCard activity={activity} raw={raw} treadmillSegments={treadmillSegments} paceInsight={paceInsight} paceInsightLoading={analysisLoading} racePredictions={racePredictions} />
 
         {/* Primary stats */}
         {stats.length > 0 && (
