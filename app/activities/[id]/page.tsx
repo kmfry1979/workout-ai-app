@@ -605,16 +605,18 @@ function calcPaceZonesFromLaps(laps: unknown[], p5kSec: number): number[] {
   return zones
 }
 
-/** Compute seconds in 5 treadmill pace zones from segment speeds (relative to avg pace) */
-function calcTreadmillPaceZones(segments: TreadmillSegment[], avgPaceSecPerKm: number): number[] {
-  // Use 5-zone relative model for treadmill (no GPS, no 5K prediction needed)
-  const bounds = [avgPaceSecPerKm * 0.86, avgPaceSecPerKm * 0.92, avgPaceSecPerKm * 0.98, avgPaceSecPerKm * 1.10, avgPaceSecPerKm * 1.28]
+/**
+ * Compute seconds in 6 pace zones from treadmill speed segments.
+ * Uses 5K prediction pace as zone boundaries when available (same as GPS mode),
+ * falls back to avg pace if not.
+ */
+function calcTreadmillPaceZones(segments: TreadmillSegment[], boundaryBase: number): number[] {
   const zones = [0, 0, 0, 0, 0, 0]
   for (const seg of segments) {
     if (!seg.speed_kmh || seg.speed_kmh <= 0) continue
     const segPace = 3600 / seg.speed_kmh
     const dur = (seg.end_min - seg.start_min) * 60
-    const idx = PACE_ZONE_DEFS.findIndex(z => segPace >= avgPaceSecPerKm * z.loMult && segPace < avgPaceSecPerKm * z.hiMult)
+    const idx = PACE_ZONE_DEFS.findIndex(z => segPace >= boundaryBase * z.loMult && segPace < boundaryBase * z.hiMult)
     if (idx >= 0) zones[idx] += dur
   }
   return zones
@@ -653,9 +655,12 @@ function PaceZonesCard({ activity, raw, treadmillSegments, paceInsight, paceInsi
     }
   }
 
-  if (mode === 'hr_fallback' && treadmillSegments && treadmillSegments.length > 0 && avgPaceSecPerKm) {
-    // Treadmill: speed segments → relative pace zones
-    const computed = calcTreadmillPaceZones(treadmillSegments, avgPaceSecPerKm)
+  if (mode === 'hr_fallback' && treadmillSegments && treadmillSegments.length > 0) {
+    // Treadmill: use 5K prediction as boundary base (same zones as GPS) if available,
+    // otherwise fall back to avg pace for boundary. This ensures 7:19/km avg maps to
+    // Z4 Threshold rather than Z3 Tempo when the user's threshold pace is ~7:49/km.
+    const boundaryBase = p5kPaceSec ?? avgPaceSecPerKm
+    const computed = boundaryBase ? calcTreadmillPaceZones(treadmillSegments, boundaryBase) : []
     if (computed.some(v => v > 0)) {
       zoneSec = computed
       mode = 'treadmill_pace'
@@ -675,26 +680,26 @@ function PaceZonesCard({ activity, raw, treadmillSegments, paceInsight, paceInsi
   const totalSec = zoneSec.reduce((s, v) => s + v, 0)
   if (!isRun && totalSec === 0 && !paceInsight && !paceInsightLoading) return null
 
-  // Build pace range labels for GPS/treadmill pace zones (not HR fallback)
-  const paceRangeLabels: string[] = mode !== 'hr_fallback' && p5kPaceSec
+  // Pace range labels — use the same boundary base that was used to compute zones
+  const labelBase = mode !== 'hr_fallback' ? (p5kPaceSec ?? avgPaceSecPerKm) : null
+  const paceRangeLabels: string[] = labelBase
     ? PACE_ZONE_DEFS.map((z, i) => {
-        if (i === 0) return `<${formatSecPerKm(p5kPaceSec * z.hiMult)} /km`
-        if (i === 5) return `>${formatSecPerKm(p5kPaceSec * z.loMult)} /km`
-        return `${formatSecPerKm(p5kPaceSec * z.loMult)}–${formatSecPerKm(p5kPaceSec * z.hiMult)} /km`
-      })
-    : mode === 'treadmill_pace' && avgPaceSecPerKm
-    ? PACE_ZONE_DEFS.map((z, i) => {
-        if (i === 0) return `<${formatSecPerKm(avgPaceSecPerKm * z.hiMult)} /km`
-        if (i === 5) return `>${formatSecPerKm(avgPaceSecPerKm * z.loMult)} /km`
-        return `${formatSecPerKm(avgPaceSecPerKm * z.loMult)}–${formatSecPerKm(avgPaceSecPerKm * z.hiMult)} /km`
+        if (i === 0) return `<${formatSecPerKm(labelBase * z.hiMult)} /km`
+        if (i === 5) return `>${formatSecPerKm(labelBase * z.loMult)} /km`
+        return `${formatSecPerKm(labelBase * z.loMult)}–${formatSecPerKm(labelBase * z.hiMult)} /km`
       })
     : Array(zoneDefs.length).fill('')
 
   // Subtitle line
-  const subtitle = mode === 'gps_pace' && p5kSec
+  const subtitleBase = p5kSec
     ? `Based on predicted 5K of ${Math.floor(p5kSec / 60)}:${String(Math.round(p5kSec % 60)).padStart(2, '0')}`
+    : avgPaceSecPerKm
+    ? `Based on avg pace ${formatSecPerKm(avgPaceSecPerKm)} /km`
+    : null
+  const subtitle = mode === 'gps_pace'
+    ? subtitleBase ?? 'GPS pace zones'
     : mode === 'treadmill_pace'
-    ? 'Based on treadmill speed segments'
+    ? `Treadmill · ${subtitleBase ?? 'speed segments'}`
     : 'Heart rate zone distribution'
 
   return (
