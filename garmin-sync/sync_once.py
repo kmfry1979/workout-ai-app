@@ -580,18 +580,65 @@ def get_training_status_data(api: Garmin, date_iso: str) -> dict[str, Any]:
     return {}
 
 
+def _parse_dayview_entry(data: Any, cdate: str) -> list[dict[str, Any]]:
+    """
+    Parse a get_daily_weigh_ins (dayview) response into normalised entries.
+    The dayview endpoint can return data in several shapes depending on firmware/account:
+      • {"dateWeightList": [{calendarDate, weight, ...}]}          ← same as range endpoint
+      • {"allWeighIns": [{calendarDate, weight, ...}]}
+      • {"weight": <grams>, "calendarDate": "YYYY-MM-DD", ...}    ← flat single entry
+    """
+    if not isinstance(data, dict):
+        return []
+    results = []
+
+    def _norm(e: Any) -> dict | None:
+        if not isinstance(e, dict):
+            return None
+        w_raw = as_float(e.get("weight") or e.get("weightValue"))
+        if not w_raw or w_raw <= 0:
+            return None
+        w_kg = w_raw / 1000 if w_raw > 500 else w_raw
+        cd = e.get("calendarDate") or e.get("summaryDate") or cdate
+        return {
+            "calendarDate": cd,
+            "weight_kg": w_kg,
+            "body_fat_pct": as_float(e.get("bodyFat") or e.get("percentFat")),
+            "bmi": as_float(e.get("bmi")),
+            "body_water_pct": as_float(e.get("bodyWater")),
+            "muscle_mass_kg": (as_float(e.get("muscleMass")) or 0) / 1000 or None,
+            "bone_mass_kg": (as_float(e.get("boneMass")) or 0) / 1000 or None,
+            "source_type": e.get("sourceType") or "MANUAL",
+        }
+
+    # Shape A: list under dateWeightList or allWeighIns
+    for key in ("dateWeightList", "allWeighIns", "weighInList"):
+        lst = data.get(key)
+        if isinstance(lst, list):
+            for item in lst:
+                normed = _norm(item)
+                if normed:
+                    results.append(normed)
+            if results:
+                return results
+
+    # Shape B: flat dict with a weight field (single weigh-in for that day)
+    normed = _norm(data)
+    if normed:
+        results.append(normed)
+    return results
+
+
 def get_weigh_ins_data(api: Garmin, startdate: str, enddate: str) -> list[dict[str, Any]]:
     """
     Returns a flat list of normalised weigh-in entries for the date range.
 
-    Garmin's daily summary (already stored in daily_health_metrics.body_composition)
-    uses the format: {"weight_kg": 108.6, "body_fat_pct": 36.5}
-
-    The dedicated weight-range API uses: {"dateWeightList": [{calendarDate, weight, ...}]}
-    where weight may be in grams (>500) or kg.
-
-    We try both endpoints and normalise everything to {"calendarDate", "weight_kg",
-    "body_fat_pct"} for upsert_weight_snapshots.
+    Tries three Garmin endpoints in priority order:
+      1. /weight/range/{start}/{end}   (get_weigh_ins)
+      2. /weight/dateRange             (get_body_composition)
+      3. /weight/dayview/{date}        (get_daily_weigh_ins) — scans last 30 days
+         This endpoint hits a different backend path and sometimes returns data
+         when the range endpoint returns nothing (account/firmware dependent).
     """
     entries: list[dict[str, Any]] = []
 
@@ -623,7 +670,7 @@ def get_weigh_ins_data(api: Garmin, startdate: str, enddate: str) -> list[dict[s
         if err:
             print(f"  Warning: get_weigh_ins failed: {err}")
 
-    # Fallback: /weight/dateRange via get_body_composition
+    # Fallback 1: /weight/dateRange via get_body_composition
     if not entries:
         success2, data2, err2 = safe_call(api.get_body_composition, startdate, enddate)
         if success2 and isinstance(data2, dict):
@@ -650,6 +697,39 @@ def get_weigh_ins_data(api: Garmin, startdate: str, enddate: str) -> list[dict[s
         else:
             if err2:
                 print(f"  Warning: get_body_composition also failed: {err2}")
+
+    # Fallback 2: /weight/dayview/{date} — different backend, sometimes works when
+    # the range endpoint returns nothing (account/firmware dependent).
+    # Scan the last 30 days to pick up any recent weigh-ins.
+    if not entries:
+        print("  Trying get_daily_weigh_ins day-by-day fallback (last 30 days)...")
+        try:
+            end_dt = datetime.strptime(enddate, "%Y-%m-%d").date()
+            start_dt = max(
+                datetime.strptime(startdate, "%Y-%m-%d").date(),
+                end_dt - timedelta(days=29),  # cap at 30 days to limit API calls
+            )
+        except ValueError:
+            start_dt = end_dt = date.today()
+
+        dayview_entries: list[dict[str, Any]] = []
+        current = end_dt  # scan newest-first so we find recent data fast
+        while current >= start_dt:
+            cdate_iso = current.isoformat()
+            ok, dv_data, dv_err = safe_call(api.get_daily_weigh_ins, cdate_iso)
+            if ok:
+                parsed = _parse_dayview_entry(dv_data, cdate_iso)
+                if parsed:
+                    print(f"    dayview {cdate_iso}: found {len(parsed)} entry/entries")
+                    dayview_entries.extend(parsed)
+            current -= timedelta(days=1)
+            time.sleep(0.3)  # gentle throttle — 30 calls, don't hammer the API
+
+        if dayview_entries:
+            print(f"  get_daily_weigh_ins dayview found {len(dayview_entries)} total entries")
+            entries.extend(dayview_entries)
+        else:
+            print("  get_daily_weigh_ins dayview: no weight entries found for any day")
 
     return entries
 

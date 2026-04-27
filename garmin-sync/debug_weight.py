@@ -120,13 +120,22 @@ def main():
     except Exception as e:
         print(f"  ERROR: {e}")
 
-    # 3. get_daily_weigh_ins for today
-    print(f"\nCalling api.get_daily_weigh_ins({end_date})...")
-    try:
-        result3 = api.get_daily_weigh_ins(end_date)
-        pp(f"get_daily_weigh_ins({end_date}) raw response", result3)
-    except Exception as e:
-        print(f"  ERROR: {e}")
+    # 3. get_daily_weigh_ins — try last 7 days (newest first)
+    from datetime import timedelta
+    print(f"\nCalling api.get_daily_weigh_ins() for last 7 days (newest first)...")
+    for i in range(7):
+        check_date = (date.today() - timedelta(days=i)).isoformat()
+        try:
+            result3 = api.get_daily_weigh_ins(check_date)
+            top_keys = list(result3.keys()) if isinstance(result3, dict) else type(result3).__name__
+            pp(f"get_daily_weigh_ins({check_date}) — top keys: {top_keys}", result3)
+            if isinstance(result3, dict) and any(
+                result3.get(k) for k in ("dateWeightList", "allWeighIns", "weighInList", "weight")
+            ):
+                print(f"  ✓ Found weight data for {check_date}! Stopping day scan.")
+                break
+        except Exception as e:
+            print(f"  {check_date}: ERROR: {e}")
 
     # 4. get_stats_and_body (daily summary includes bodyComposition)
     print(f"\nCalling api.get_stats_and_body({end_date})...")
