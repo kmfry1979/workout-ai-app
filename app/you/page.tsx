@@ -339,19 +339,23 @@ export default function YouPage() {
       let weightRaw: Record<string, unknown>[] | null = null
       let weightErr: { message: string } | null = null;
       {
+        // Select only the core columns that have existed since the initial schema.
+        // Optional body-composition columns (muscle_mass_kg, bone_mass_kg) are
+        // derived from raw_payload below to avoid PostgREST 400 errors when the
+        // schema cache hasn't reloaded after a migration.
         const res1 = await supabase
           .from('garmin_weight_snapshots')
-          .select('weigh_date, weight_grams, weight_kg, body_fat_pct, muscle_mass_grams, muscle_mass_kg, bone_mass_grams, bone_mass_kg, raw_payload')
+          .select('weigh_date, weight_grams, weight_kg, body_fat_pct, body_water_pct, muscle_mass_grams, bone_mass_grams, raw_payload')
           .eq('user_id', user.id)
           .gte('weigh_date', ninetyDaysAgoDate)
           .order('weigh_date', { ascending: true })
         if (!res1.error) {
           weightRaw = (res1.data ?? []) as Record<string, unknown>[]
         } else {
-          // weight_grams or other column may not exist — fall back to minimal select
+          // Minimal fallback — only columns guaranteed to exist from day 1
           const res2 = await supabase
             .from('garmin_weight_snapshots')
-            .select('weigh_date, weight_kg, body_fat_pct, muscle_mass_kg, bone_mass_kg, raw_payload')
+            .select('weigh_date, weight_kg, body_fat_pct, raw_payload')
             .eq('user_id', user.id)
             .gte('weigh_date', ninetyDaysAgoDate)
             .order('weigh_date', { ascending: true })
@@ -364,30 +368,35 @@ export default function YouPage() {
         parsed = (weightRaw ?? []).flatMap(row => {
           const r = row as {
             weigh_date: string
-            weight_grams: number | null; weight_kg: number | null
-            body_fat_pct: number | null
-            muscle_mass_grams: number | null; muscle_mass_kg: number | null
-            bone_mass_grams: number | null; bone_mass_kg: number | null
-            raw_payload: Record<string, unknown> | null
+            weight_grams?: number | null
+            weight_kg?: number | null
+            body_fat_pct?: number | null
+            body_water_pct?: number | null
+            muscle_mass_grams?: number | null
+            bone_mass_grams?: number | null
+            raw_payload?: Record<string, unknown> | null
           }
-          const raw = r.raw_payload ?? {}
+          const raw = (r.raw_payload ?? {}) as Record<string, unknown>
           // Priority: weight_grams col → weight_kg col → raw_payload.weight_kg
           const rawPayloadKg = Number(raw.weight_kg ?? raw.weightKg) || null
-          const grams = r.weight_grams
+          const grams = (r.weight_grams ?? null)
             ?? (r.weight_kg != null && r.weight_kg > 0 ? r.weight_kg * 1000 : null)
             ?? (rawPayloadKg != null && rawPayloadKg > 0 ? (rawPayloadKg > 500 ? rawPayloadKg : rawPayloadKg * 1000) : null)
           if (!grams || grams <= 0) return []
+          // Derive optional body-comp from dedicated columns or raw_payload fallback
+          const muscleMassKg = Number((raw as Record<string,unknown>).muscle_mass_kg ?? (raw as Record<string,unknown>).muscleMassKg) || null
+          const boneMassKg   = Number((raw as Record<string,unknown>).bone_mass_kg   ?? (raw as Record<string,unknown>).boneMassKg)   || null
           return [{
             weigh_date: r.weigh_date,
             weight_grams: grams,
             bmi: null,
-            body_fat_pct: r.body_fat_pct ?? (Number(raw.percentFat) || null),
-            body_water_pct: Number(raw.percentHydration) || null,
-            muscle_mass_grams: r.muscle_mass_grams
-              ?? (r.muscle_mass_kg ? r.muscle_mass_kg * 1000 : null)
+            body_fat_pct: (r.body_fat_pct ?? null) ?? (Number(raw.percentFat) || null),
+            body_water_pct: (r.body_water_pct ?? null) ?? (Number(raw.percentHydration) || null),
+            muscle_mass_grams: (r.muscle_mass_grams ?? null)
+              ?? (muscleMassKg ? muscleMassKg * 1000 : null)
               ?? (Number(raw.muscleMassGrams) > 0 ? Number(raw.muscleMassGrams) : null),
-            bone_mass_grams: r.bone_mass_grams
-              ?? (r.bone_mass_kg ? r.bone_mass_kg * 1000 : null)
+            bone_mass_grams: (r.bone_mass_grams ?? null)
+              ?? (boneMassKg ? boneMassKg * 1000 : null)
               ?? (Number(raw.boneMassGrams) > 0 ? Number(raw.boneMassGrams) : null),
           }]
         })
