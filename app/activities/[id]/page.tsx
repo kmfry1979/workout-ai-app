@@ -603,38 +603,40 @@ function extract5KTimeSec(preds: Record<string, unknown>[] | null): number | nul
 
 /**
  * Derive 5K-equivalent pace (sec/km) from multiple sources, best → fallback.
- * All zone boundaries are expressed as multiples of this pace (calibrated from
- * Garmin's actual zone model with a 5K reference).
+ * All zone boundaries are expressed as multiples of this pace.
  *
  * Priority:
- *   1. raw.lactateThresholdSpeed (m/s) — Garmin embeds this in some activities.
- *      Multiply by 1.065 to convert LT pace to equivalent 5K pace (LT is ~6.5%
- *      slower than 5K pace for most runners).
- *   2. profiles.race_predictions 5K time ÷ 5 — direct 5K pace.
- *   3. raw.vO2MaxValue → estimate 5K pace via Jack Daniels VDOT formula:
- *      5K_pace ≈ 947 × e^(−0.01991 × VO2Max)  (error ±15 sec/km, ±1 zone width)
- *      This works for VO2Max range 20–80 ml/kg/min.
+ *   1. profiles.lactate_threshold_speed_ms — Garmin's measured LT speed synced
+ *      via /latestLactateThreshold. Most accurate; updated on every sync.
+ *   2. raw.lactateThresholdSpeed (m/s) — embedded in individual GPS activity payloads.
+ *   3. profiles.race_predictions 5K time ÷ 5 — Garmin's predicted 5K pace.
+ *   4. raw.vO2MaxValue → Jack Daniels VDOT estimate (least accurate, last resort).
  */
 function deriveThresholdPaceSec(
   raw: Record<string, unknown>,
   racePredictions: Record<string, unknown>[] | null,
-): { paceSec: number; source: 'lts' | '5k' | 'vo2max' } | null {
-  // Source 1: lactateThresholdSpeed (m/s) → LT pace → equivalent 5K pace
+  profileLtSpeedMs?: number | null,
+): { paceSec: number; source: 'profile_lts' | 'activity_lts' | '5k' | 'vo2max' } | null {
+  // Source 1: synced LT speed from profiles.lactate_threshold_speed_ms
+  if (profileLtSpeedMs && profileLtSpeedMs > 0.5) {
+    const ltPaceSec = 1000 / profileLtSpeedMs
+    return { paceSec: Math.round(ltPaceSec / 1.065), source: 'profile_lts' }
+  }
+
+  // Source 2: lactateThresholdSpeed embedded in this activity's raw payload
   const lts = Number(raw.lactateThresholdSpeed ?? raw.lactateThresholdBikingSpeed ?? 0)
   if (lts > 0.5) {
     const ltPaceSec = 1000 / lts
-    // LT pace is ~6.5% slower than 5K pace; convert so zone multipliers remain valid
-    return { paceSec: Math.round(ltPaceSec / 1.065), source: 'lts' }
+    return { paceSec: Math.round(ltPaceSec / 1.065), source: 'activity_lts' }
   }
 
-  // Source 2: race predictions 5K time → pace
+  // Source 3: race predictions 5K time → pace
   const p5kSec = extract5KTimeSec(racePredictions)
   if (p5kSec) return { paceSec: Math.round(p5kSec / 5), source: '5k' }
 
-  // Source 3: VO2Max → estimated 5K pace (Jack Daniels VDOT empirical formula)
+  // Source 4: VO2Max → estimated 5K pace (Jack Daniels VDOT empirical formula)
   const vo2max = Number(raw.vO2MaxValue ?? raw.vo2MaxValue ?? raw.maxVO2 ?? 0)
   if (vo2max >= 20 && vo2max <= 85) {
-    // Formula calibrated from Daniels VDOT table (35→472, 45→372, 60→287 sec/km)
     const estimated5kPaceSec = Math.round(947 * Math.exp(-0.01991 * vo2max))
     return { paceSec: estimated5kPaceSec, source: 'vo2max' }
   }
@@ -676,7 +678,7 @@ function calcTreadmillPaceZones(segments: TreadmillSegment[], boundaryBase: numb
   return zones
 }
 
-function PaceZonesCard({ activity, raw, treadmillSegments, paceInsight, paceInsightLoading, racePredictions, recentActivities }: {
+function PaceZonesCard({ activity, raw, treadmillSegments, paceInsight, paceInsightLoading, racePredictions, recentActivities, profileLtSpeedMs }: {
   activity: GarminActivity
   raw: Record<string, unknown>
   treadmillSegments: TreadmillSegment[] | null
@@ -684,6 +686,7 @@ function PaceZonesCard({ activity, raw, treadmillSegments, paceInsight, paceInsi
   paceInsightLoading: boolean
   racePredictions: Record<string, unknown>[] | null
   recentActivities: Record<string, unknown>[]
+  profileLtSpeedMs?: number | null
 }) {
   const avgSpeed = raw.averageSpeed as number | undefined
   const maxSpeed = raw.maxSpeed as number | undefined
@@ -703,8 +706,8 @@ function PaceZonesCard({ activity, raw, treadmillSegments, paceInsight, paceInsi
     ? { ...raw, vO2MaxValue: vo2maxFromRecent }
     : raw
 
-  // Derive threshold pace from lactateThresholdSpeed (best) or 5K prediction (fallback)
-  const thresholdResult = deriveThresholdPaceSec(rawForThreshold, racePredictions)
+  // Derive threshold pace — profile LT speed (synced from Garmin) is highest priority
+  const thresholdResult = deriveThresholdPaceSec(rawForThreshold, racePredictions, profileLtSpeedMs)
   const thresholdPaceSec = thresholdResult?.paceSec ?? null   // sec/km at lactate threshold
   const thresholdSource = thresholdResult?.source ?? null
 
@@ -759,7 +762,9 @@ function PaceZonesCard({ activity, raw, treadmillSegments, paceInsight, paceInsi
 
   // Subtitle line — shows which data source determined zone boundaries
   const thresholdLabel = thresholdPaceSec
-    ? thresholdSource === 'lts'
+    ? thresholdSource === 'profile_lts'
+      ? `Garmin LT speed · 5K equiv ${formatSecPerKm(thresholdPaceSec)} /km`
+      : thresholdSource === 'activity_lts'
       ? `Lactate threshold ${formatSecPerKm(thresholdPaceSec)} /km`
       : thresholdSource === 'vo2max'
       ? `VO₂Max-estimated 5K pace ${formatSecPerKm(thresholdPaceSec)} /km`
@@ -1193,6 +1198,7 @@ export default function ActivityDetailPage() {
   const [hrInsight, setHrInsight] = useState<string | null>(null)
   const [exerciseSets, setExerciseSets] = useState<ExerciseSet[]>([])
   const [racePredictions, setRacePredictions] = useState<Record<string, unknown>[] | null>(null)
+  const [profileLtSpeedMs, setProfileLtSpeedMs] = useState<number | null>(null)
 
   useEffect(() => {
     const load = async () => {
@@ -1221,18 +1227,20 @@ export default function ActivityDetailPage() {
         .order('set_order', { ascending: true })
       if (setsData && setsData.length > 0) setExerciseSets(setsData as ExerciseSet[])
 
-      // Fetch pace zone config from profile:
-      // - threshold_5k_sec: manually set by user (highest priority)
-      // - race_predictions: populated by Garmin sync (fallback)
+      // Fetch pace zone config from profile
       const { data: profileData } = await supabase
         .from('profiles')
-        .select('threshold_5k_sec, race_predictions')
+        .select('threshold_5k_sec, race_predictions, lactate_threshold_speed_ms')
         .eq('user_id', session.session.user.id)
         .single()
       if (profileData) {
+        // Garmin-measured LT speed — highest priority source for zone boundaries
+        const ltMs = Number((profileData as { lactate_threshold_speed_ms?: number | null }).lactate_threshold_speed_ms ?? 0)
+        if (ltMs > 0.5) setProfileLtSpeedMs(ltMs)
+
+        // Manual 5K override or Garmin race predictions — used when no LT speed available
         const manual5k = (profileData as { threshold_5k_sec?: number | null }).threshold_5k_sec
         if (manual5k && manual5k > 0) {
-          // Manual 5K time set by user — highest priority, stored as [{ distance:5, time:sec }]
           setRacePredictions([{ distance: 5, time: manual5k }])
         } else if (profileData.race_predictions) {
           const preds = Array.isArray(profileData.race_predictions)
@@ -1424,7 +1432,7 @@ export default function ActivityDetailPage() {
         <HRCard activity={activity} raw={raw} hrInsight={hrInsight} hrInsightLoading={analysisLoading} />
 
         {/* Pace Zones + Athlete Intelligence pace insight */}
-        <PaceZonesCard activity={activity} raw={raw} treadmillSegments={treadmillSegments} paceInsight={paceInsight} paceInsightLoading={analysisLoading} racePredictions={racePredictions} recentActivities={recentActivities} />
+        <PaceZonesCard activity={activity} raw={raw} treadmillSegments={treadmillSegments} paceInsight={paceInsight} paceInsightLoading={analysisLoading} racePredictions={racePredictions} recentActivities={recentActivities} profileLtSpeedMs={profileLtSpeedMs} />
 
         {/* Primary stats */}
         {stats.length > 0 && (

@@ -1578,6 +1578,33 @@ def sync_profile_predictions(api: Garmin, user_id: str) -> None:
     elif err2:
         print(f"  Warning: get_personal_record failed: {err2}")
 
+    # ── Lactate Threshold Speed ────────────────────────────────────────────────
+    # Garmin's /latestLactateThreshold gives the user's measured LT speed (m/s).
+    # This is the gold-standard source for pace zone boundaries — more accurate
+    # than extracting lactateThresholdSpeed from individual activity payloads
+    # (which only appears in GPS runs that triggered a recalculation).
+    success3, lt_data, lt_err = safe_call(api.get_lactate_threshold)
+    if success3 and isinstance(lt_data, dict):
+        try:
+            shr = lt_data.get("speed_and_heart_rate") or {}
+            lt_speed = as_float(shr.get("speed"))  # m/s
+            if lt_speed and lt_speed > 0.5:
+                supabase_patch(
+                    "profiles",
+                    {"lactate_threshold_speed_ms": round(lt_speed, 4)},
+                    filters=[("user_id", "eq", user_id)],
+                )
+                lt_pace_sec = 1000 / lt_speed          # sec/km at LT
+                lt_pace_5k  = lt_pace_sec / 1.065      # equivalent 5K pace
+                lm, ls = divmod(int(lt_pace_sec), 60)
+                p5m, p5s = divmod(int(lt_pace_5k), 60)
+                print(f"  Lactate threshold speed: {lt_speed:.4f} m/s  "
+                      f"-> LT pace {lm}:{ls:02d}/km  -> 5K equiv {p5m}:{p5s:02d}/km")
+        except Exception as exc:
+            print(f"  Warning: could not save lactate threshold: {exc}")
+    elif lt_err:
+        print(f"  Warning: get_lactate_threshold failed: {lt_err}")
+
 
 _RUN_TYPE_KEYWORDS = frozenset({
     "running", "run", "jogging", "jog", "trail_running", "treadmill",

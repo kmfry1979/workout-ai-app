@@ -34,11 +34,12 @@ CREATE POLICY daily_insights_select_own
 -- 2. profiles — add weekly_plan, race_goal, and race_predictions JSONB columns
 -- -----------------------------------------------------------------------------
 ALTER TABLE profiles
-    ADD COLUMN IF NOT EXISTS weekly_plan        JSONB,
-    ADD COLUMN IF NOT EXISTS race_goal          JSONB,
-    ADD COLUMN IF NOT EXISTS race_predictions   JSONB,
-    ADD COLUMN IF NOT EXISTS threshold_5k_sec   INTEGER,
-    ADD COLUMN IF NOT EXISTS threshold_10k_sec  INTEGER;
+    ADD COLUMN IF NOT EXISTS weekly_plan                  JSONB,
+    ADD COLUMN IF NOT EXISTS race_goal                    JSONB,
+    ADD COLUMN IF NOT EXISTS race_predictions             JSONB,
+    ADD COLUMN IF NOT EXISTS threshold_5k_sec             INTEGER,
+    ADD COLUMN IF NOT EXISTS threshold_10k_sec            INTEGER,
+    ADD COLUMN IF NOT EXISTS lactate_threshold_speed_ms   NUMERIC(8,4);
 -- threshold_5k_sec:  5K time in seconds (e.g. 39:04 = 2344). Manual override > Garmin prediction.
 -- threshold_10k_sec: 10K time in seconds (e.g. 85:30 = 5130). Manual override > Garmin prediction.
 -- Both auto-populated by sync_once.py from Garmin race predictions (time5K / time10K fields).
