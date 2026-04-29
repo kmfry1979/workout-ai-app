@@ -1529,14 +1529,33 @@ def sync_profile_predictions(api: Garmin, user_id: str) -> None:
                         if t and 600 < float(t) < 7200:
                             five_k_sec = int(float(t))
                             break
+                # Also extract 10K time using the same two-format logic
+                ten_k_sec: int | None = None
+                for pred in preds:
+                    if not isinstance(pred, dict):
+                        continue
+                    t10k = pred.get("time10K") or pred.get("time_10k") or pred.get("tenK")
+                    if t10k and isinstance(t10k, (int, float)) and 1200 < t10k < 18000:
+                        ten_k_sec = int(t10k)
+                        break
+                    dist = pred.get("distance")
+                    if dist in (10, 10000) or str(pred.get("raceType") or pred.get("type") or "").lower() in ("10k", "10000"):
+                        t = pred.get("time") or pred.get("predictedTime") or pred.get("finishTime")
+                        if t and 1200 < float(t) < 18000:
+                            ten_k_sec = int(float(t))
+                            break
+
+                patch: dict[str, Any] = {}
                 if five_k_sec:
-                    supabase_patch(
-                        "profiles",
-                        {"threshold_5k_sec": five_k_sec},
-                        filters=[("user_id", "eq", user_id)],
-                    )
+                    patch["threshold_5k_sec"] = five_k_sec
                     mins, secs = divmod(five_k_sec, 60)
                     print(f"  Auto-set threshold_5k_sec={five_k_sec} ({mins}:{secs:02d}) from Garmin race prediction")
+                if ten_k_sec:
+                    patch["threshold_10k_sec"] = ten_k_sec
+                    mins, secs = divmod(ten_k_sec, 60)
+                    print(f"  Auto-set threshold_10k_sec={ten_k_sec} ({mins}:{secs:02d}) from Garmin race prediction")
+                if patch:
+                    supabase_patch("profiles", patch, filters=[("user_id", "eq", user_id)])
         except Exception as exc:
             print(f"  Warning: could not save race predictions: {exc}")
     elif err:
