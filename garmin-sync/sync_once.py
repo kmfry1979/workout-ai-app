@@ -1508,6 +1508,35 @@ def sync_profile_predictions(api: Garmin, user_id: str) -> None:
                     filters=[("user_id", "eq", user_id)],
                 )
                 print(f"  Saved {len(preds)} race predictions to profile")
+
+                # Auto-populate threshold_5k_sec from the 5K race prediction.
+                # Garmin returns predictions in two formats:
+                #   Format A: {time5K: 1998, time10K: 4485, ...}  ← single object with all distances
+                #   Format B: [{distance: 5, time: 1998}, ...]    ← one object per distance
+                five_k_sec: int | None = None
+                for pred in preds:
+                    if not isinstance(pred, dict):
+                        continue
+                    # Format A — direct time5K field
+                    t5k = pred.get("time5K") or pred.get("time_5k") or pred.get("fiveK")
+                    if t5k and isinstance(t5k, (int, float)) and 600 < t5k < 7200:
+                        five_k_sec = int(t5k)
+                        break
+                    # Format B — distance-keyed
+                    dist = pred.get("distance")
+                    if dist in (5, 5000) or str(pred.get("raceType") or pred.get("type") or "").lower() in ("5k", "5000"):
+                        t = pred.get("time") or pred.get("predictedTime") or pred.get("finishTime")
+                        if t and 600 < float(t) < 7200:
+                            five_k_sec = int(float(t))
+                            break
+                if five_k_sec:
+                    supabase_patch(
+                        "profiles",
+                        {"threshold_5k_sec": five_k_sec},
+                        filters=[("user_id", "eq", user_id)],
+                    )
+                    mins, secs = divmod(five_k_sec, 60)
+                    print(f"  Auto-set threshold_5k_sec={five_k_sec} ({mins}:{secs:02d}) from Garmin race prediction")
         except Exception as exc:
             print(f"  Warning: could not save race predictions: {exc}")
     elif err:

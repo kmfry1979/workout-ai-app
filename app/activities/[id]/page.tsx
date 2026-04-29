@@ -574,18 +574,31 @@ const HR_ZONE_DEFS = [
   { label: 'Z5 Max',       color: '#ef4444' },
 ] as const
 
-/** Extract 5K predicted time in seconds from race_predictions JSONB array */
+/** Extract 5K predicted time in seconds from race_predictions JSONB array.
+ *  Handles two Garmin formats:
+ *   Format A: [{time5K: 1998, time10K: 4485, ...}]  — single object, all distances
+ *   Format B: [{distance: 5, time: 1998}, ...]       — one object per distance
+ */
 function extract5KTimeSec(preds: Record<string, unknown>[] | null): number | null {
   if (!preds) return null
-  // Garmin returns distance in metres (5000), km (5), or as a race type string
-  const p = preds.find(r =>
-    r.distance === 5000 || r.distance === 5 ||
-    String(r.raceType ?? r.type ?? r.name ?? '').toLowerCase().includes('5k') ||
-    String(r.raceType ?? r.type ?? r.name ?? '').toLowerCase().includes('5000')
-  )
-  if (!p) return null
-  const sec = Number(p.time ?? p.seconds ?? p.predictedTime ?? p.timeSec ?? 0)
-  return sec > 60 ? sec : null
+  for (const p of preds) {
+    // Format A — direct time5K field (Garmin's race prediction API)
+    const t5k = p.time5K ?? p.time_5k ?? p.fiveK
+    if (t5k != null) {
+      const sec = Number(t5k)
+      if (sec > 600 && sec < 7200) return sec
+    }
+    // Format B — distance-keyed entry
+    if (
+      p.distance === 5000 || p.distance === 5 ||
+      String(p.raceType ?? p.type ?? p.name ?? '').toLowerCase().includes('5k') ||
+      String(p.raceType ?? p.type ?? p.name ?? '').toLowerCase().includes('5000')
+    ) {
+      const sec = Number(p.time ?? p.seconds ?? p.predictedTime ?? p.timeSec ?? 0)
+      if (sec > 600 && sec < 7200) return sec
+    }
+  }
+  return null
 }
 
 /**
