@@ -6,8 +6,15 @@ import { supabase } from '../../lib/supabase'
 import { BottomNav } from '../../components/BottomNav'
 
 type GarminRacePrediction = {
+  // Garmin's actual API format: single object with all distances
+  time5K?: number
+  time10K?: number
+  timeHalfMarathon?: number
+  timeMarathon?: number
+  calendarDate?: string
+  // Legacy / alternative formats
   raceTime?: number
-  distance?: string
+  distance?: string | number
   raceDistance?: string
   predictedTime?: number
   racePredictionTime?: number
@@ -146,12 +153,34 @@ function fmtWeightDelta(kg: number): string {
   return remLbs > 0 ? `${stones}st ${remLbs}lb` : `${stones}st`
 }
 
-function formatGarminPrediction(p: GarminRacePrediction): { label: string; time: string } | null {
+/** Convert a race predictions object into display rows.
+ *  Handles Garmin's actual format: {time5K, time10K, timeHalfMarathon, timeMarathon}
+ *  and legacy per-distance formats for forward compatibility.
+ */
+function formatGarminPredictions(p: GarminRacePrediction): { label: string; time: string }[] {
+  const rows: { label: string; time: string }[] = []
+
+  // Garmin's current API format — single object with all distances
+  const distanceMap: [keyof GarminRacePrediction, string][] = [
+    ['time5K', '5K'],
+    ['time10K', '10K'],
+    ['timeHalfMarathon', 'Half Marathon'],
+    ['timeMarathon', 'Marathon'],
+  ]
+  for (const [key, label] of distanceMap) {
+    const sec = Number(p[key] ?? 0)
+    if (sec > 60) rows.push({ label, time: secsToTime(Math.round(sec)) })
+  }
+  if (rows.length > 0) return rows
+
+  // Legacy per-distance format fallback
   const distance = p.raceDistance ?? p.distance ?? ''
   const timeSec = Number(p.racePredictionTime ?? p.predictedTime ?? p.raceTime ?? 0)
-  if (!distance || !timeSec) return null
-  const label = String(distance).replace(/_/g, ' ').replace(/km/i, 'K')
-  return { label, time: secsToTime(Math.round(timeSec)) }
+  if (distance && timeSec > 60) {
+    const label = String(distance).replace(/_/g, ' ').replace(/km/i, 'K')
+    return [{ label, time: secsToTime(Math.round(timeSec)) }]
+  }
+  return []
 }
 
 const PR_TYPE_LABELS: Record<string, string> = {
@@ -710,11 +739,14 @@ export default function YouPage() {
 
         {/* Garmin Race Predictions (official) */}
         {racePredictions && racePredictions.length > 0 && (() => {
-          const formatted = racePredictions.map(formatGarminPrediction).filter(Boolean) as { label: string; time: string }[]
+          const formatted = racePredictions.flatMap(formatGarminPredictions)
           if (formatted.length === 0) return null
+          const latest = (racePredictions[0] as GarminRacePrediction).calendarDate
           return (
             <Section title="🏅 Race Predictions">
-              <p className="text-gray-500 text-xs">From Garmin Performance Analytics</p>
+              <p className="text-gray-500 text-xs mb-3">
+                From Garmin Performance Analytics{latest ? ` · Updated ${new Date(latest).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}` : ''}
+              </p>
               <div className="grid grid-cols-2 gap-3">
                 {formatted.map(r => (
                   <div key={r.label} className="bg-gray-800/60 rounded-xl p-3">
