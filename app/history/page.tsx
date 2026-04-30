@@ -7,6 +7,7 @@ import { BottomNav } from '../../components/BottomNav'
 
 type TimeRange = 'week' | 'month' | 'year'
 type HistoryTab = 'treadmill' | 'steps' | 'strength'
+type TreadmillMetric = 'pace' | 'duration' | 'distance' | 'hr'
 
 type TreadmillPoint = { date: string; paceMinPerKm: number; distanceKm: number; avgHr: number | null }
 type StepsPoint = { date: string; steps: number }
@@ -31,6 +32,15 @@ function fmtPace(minPerKm: number) {
   const m = Math.floor(minPerKm)
   const s = Math.round((minPerKm - m) * 60)
   return `${m}:${String(s).padStart(2, '0')}`
+}
+
+function fmtDuration(min: number) {
+  if (min >= 60) {
+    const h = Math.floor(min / 60)
+    const m = Math.round(min % 60)
+    return `${h}h${m > 0 ? ` ${m}m` : ''}`
+  }
+  return `${Math.round(min)}m`
 }
 
 // Generic SVG line chart with filled area
@@ -137,6 +147,7 @@ export default function HistoryPage() {
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<HistoryTab>('treadmill')
   const [range, setRange] = useState<TimeRange>('month')
+  const [treadmillMetric, setTreadmillMetric] = useState<TreadmillMetric>('pace')
 
   const [treadmillData, setTreadmillData] = useState<TreadmillPoint[]>([])
   const [stepsData, setStepsData] = useState<StepsPoint[]>([])
@@ -278,42 +289,116 @@ export default function HistoryPage() {
         </div>
 
         {/* Treadmill tab */}
-        {tab === 'treadmill' && (
-          <div className="space-y-4">
-            <div className="rounded-2xl bg-gray-800/60 border border-gray-700/50 p-4">
-              <div className="flex items-center justify-between mb-1">
-                <p className="text-sm font-semibold text-white">Pace (min/km)</p>
-                <p className="text-xs text-gray-500">{treadmillFiltered.length} runs</p>
-              </div>
-              <p className="text-[10px] text-gray-500 mb-3">Lower is faster — trend downward means improving</p>
-              <LineChart
-                data={treadmillFiltered.map(d => ({ x: d.date, y: d.paceMinPerKm }))}
-                color="#6366f1"
-                yLabel="min/km"
-                formatY={(v) => fmtPace(v)}
-                formatX={fmtX}
-                invertY={true}
-              />
-            </div>
+        {tab === 'treadmill' && (() => {
+          // Metric selector config
+          const metrics: { key: TreadmillMetric; label: string; color: string; yLabel: string; invertY: boolean; subtitle: string; formatY: (v: number) => string; getData: (d: TreadmillPoint) => number | null }[] = [
+            {
+              key: 'pace', label: 'Pace', color: '#6366f1', yLabel: 'min/km', invertY: true,
+              subtitle: 'Lower is faster — downward trend means improving',
+              formatY: fmtPace,
+              getData: d => d.paceMinPerKm,
+            },
+            {
+              key: 'duration', label: 'Duration', color: '#3b82f6', yLabel: 'min', invertY: false,
+              subtitle: 'Session duration in minutes',
+              formatY: v => `${Math.round(v)}m`,
+              getData: d => d.paceMinPerKm * d.distanceKm,
+            },
+            {
+              key: 'distance', label: 'Distance', color: '#22c55e', yLabel: 'km', invertY: false,
+              subtitle: 'Distance covered per run in km',
+              formatY: v => `${v.toFixed(1)}`,
+              getData: d => d.distanceKm,
+            },
+            {
+              key: 'hr', label: 'Avg HR', color: '#ef4444', yLabel: 'bpm', invertY: false,
+              subtitle: 'Average heart rate during run',
+              formatY: v => `${Math.round(v)}`,
+              getData: d => d.avgHr,
+            },
+          ]
+          const cfg = metrics.find(m => m.key === treadmillMetric)!
+          const chartPoints = treadmillFiltered
+            .map(d => { const y = cfg.getData(d); return y != null ? { x: d.date, y } : null })
+            .filter((p): p is { x: string; y: number } => p !== null)
 
-            {treadmillFiltered.length > 0 && (
-              <div className="grid grid-cols-3 gap-3">
-                <div className="rounded-2xl bg-gray-800/60 border border-gray-700/50 p-3 text-center">
-                  <p className="text-lg font-bold text-indigo-400">{fmtPace(Math.min(...treadmillFiltered.map(d => d.paceMinPerKm)))}</p>
-                  <p className="text-[10px] text-gray-500 mt-1">Best pace</p>
-                </div>
-                <div className="rounded-2xl bg-gray-800/60 border border-gray-700/50 p-3 text-center">
-                  <p className="text-lg font-bold text-indigo-400">{fmtPace(treadmillFiltered.reduce((s, d) => s + d.paceMinPerKm, 0) / treadmillFiltered.length)}</p>
-                  <p className="text-[10px] text-gray-500 mt-1">Avg pace</p>
-                </div>
-                <div className="rounded-2xl bg-gray-800/60 border border-gray-700/50 p-3 text-center">
-                  <p className="text-lg font-bold text-white">{(treadmillFiltered.reduce((s, d) => s + d.distanceKm, 0)).toFixed(1)}</p>
-                  <p className="text-[10px] text-gray-500 mt-1">Total km</p>
-                </div>
+          // Stats
+          const paceVals = treadmillFiltered.map(d => d.paceMinPerKm)
+          const distVals = treadmillFiltered.map(d => d.distanceKm)
+          const durVals = treadmillFiltered.map(d => d.paceMinPerKm * d.distanceKm)
+          const hrVals = treadmillFiltered.map(d => d.avgHr).filter((v): v is number => v != null)
+
+          const statsRows: { value: string; label: string; accent?: string }[] = ({
+            pace: [
+              { value: fmtPace(Math.min(...paceVals)), label: 'Best pace', accent: 'text-indigo-400' },
+              { value: fmtPace(paceVals.reduce((s, v) => s + v, 0) / paceVals.length), label: 'Avg pace', accent: 'text-indigo-400' },
+              { value: `${distVals.reduce((s, v) => s + v, 0).toFixed(1)} km`, label: 'Total distance', accent: 'text-white' },
+            ],
+            duration: [
+              { value: fmtDuration(Math.max(...durVals)), label: 'Longest run', accent: 'text-blue-400' },
+              { value: fmtDuration(durVals.reduce((s, v) => s + v, 0) / durVals.length), label: 'Avg session', accent: 'text-blue-400' },
+              { value: fmtDuration(durVals.reduce((s, v) => s + v, 0)), label: 'Total time', accent: 'text-white' },
+            ],
+            distance: [
+              { value: `${Math.max(...distVals).toFixed(2)} km`, label: 'Longest run', accent: 'text-green-400' },
+              { value: `${(distVals.reduce((s, v) => s + v, 0) / distVals.length).toFixed(2)} km`, label: 'Avg distance', accent: 'text-green-400' },
+              { value: `${distVals.reduce((s, v) => s + v, 0).toFixed(1)} km`, label: 'Total distance', accent: 'text-white' },
+            ],
+            hr: hrVals.length > 0 ? [
+              { value: `${Math.min(...hrVals)} bpm`, label: 'Lowest avg HR', accent: 'text-red-400' },
+              { value: `${Math.round(hrVals.reduce((s, v) => s + v, 0) / hrVals.length)} bpm`, label: 'Period avg HR', accent: 'text-red-400' },
+              { value: `${hrVals.length}`, label: 'Runs with HR', accent: 'text-white' },
+            ] : [],
+          } as Record<TreadmillMetric, { value: string; label: string; accent?: string }[]>)[treadmillMetric]
+
+          return (
+            <div className="space-y-4">
+              {/* Metric selector */}
+              <div className="flex gap-1 bg-gray-800/60 border border-gray-700/50 rounded-xl p-1">
+                {metrics.map(m => (
+                  <button
+                    key={m.key}
+                    type="button"
+                    onClick={() => setTreadmillMetric(m.key)}
+                    className={`flex-1 py-1.5 text-xs font-medium rounded-lg transition-colors ${treadmillMetric === m.key ? 'text-white' : 'text-gray-500 hover:text-gray-300'}`}
+                    style={treadmillMetric === m.key ? { backgroundColor: cfg.color + '33', color: cfg.color } : {}}
+                  >
+                    {m.label}
+                  </button>
+                ))}
               </div>
-            )}
-          </div>
-        )}
+
+              {/* Chart card */}
+              <div className="rounded-2xl bg-gray-800/60 border border-gray-700/50 p-4">
+                <div className="flex items-center justify-between mb-1">
+                  <p className="text-sm font-semibold text-white" style={{ color: cfg.color }}>{cfg.label}</p>
+                  <p className="text-xs text-gray-500">{treadmillFiltered.length} runs</p>
+                </div>
+                <p className="text-[10px] text-gray-500 mb-3">{cfg.subtitle}</p>
+                <LineChart
+                  data={chartPoints}
+                  color={cfg.color}
+                  yLabel={cfg.yLabel}
+                  formatY={cfg.formatY}
+                  formatX={fmtX}
+                  invertY={cfg.invertY}
+                />
+              </div>
+
+              {/* Stats */}
+              {treadmillFiltered.length > 0 && statsRows && statsRows.length > 0 && (
+                <div className={`grid gap-3 grid-cols-${statsRows.length}`}>
+                  {statsRows.map((stat, i) => (
+                    <div key={i} className="rounded-2xl bg-gray-800/60 border border-gray-700/50 p-3 text-center">
+                      <p className={`text-lg font-bold ${stat.accent ?? 'text-white'}`}>{stat.value}</p>
+                      <p className="text-[10px] text-gray-500 mt-1">{stat.label}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )
+        })()}
 
         {/* Steps tab */}
         {tab === 'steps' && (
