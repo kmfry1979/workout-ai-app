@@ -24,14 +24,14 @@ A personal fitness dashboard for Kelvin (kmfry1979@gmail.com). It syncs Garmin C
 
 | Route | File | Purpose |
 |---|---|---|
-| `/dashboard` | `app/dashboard/page.tsx` | Home overview |
-| `/health` | `app/health/page.tsx` | Main analytics hub — Today / Analytics / Training tabs |
+| `/dashboard` | `app/dashboard/page.tsx` | Home overview — AI Brain insight card + morning/afternoon/evening check-ins |
+| `/health` | `app/health/page.tsx` | Main analytics hub — Today / Analytics / Recovery / Wellness / Training tabs |
 | `/you` | `app/you/page.tsx` | Body metrics: weight, BMI, body fat, race predictions, PRs |
 | `/activities` | `app/activities/page.tsx` | Activity list |
 | `/activities/[id]` | `app/activities/[id]/page.tsx` | Activity detail — HR chart, pace zones, AI insight |
+| `/history` | `app/history/page.tsx` | Historical graphs — Treadmill / Steps / Strength tabs with Week/Month/Year ranges |
 | `/coach` | `app/coach/page.tsx` | AI chat coach |
 | `/profile` | `app/profile/page.tsx` | User profile — name, DOB, height, race time overrides, provider |
-| `/athlytic` | `app/athlytic/page.tsx` | Athlytic-style view |
 
 ---
 
@@ -157,6 +157,21 @@ All AI calls go through Groq (LLaMA). The activity insight API (`/api/coach/acti
 
 Parsing uses regex section markers (`PACE_INSIGHT:`, `HR_INSIGHT:`, `BODY:`).
 
+### AI Brain (`/api/brain/generate-insight`)
+Generates a daily readiness insight stored in `daily_insights` table. Displayed on the dashboard merged with the check-in cards.
+
+**Prompt context includes (in order):**
+1. Today's health metrics (HRV vs 7-day avg, body battery, stress, Training Readiness)
+2. Last night's sleep (score, duration, deep, REM)
+3. **Today's completed workouts** — explicitly separated from recent history so the model knows what's already been done today
+4. Steps + active minutes
+5. Recent workouts (previous days)
+6. Latest weight
+
+**Key rule in prompt:** If the athlete has already completed ≥30 min of training today, `suggested_focus` must recommend rest-of-day recovery (nutrition, mobility, rest) — NOT additional hard training. The readiness label (green/amber/red) reflects morning recovery state, not a prescription for more exercise.
+
+**Bug history:** Early versions only showed steps in "Activity (today)" — today's actual workout sessions were buried in the undifferentiated recent history list, causing the model to recommend hard training even when two sessions had already been completed. Fixed by explicitly splitting `todayActivities` from `recentActs` and surfacing them as a prominently labelled section.
+
 ---
 
 ## Patterns to follow
@@ -199,6 +214,60 @@ All UI uses a dark Tailwind theme. Background: `bg-gray-900` / `bg-gray-800`. Ca
 | `GROQ_API_KEY` | All AI routes |
 | `GARMIN_DAYS_BACK` | How many days to sync (default 1) |
 | `GARMIN_ACTIVITY_LIMIT` | Max activities per sync (default 10) |
+
+---
+
+## History page (`app/history/page.tsx`)
+
+Three tabs: **Treadmill | Steps | Strength**, each with **Week / Month / Year** time range selector.
+
+### Treadmill tab — metric selector
+Four metrics selectable via pill buttons above the chart:
+
+| Metric | Colour | Y-axis | invertY | Notes |
+|---|---|---|---|---|
+| Pace | Indigo `#6366f1` | min/km | ✓ (down = faster) | Default |
+| Duration | Blue `#3b82f6` | minutes | ✗ | Derived: `paceMinPerKm × distanceKm` |
+| Distance | Green `#22c55e` | km | ✗ | `distanceKm` per session |
+| Avg HR | Red `#ef4444` | bpm | ✗ | Filters out sessions with null avgHr |
+
+Switching metric also swaps the three stat cards (Best/Avg/Total adapted per metric).
+
+### Data sources
+- Treadmill/Running: `garmin_activities` filtered by `activity_type ilike %treadmill% OR %running%`
+- Steps: `garmin_daily_steps`
+- Strength: `garmin_activities` filtered by `activity_type ilike %strength% OR %fitness%`
+
+All fetched for last 365 days on page load; client-side filtered by selected range.
+
+---
+
+## Garmin sync pipeline — architecture
+
+There are **two separate hops** to understand:
+
+```
+[Garmin Watch] →①→ [Garmin Connect servers] →②→ [Supabase / Website]
+```
+
+**Hop ①** — Watch → Garmin Connect: handled entirely by Garmin's own apps. There is **no API to trigger this from the website** — Garmin's API is read-only from their servers.
+- Primary: Garmin Connect Mobile app (Bluetooth, ~30 seconds when opened)
+- Secondary: Watch WiFi direct sync (unreliable for real-time, better for overnight)
+- **Most common staleness cause**: Android battery optimisation killing Garmin Connect in the background. Fix: Android Settings → Apps → Garmin Connect → Battery → **Unrestricted**
+
+**Hop ②** — Garmin Connect → Supabase: handled by `sync_once.py` via GitHub Actions.
+- **Schedule**: every hour between 6am–11pm UTC (`.github/workflows/garmin-sync.yml`)
+- **Manual trigger**: "Sync now" button on dashboard fires `workflow_dispatch` via GitHub API
+- The dashboard shows "Last synced with Garmin: X ago" and a hint: "Open Garmin Connect app first to push watch data"
+
+### Sync schedule
+Current cron: `0 6-23 * * *` — fires at the top of every hour from 6am to 11pm UTC. Changed from `0 */4 * * *` (every 4h) to reduce worst-case staleness to ~1h.
+
+### Android automation for hop ①
+If auto-sync is unreliable, options in order of ease:
+1. **Battery Unrestricted** setting (most impactful, free)
+2. **MacroDroid** (free): open Garmin Connect app hourly with "screen off" constraint so it doesn't interrupt phone use
+3. **Tasker + AutoInput** (paid): open app + simulate pull-to-refresh; add "Display State = Off" condition to avoid interrupting active phone use
 
 ---
 
