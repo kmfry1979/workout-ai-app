@@ -2384,7 +2384,10 @@ export default function DashboardPage() {
           <span title={lastSyncAt ? new Date(lastSyncAt).toLocaleString() : ''}>
             Last synced with Garmin: <span className="text-gray-300">{formatRelative(lastSyncAt)}</span>
           </span>
-          {syncMessage && <span className="text-gray-400">{syncMessage}</span>}
+          {syncMessage
+            ? <span className="text-gray-400">{syncMessage}</span>
+            : <span className="text-gray-600 italic">Open Garmin Connect app first to push watch data</span>
+          }
         </div>
 
         {/* Three metric tiles */}
