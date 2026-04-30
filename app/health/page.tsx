@@ -632,7 +632,13 @@ export default function HealthPage() {
   const [data, setData] = useState<HealthData | null>(null)
   const [briefing, setBriefing] = useState<string | null>(null)
   const [briefingLoading, setBriefingLoading] = useState(false)
-  const [view, setView] = useState<'today' | 'analytics'>('today')
+  const [view, setView] = useState<'today' | 'analytics' | 'recovery' | 'wellness'>('today')
+  // Combined 30-day history for Recovery and Wellness tabs
+  const [dayHistory, setDayHistory] = useState<Array<{
+    date: string; hrv: number | null; rhr: number | null; stress: number | null
+    sleep: number | null; sleepDuration: number | null; deepSleep: number | null
+    load: number; steps: number | null; bb: number | null; spo2: number | null
+  }>>([])
   const [analyticsTab, setAnalyticsTab] = useState<'trends' | 'training' | 'records'>('trends')
   // Weekly planner
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
@@ -820,6 +826,51 @@ export default function HealthPage() {
       activities90: acts90,
       journalHistory: journal30.map(r => ({ date: r.journal_date, tags: r.tags })),
     })
+
+    // Load combined 30-day history for Recovery/Wellness tabs
+    const ago30h = localDateStr(new Date(Date.now() - 29 * 86400000))
+    const [h30Res, leg30Res, sl30Res, st30Res] = await Promise.all([
+      supabase.from('garmin_daily_health_metrics')
+        .select('metric_date, hrv_avg, stress_avg, body_battery_end, spo2_avg')
+        .eq('user_id', userId).gte('metric_date', ago30h).order('metric_date'),
+      supabase.from('daily_health_metrics')
+        .select('metric_date, garmin_hrv_nightly_avg, resting_hr, resting_heart_rate_bpm, garmin_stress_avg')
+        .eq('user_id', userId).gte('metric_date', ago30h).order('metric_date'),
+      supabase.from('garmin_sleep_data')
+        .select('sleep_date, sleep_score, sleep_duration_seconds, deep_sleep_seconds')
+        .eq('user_id', userId).gte('sleep_date', ago30h).order('sleep_date'),
+      supabase.from('garmin_daily_steps')
+        .select('step_date, total_steps, active_minutes, moderate_intensity_minutes, vigorous_intensity_minutes')
+        .eq('user_id', userId).gte('step_date', ago30h).order('step_date'),
+    ])
+    const hMap = new Map((h30Res.data ?? []).map(r => [r.metric_date, r]))
+    const lMap = new Map((leg30Res.data ?? []).map(r => [r.metric_date, r]))
+    const sMap = new Map((sl30Res.data ?? []).map(r => [r.sleep_date, r]))
+    const stMap = new Map((st30Res.data ?? []).map(r => [r.step_date, r]))
+    const combinedDays: typeof dayHistory = []
+    for (let i = 29; i >= 0; i--) {
+      const dStr = localDateStr(new Date(Date.now() - i * 86400000))
+      const h = hMap.get(dStr); const l = lMap.get(dStr)
+      const s = sMap.get(dStr); const st = stMap.get(dStr)
+      const mod = (st as { moderate_intensity_minutes?: number | null } | undefined)?.moderate_intensity_minutes ?? null
+      const vig = (st as { vigorous_intensity_minutes?: number | null } | undefined)?.vigorous_intensity_minutes ?? null
+      const act = (st as { active_minutes?: number | null } | undefined)?.active_minutes ?? null
+      const load = mod != null || vig != null ? (mod ?? 0) + (vig ?? 0) * 2 : (act ?? 0) * 0.6
+      combinedDays.push({
+        date: dStr,
+        hrv: (h as { hrv_avg?: number | null } | undefined)?.hrv_avg ?? (l as { garmin_hrv_nightly_avg?: number | null } | undefined)?.garmin_hrv_nightly_avg ?? null,
+        rhr: (l as { resting_hr?: number | null } | undefined)?.resting_hr ?? (l as { resting_heart_rate_bpm?: number | null } | undefined)?.resting_heart_rate_bpm ?? null,
+        stress: (h as { stress_avg?: number | null } | undefined)?.stress_avg ?? (l as { garmin_stress_avg?: number | null } | undefined)?.garmin_stress_avg ?? null,
+        sleep: (s as { sleep_score?: number | null } | undefined)?.sleep_score ?? null,
+        sleepDuration: (s as { sleep_duration_seconds?: number | null } | undefined)?.sleep_duration_seconds ?? null,
+        deepSleep: (s as { deep_sleep_seconds?: number | null } | undefined)?.deep_sleep_seconds ?? null,
+        load,
+        steps: (st as { total_steps?: number | null } | undefined)?.total_steps ?? null,
+        bb: (h as { body_battery_end?: number | null } | undefined)?.body_battery_end ?? null,
+        spo2: (h as { spo2_avg?: number | null } | undefined)?.spo2_avg ?? null,
+      })
+    }
+    setDayHistory(combinedDays)
     setLoading(false)
   }, [router])
 
@@ -1014,7 +1065,7 @@ export default function HealthPage() {
 
   return (
     <div className="min-h-screen pb-20 text-white" style={{ background: '#0a0a0a' }}>
-      <div className="max-w-md mx-auto px-4 pt-6">
+      <div className="max-w-2xl mx-auto px-4 pt-6">
 
         {/* Header */}
         <div className="mb-4">
@@ -1029,120 +1080,14 @@ export default function HealthPage() {
         <div className="flex gap-1 bg-gray-900 rounded-2xl p-1 mb-5">
           {tabBtn('today', 'Today')}
           {tabBtn('analytics', 'Analytics')}
+          {tabBtn('recovery', 'Recovery')}
+          {tabBtn('wellness', 'Wellness')}
         </div>
 
         {/* ── TODAY VIEW ─────────────────────────────────────────────────── */}
         {view === 'today' && (
           <>
-            {/* ── Brain Insight card ─────────────────────────────────────── */}
-            {(brainInsight || brainLoading) && (
-              <div className={`mb-4 rounded-2xl p-4 border ${
-                brainLoading ? 'border-gray-700 bg-gray-900/40' :
-                brainInsight!.readiness_label === 'green' ? 'border-green-500/30 bg-green-950/20' :
-                brainInsight!.readiness_label === 'amber' ? 'border-orange-500/30 bg-orange-950/20' :
-                'border-red-500/30 bg-red-950/20'
-              }`}>
-                {brainLoading ? (
-                  <div className="flex items-center gap-2">
-                    <div className="w-2 h-2 rounded-full bg-orange-500 animate-pulse" />
-                    <p className="text-xs text-gray-400">Brain is analysing your 7-day data…</p>
-                  </div>
-                ) : brainInsight && (
-                  <>
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-center gap-2 flex-1">
-                        <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 mt-0.5 ${
-                          brainInsight.readiness_label === 'green' ? 'bg-green-400' :
-                          brainInsight.readiness_label === 'amber' ? 'bg-orange-400' : 'bg-red-400'
-                        }`} />
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <p className={`text-xs font-bold uppercase tracking-wider ${
-                              brainInsight.readiness_label === 'green' ? 'text-green-400' :
-                              brainInsight.readiness_label === 'amber' ? 'text-orange-400' : 'text-red-400'
-                            }`}>
-                              {brainInsight.readiness_label === 'green' ? '🟢 In the Green' :
-                               brainInsight.readiness_label === 'amber' ? '🟡 Amber' : '🔴 Rest Day'}
-                            </p>
-                            <p className="text-gray-600 text-[10px]">{brainInsight.readiness_score}/100</p>
-                            <p className="text-gray-700 text-[10px]">· {brainInsight.insight_date}</p>
-                          </div>
-                          {brainInsight.headline && (
-                            <p className="text-white text-sm font-semibold mt-1 leading-snug">{brainInsight.headline}</p>
-                          )}
-                          <p className="text-gray-300 text-xs mt-1.5 leading-relaxed">{brainInsight.insight}</p>
-                          {brainInsight.suggested_focus && (
-                            <p className="text-gray-400 text-xs mt-2 border-t border-gray-800 pt-2">
-                              <span className="text-gray-500 font-medium">Today: </span>{brainInsight.suggested_focus}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                      <button
-                        onClick={async () => {
-                          if (brainLoading || !currentUserId) return
-                          setBrainLoading(true)
-                          try {
-                            const { data: sess } = await supabase.auth.getSession()
-                            const token = sess.session?.access_token
-                            if (!token) return
-                            const res = await fetch('/api/brain/generate-insight', {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                              body: JSON.stringify({ date: new Date().toISOString().split('T')[0] }),
-                            })
-                            if (res.ok) {
-                              const result = await res.json() as {
-                                headline: string; insight: string; suggested_focus: string
-                                readiness_score: number; readiness_label: 'green' | 'amber' | 'red'
-                                insight_date: string
-                              }
-                              setBrainInsight(result)
-                            }
-                          } finally { setBrainLoading(false) }
-                        }}
-                        title="Regenerate insight"
-                        className="shrink-0 text-gray-600 hover:text-gray-300 transition-colors mt-0.5"
-                      >
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-4 h-4">
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
-                        </svg>
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
-            {/* Generate brain insight if none yet */}
-            {!brainInsight && !brainLoading && currentUserId && (
-              <button
-                onClick={async () => {
-                  setBrainLoading(true)
-                  try {
-                    const { data: sess } = await supabase.auth.getSession()
-                    const token = sess.session?.access_token
-                    if (!token) return
-                    const res = await fetch('/api/brain/generate-insight', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                      body: JSON.stringify({ date: new Date().toISOString().split('T')[0] }),
-                    })
-                    if (res.ok) {
-                      const result = await res.json() as {
-                        headline: string; insight: string; suggested_focus: string
-                        readiness_score: number; readiness_label: 'green' | 'amber' | 'red'
-                        insight_date: string
-                      }
-                      setBrainInsight(result)
-                    }
-                  } finally { setBrainLoading(false) }
-                }}
-                className="w-full mb-4 rounded-2xl p-4 border border-dashed border-gray-700 text-center hover:border-orange-600/50 transition-colors group"
-              >
-                <p className="text-gray-500 text-sm group-hover:text-orange-400 transition-colors">🧠 Generate AI Daily Insight</p>
-                <p className="text-gray-700 text-xs mt-0.5">7-day analysis · green / amber / red readiness</p>
-              </button>
-            )}
+            {/* Brain insight moved to dashboard */}
 
             {overreaching && (
               <div className="mb-4 rounded-2xl p-4 border border-red-500/50 bg-red-950/40">
@@ -1801,6 +1746,486 @@ export default function HealthPage() {
             )}
           </>
         )}
+
+        {/* ── RECOVERY TAB ─────────────────────────────────────────────── */}
+        {view === 'recovery' && (() => {
+          const hist = dayHistory
+          const today = hist[hist.length - 1] ?? null
+          if (!today) return <p className="text-gray-500 text-sm text-center py-10">No data available. Sync Garmin to populate.</p>
+
+          // Recovery calc (athlytic style)
+          function rcClamp(v: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, v)) }
+          function rcMean(arr: number[]) { return arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0 }
+          const pastHRV = hist.slice(0, -1).map(d => d.hrv).filter((v): v is number => v != null)
+          const hrvBaseline = pastHRV.length > 0 ? Math.round(rcMean(pastHRV)) : null
+          const hasRecov = pastHRV.length >= 3 && today.hrv != null
+          const baseline2 = pastHRV.length >= 3 ? rcMean(pastHRV) : null
+          const deviation = baseline2 != null && today.hrv != null ? Math.round(((today.hrv - baseline2) / baseline2) * 100) : null
+          const hrvScore = baseline2 != null && today.hrv != null ? rcClamp(50 + (deviation ?? 0) * 1.5, 0, 100) : null
+          const sleepAdj = today.sleep != null ? (today.sleep - 70) * 0.2 : 0
+          const recovScore = hasRecov && hrvScore != null ? Math.round(rcClamp(hrvScore + sleepAdj, 0, 100)) : null
+
+          // ACWR
+          const last28 = [...hist].sort((a, b) => a.date.localeCompare(b.date))
+          const hasAcwr = last28.length >= 7
+          const acute7 = last28.slice(-7).reduce((s, d) => s + d.load, 0)
+          const chronic28 = last28.length >= 28 ? last28.slice(-28).reduce((s, d) => s + d.load, 0) / 4 : null
+          const acwr = hasAcwr && chronic28 != null && chronic28 > 0 ? +(acute7 / chronic28).toFixed(2) : null
+
+          const rc = recovScore == null ? '#374151' : recovScore >= 70 ? '#22c55e' : recovScore >= 50 ? '#eab308' : recovScore >= 30 ? '#f97316' : '#ef4444'
+
+          // Recommendation
+          const rec = (() => {
+            if (recovScore == null) return { label: 'NO DATA', color: '#6b7280', desc: 'Sync Garmin to see your recommendation.' }
+            if (recovScore >= 70 && (acwr == null || acwr <= 1.3)) return { label: 'PUSH', color: '#22c55e', desc: 'Recovery is strong and load is in check. Body is primed for high intensity.' }
+            if (recovScore >= 70 && acwr != null && acwr > 1.3) return { label: 'TRAIN SMART', color: '#eab308', desc: 'Good recovery but cumulative load is high. Go moderate — protect the gains.' }
+            if (recovScore >= 50) return { label: 'MAINTAIN', color: '#eab308', desc: 'Decent recovery. A solid session is fine — nothing maximal.' }
+            if (recovScore >= 30) return { label: 'RECOVER', color: '#f97316', desc: 'Sub-optimal recovery. Low intensity or active rest only today.' }
+            return { label: 'REST', color: '#ef4444', desc: 'Recovery score is poor. Sleep, nutrition, and recovery are the priority.' }
+          })()
+
+          // Ring geometry
+          const cx = 90, cy = 90, R = 72
+          const circ = 2 * Math.PI * R
+          const arcOffset = circ * 0.125
+          const arcTotal = circ * 0.75
+          const recPct = (recovScore ?? 0) / 100
+
+          const last14 = hist.slice(-14)
+          const maxHRV = Math.max(...last14.map(d => d.hrv ?? 0), 10)
+          const maxLoad = Math.max(...last14.map(d => d.load), 1)
+          const last7 = hist.slice(-7)
+          const weekSessions = last7.filter(d => d.load > 10).length
+          const weekLoad = Math.round(last7.reduce((s, d) => s + d.load, 0))
+          const weekSteps = Math.round(last7.reduce((s, d) => s + (d.steps ?? 0), 0) / 1000)
+          const goodSleeps = last7.filter(d => (d.sleep ?? 0) >= 70).length
+          const dayLetter = (date: string) => new Date(date).toLocaleDateString('en-GB', { weekday: 'short' }).charAt(0)
+
+          return (
+            <div className="space-y-4">
+              {/* Methodology */}
+              <div className="rounded-2xl bg-gray-800/60 border border-gray-700/50 px-4 py-3">
+                <p className="text-[10px] text-gray-400 leading-relaxed">
+                  <span className="text-green-400 font-bold">Recovery Score</span> uses your HRV relative to your personal 28-day baseline. ACWR = Acute:Chronic Workload Ratio (7-day load ÷ 28-day average).
+                </p>
+              </div>
+
+              {/* Recovery ring */}
+              <div className="rounded-2xl bg-gray-800/60 border border-gray-700/50 p-5 flex flex-col items-center">
+                <p className="text-[10px] font-bold tracking-[0.2em] text-gray-400 mb-1">RECOVERY SCORE</p>
+                <p className="text-[9px] text-gray-500 mb-3 text-center">HRV vs your 28d personal baseline · Sleep adjustment ±6pts</p>
+                <svg viewBox="0 0 180 180" className="w-44 h-44">
+                  <defs>
+                    <filter id="rcGlow" x="-50%" y="-50%" width="200%" height="200%">
+                      <feGaussianBlur stdDeviation="5" result="blur" />
+                      <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+                    </filter>
+                  </defs>
+                  {/* Zone backgrounds */}
+                  {[{ pct: 0.30, color: '#ef4444' }, { pct: 0.20, color: '#f97316' },
+                    { pct: 0.20, color: '#eab308' }, { pct: 0.30, color: '#22c55e' }].reduce<{ el: React.ReactNode[]; offset: number }>((acc, z) => {
+                    const len = z.pct * arcTotal
+                    acc.el.push(<circle key={z.color} cx={cx} cy={cy} r={R} fill="none" stroke={z.color}
+                      strokeWidth={12} opacity={0.12}
+                      strokeDasharray={`${len} ${circ}`}
+                      strokeDashoffset={-(arcOffset + (1 - acc.offset - z.pct) * arcTotal - arcTotal + len)}
+                      strokeLinecap="butt" />)
+                    acc.offset += z.pct
+                    return acc
+                  }, { el: [], offset: 0 }).el}
+                  <circle cx={cx} cy={cy} r={R} fill="none" stroke="#1f2937" strokeWidth={12}
+                    strokeDasharray={`${arcTotal} ${circ}`} strokeDashoffset={-arcOffset} strokeLinecap="round" />
+                  {recovScore != null && (
+                    <circle cx={cx} cy={cy} r={R} fill="none" stroke={rc} strokeWidth={12}
+                      strokeDasharray={`${recPct * arcTotal} ${circ}`} strokeDashoffset={-arcOffset}
+                      strokeLinecap="round" filter="url(#rcGlow)" />
+                  )}
+                  <text x={cx} y={cy - 8} textAnchor="middle" fill="white" fontSize="42" fontWeight="900" fontFamily="system-ui">{recovScore ?? '—'}</text>
+                  <text x={cx} y={cy + 12} textAnchor="middle" fontSize="8" fill="#6b7280" letterSpacing="2" fontFamily="system-ui">RECOVERY</text>
+                  {deviation != null && (
+                    <text x={cx} y={cy + 27} textAnchor="middle" fontSize="11" fontWeight="700" fontFamily="system-ui"
+                      fill={deviation >= 0 ? '#22c55e' : '#ef4444'}>{deviation >= 0 ? '+' : ''}{deviation}% HRV</text>
+                  )}
+                </svg>
+                <div className="flex gap-1.5 mt-1 items-end">
+                  {[{ l: 'REST', c: '#ef4444', lo: 0 }, { l: 'RECOVER', c: '#f97316', lo: 30 },
+                    { l: 'MAINTAIN', c: '#eab308', lo: 50 }, { l: 'PUSH', c: '#22c55e', lo: 70 }].map(z => {
+                    const active = recovScore != null && recovScore >= z.lo &&
+                      (z.lo === 70 ? true : recovScore < z.lo + (z.lo === 0 ? 30 : 20))
+                    return (
+                      <div key={z.l} className="flex flex-col items-center gap-1">
+                        <div className="h-0.5 w-10 rounded-full" style={{ background: z.c, opacity: active ? 1 : 0.2 }} />
+                        <span className="text-[8px] font-bold tracking-wider" style={{ color: active ? z.c : '#374151' }}>{z.l}</span>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+
+              {/* Recommendation */}
+              <div className="rounded-2xl bg-gray-800/60 border border-gray-700/50 px-4 py-3.5 flex items-center gap-3">
+                <div>
+                  <p className="font-black tracking-widest text-sm" style={{ color: rec.color }}>{rec.label}</p>
+                  <p className="text-xs text-gray-400 mt-0.5 leading-relaxed">{rec.desc}</p>
+                </div>
+              </div>
+
+              {/* Key stats */}
+              <div className="grid grid-cols-4 gap-2">
+                {[
+                  { label: 'HRV', unit: 'ms', color: '#a855f7', value: today.hrv != null ? Math.round(today.hrv) : null,
+                    sub: today.hrv != null && hrvBaseline != null ? `${today.hrv >= hrvBaseline ? '+' : ''}${Math.round(today.hrv - hrvBaseline)}` : null },
+                  { label: 'Sleep', unit: '/100', color: '#818cf8', value: today.sleep ?? null,
+                    sub: today.sleep != null ? (today.sleep >= 75 ? 'Great' : today.sleep >= 60 ? 'Good' : 'Poor') : null },
+                  { label: 'Stress', unit: '', color: today.stress != null ? (today.stress < 40 ? '#22c55e' : today.stress < 65 ? '#eab308' : '#ef4444') : '#6b7280',
+                    value: today.stress != null ? Math.round(today.stress) : null,
+                    sub: today.stress != null ? (today.stress < 40 ? 'Low' : today.stress < 65 ? 'Mid' : 'High') : null },
+                  { label: 'ACWR', unit: '', color: acwr != null ? (acwr <= 1.3 ? '#22c55e' : acwr <= 1.5 ? '#eab308' : '#ef4444') : '#6b7280',
+                    value: acwr ?? null,
+                    sub: acwr != null ? (acwr <= 0.8 ? 'Detrain' : acwr <= 1.3 ? 'Optimal' : acwr <= 1.5 ? 'Caution' : 'Risky') : null },
+                ].map(s => (
+                  <div key={s.label} className="rounded-2xl bg-gray-800/60 border border-gray-700/50 p-2.5 text-center">
+                    <p className="text-sm font-black tabular-nums" style={{ color: s.color }}>
+                      {s.value ?? '—'}<span className="text-[9px] text-gray-500">{s.unit}</span>
+                    </p>
+                    {s.sub && <p className="text-[9px] mt-0.5" style={{ color: s.color, opacity: 0.8 }}>{s.sub}</p>}
+                    <p className="text-[8px] text-gray-500 mt-0.5 uppercase tracking-wider">{s.label}</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* HRV 14-day chart */}
+              <div className="rounded-2xl bg-gray-800/60 border border-gray-700/50 p-4">
+                <p className="text-[10px] font-bold tracking-widest text-gray-400 mb-1">HRV — 14 DAY TREND</p>
+                <p className="text-[9px] text-gray-500 mb-3">Green = above baseline · Yellow = within 8% · Red = below baseline</p>
+                {last14.some(d => d.hrv != null) ? (
+                  <svg viewBox="0 0 280 75" className="w-full">
+                    {hrvBaseline != null && (() => {
+                      const by = 65 - (hrvBaseline / maxHRV) * 60
+                      return (<>
+                        <line x1={0} y1={by} x2={280} y2={by} stroke="#374151" strokeWidth={1} strokeDasharray="4 3" />
+                        <text x={276} y={by - 3} textAnchor="end" fontSize="7" fill="#4b5563">{hrvBaseline}ms</text>
+                      </>)
+                    })()}
+                    {last14.map((day, i) => {
+                      if (day.hrv == null) return null
+                      const barH = Math.max(4, (day.hrv / maxHRV) * 60)
+                      const x = 10 + (i / 13) * 260
+                      const color = hrvBaseline != null
+                        ? day.hrv >= hrvBaseline * 1.08 ? '#22c55e' : day.hrv >= hrvBaseline * 0.92 ? '#eab308' : '#ef4444'
+                        : '#22c55e'
+                      return (
+                        <g key={day.date}>
+                          <rect x={x - 7} y={65 - barH} width={14} height={barH} rx={3} fill={color} opacity={i === 13 ? 1 : 0.65} />
+                          <text x={x} y={73} textAnchor="middle" fontSize="7" fill={i === 13 ? '#9ca3af' : '#4b5563'}>{dayLetter(day.date)}</text>
+                        </g>
+                      )
+                    })}
+                  </svg>
+                ) : <p className="text-gray-500 text-xs text-center py-4">No HRV data yet</p>}
+              </div>
+
+              {/* Training Load chart */}
+              <div className="rounded-2xl bg-gray-800/60 border border-gray-700/50 p-4">
+                <div className="flex items-center justify-between mb-1">
+                  <p className="text-[10px] font-bold tracking-widest text-gray-400">TRAINING LOAD — 14 DAYS</p>
+                  {acwr != null && (
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" style={{
+                      color: acwr <= 1.3 ? '#22c55e' : acwr <= 1.5 ? '#eab308' : '#ef4444',
+                      background: acwr <= 1.3 ? '#052e16' : acwr <= 1.5 ? '#1c1a06' : '#1c0505',
+                    }}>ACWR {acwr}</span>
+                  )}
+                </div>
+                <p className="text-[9px] text-gray-500 mb-3">Intensity minutes: moderate × 1, vigorous × 2. Sweet spot: 0.8–1.3</p>
+                {last14.some(d => d.load > 0) ? (
+                  <svg viewBox="0 0 280 70" className="w-full">
+                    <line x1={140} y1={0} x2={140} y2={60} stroke="#1e3a5f" strokeWidth={1} strokeDasharray="3 3" />
+                    <text x={70} y={8} textAnchor="middle" fontSize="7" fill="#1d4ed8" opacity={0.5}>Chronic zone</text>
+                    <text x={210} y={8} textAnchor="middle" fontSize="7" fill="#3b82f6">Acute zone (7d)</text>
+                    {last14.map((day, i) => {
+                      const barH = Math.max(day.load > 0 ? 4 : 0, (day.load / maxLoad) * 52)
+                      const x = 10 + (i / 13) * 260
+                      return (
+                        <g key={day.date}>
+                          <rect x={x - 7} y={60 - barH} width={14} height={barH} rx={3}
+                            fill={i >= 7 ? '#3b82f6' : '#1e3a5f'} opacity={i === 13 ? 1 : 0.75} />
+                          <text x={x} y={68} textAnchor="middle" fontSize="7" fill={i === 13 ? '#9ca3af' : '#374151'}>{dayLetter(day.date)}</text>
+                        </g>
+                      )
+                    })}
+                  </svg>
+                ) : <p className="text-gray-500 text-xs text-center py-4">No training load data yet</p>}
+              </div>
+
+              {/* This Week */}
+              <div className="rounded-2xl bg-gray-800/60 border border-gray-700/50 p-4">
+                <p className="text-[10px] font-bold tracking-widest text-gray-400 mb-3">THIS WEEK</p>
+                <div className="grid grid-cols-4 gap-2">
+                  {[
+                    { label: 'Sessions', value: weekSessions, color: '#22c55e' },
+                    { label: 'Load pts', value: weekLoad, color: '#ffffff' },
+                    { label: 'K steps', value: weekSteps, color: '#ffffff' },
+                    { label: 'Good sleeps', value: `${goodSleeps}/7`, color: goodSleeps >= 5 ? '#22c55e' : goodSleeps >= 3 ? '#eab308' : '#ef4444' },
+                  ].map(s => (
+                    <div key={s.label} className="text-center">
+                      <p className="text-xl font-black tabular-nums" style={{ color: s.color }}>{s.value}</p>
+                      <p className="text-[9px] text-gray-500 uppercase tracking-wider mt-0.5">{s.label}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )
+        })()}
+
+        {/* ── WELLNESS TAB ─────────────────────────────────────────────── */}
+        {view === 'wellness' && (() => {
+          const hist = dayHistory
+          const today = hist[hist.length - 1] ?? null
+          if (!today) return <p className="text-gray-500 text-sm text-center py-10">No data available. Sync Garmin to populate.</p>
+
+          function bvClamp(v: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, v)) }
+          function bvMean(arr: number[]) { return arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0 }
+
+          function calcBevelScores(d: typeof today) {
+            const heart = (() => {
+              let s = 0, w = 0
+              if (d.hrv != null) { s += bvClamp((d.hrv - 20) / 100, 0, 1) * 100 * 0.6; w += 0.6 }
+              if (d.rhr != null) { s += bvClamp((80 - d.rhr) / 40, 0, 1) * 100 * 0.4; w += 0.4 }
+              return w > 0 ? Math.round(s / w) : null
+            })()
+            const sleep = d.sleep
+            const energy = d.bb
+            const move = d.steps != null ? Math.round(bvClamp(d.steps / 10000 * 100, 0, 100)) : null
+            const calm = d.stress != null ? Math.round(100 - d.stress) : null
+            let total = 0, weight = 0
+            if (heart != null) { total += heart * 0.30; weight += 0.30 }
+            if (sleep != null) { total += sleep * 0.25; weight += 0.25 }
+            if (energy != null) { total += energy * 0.20; weight += 0.20 }
+            if (move != null) { total += move * 0.15; weight += 0.15 }
+            if (calm != null) { total += calm * 0.10; weight += 0.10 }
+            return { total: weight > 0 ? Math.round(total / weight) : null, heart, sleep, energy, move, calm }
+          }
+
+          const scores = calcBevelScores(today)
+          const sc = scores.total
+          const ringColor = sc == null ? '#4b5563' : sc >= 75 ? '#a855f7' : sc >= 55 ? '#6366f1' : sc >= 35 ? '#eab308' : '#ef4444'
+          const cx = 90, cy = 90, R = 72, circ = 2 * Math.PI * R
+
+          const yesterdayScore = hist.length >= 2 ? calcBevelScores(hist[hist.length - 2]).total : null
+          const trendArrow = sc != null && yesterdayScore != null
+            ? sc > yesterdayScore + 3 ? { symbol: '↑', color: '#22c55e' }
+            : sc < yesterdayScore - 3 ? { symbol: '↓', color: '#ef4444' }
+            : { symbol: '→', color: '#9ca3af' }
+            : null
+
+          const trend = hist.map(d => ({ date: d.date, score: calcBevelScores(d).total }))
+          const validTrend = trend.filter(d => d.score != null)
+          const minS = validTrend.length ? Math.max(0, Math.min(...validTrend.map(d => d.score!)) - 5) : 0
+          const maxS = validTrend.length ? Math.min(100, Math.max(...validTrend.map(d => d.score!)) + 5) : 100
+          const W = 280, H = 64
+          const pts = trend.map((d, i) => ({ x: (i / 29) * W, y: d.score != null ? H - ((d.score - minS) / (maxS - minS)) * H : null, score: d.score })).filter(p => p.y != null)
+          const pathD = pts.length > 1 ? pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y!.toFixed(1)}`).join(' ') : ''
+          const areaD = pathD && pts.length > 1 ? `${pathD} L${pts[pts.length-1].x.toFixed(1)},${H} L${pts[0].x.toFixed(1)},${H} Z` : ''
+
+          const hrv28 = (() => { const v = hist.slice(-28).map(d => d.hrv).filter((v): v is number => v != null); return v.length ? Math.round(bvMean(v)) : null })()
+          const rhr14 = (() => { const v = hist.slice(-14).map(d => d.rhr).filter((v): v is number => v != null); return v.length ? Math.round(bvMean(v)) : null })()
+          const sleep7 = (() => { const v = hist.slice(-7).map(d => d.sleep).filter((v): v is number => v != null); return v.length ? Math.round(bvMean(v)) : null })()
+          const steps7 = (() => { const v = hist.slice(-7).map(d => d.steps).filter((v): v is number => v != null); return v.length ? Math.round(bvMean(v) / 1000 * 10) / 10 : null })()
+
+          const pillars = [
+            { key: 'heart', label: 'Heart', value: scores.heart, color: '#f43f5e', desc: 'HRV + RHR' },
+            { key: 'sleep', label: 'Sleep', value: scores.sleep, color: '#818cf8', desc: 'Sleep score' },
+            { key: 'energy', label: 'Energy', value: scores.energy, color: '#22d3ee', desc: 'Body battery' },
+            { key: 'move', label: 'Move', value: scores.move, color: '#22c55e', desc: '% of 10k steps' },
+            { key: 'calm', label: 'Calm', value: scores.calm, color: '#fb923c', desc: '100 − stress' },
+          ]
+
+          function scoreLabel(v: number | null) {
+            if (v == null) return { label: '—', arrow: '·', color: '#4b5563' }
+            if (v >= 75) return { label: 'Great', arrow: '↑', color: '#22c55e' }
+            if (v >= 55) return { label: 'Good', arrow: '→', color: '#a855f7' }
+            if (v >= 35) return { label: 'Fair', arrow: '→', color: '#eab308' }
+            return { label: 'Low', arrow: '↓', color: '#ef4444' }
+          }
+
+          const insights: string[] = (() => {
+            const out: string[] = []
+            const pastHRV = hist.slice(0, -1).map(d => d.hrv).filter((v): v is number => v != null)
+            if (pastHRV.length >= 7 && today.hrv != null) {
+              const baseline = bvMean(pastHRV)
+              const pct = Math.round(((today.hrv - baseline) / baseline) * 100)
+              if (pct >= 10) out.push(`HRV is ${pct}% above your ${pastHRV.length}-day average — an ideal day to train hard or think deeply.`)
+              else if (pct <= -10) out.push(`HRV is ${Math.abs(pct)}% below baseline — your nervous system needs support. Go easy and recover.`)
+              else out.push(`HRV is within ${Math.abs(pct)}% of your baseline — a steady, average recovery day.`)
+            }
+            const recentSleep = hist.slice(-5).map(d => d.sleep).filter((v): v is number => v != null)
+            if (recentSleep.length >= 3) {
+              const avg = bvMean(recentSleep.slice(0, -1))
+              const last = recentSleep[recentSleep.length - 1]
+              if (last > avg + 7) out.push(`Sleep quality improved — last night scored ${last}/100, up from a ${Math.round(avg)} average.`)
+              else if (last < avg - 10) out.push(`Sleep dropped to ${last}/100 vs a recent average of ${Math.round(avg)}. Expect lower output today.`)
+              else if (last >= 75) out.push(`Solid sleep last night (${last}/100) — recovery processes were efficient during the night.`)
+              else if (last < 60) out.push(`Sleep quality was below average (${last}/100) — consider your wind-down routine tonight.`)
+            }
+            const rhrHist = hist.slice(-14).map(d => d.rhr).filter((v): v is number => v != null)
+            if (rhrHist.length >= 5 && today.rhr != null) {
+              const rhrBaseline = bvMean(rhrHist.slice(0, -1))
+              if (today.rhr > rhrBaseline + 4) out.push(`Resting HR is ${Math.round(today.rhr - rhrBaseline)} bpm above your norm — monitor for signs of fatigue or oncoming illness.`)
+              else if (today.rhr <= rhrBaseline - 3) out.push(`Resting HR is lower than usual — a positive sign of cardiovascular adaptation.`)
+            }
+            return out.slice(0, 3)
+          })()
+
+          return (
+            <div className="space-y-4">
+              {/* Methodology */}
+              <div className="rounded-2xl bg-gray-800/60 border border-gray-700/50 px-4 py-3">
+                <p className="text-[10px] text-gray-400 leading-relaxed">
+                  <span className="text-purple-400 font-bold">Wellness Score</span> is a composite index: Heart 30% (HRV+RHR) · Sleep 25% · Energy 20% (Body Battery) · Move 15% (steps) · Calm 10% (stress).
+                </p>
+              </div>
+
+              {/* Bevel Score ring */}
+              <div className="rounded-2xl bg-gray-800/60 border border-gray-700/50 p-5 flex flex-col items-center">
+                <p className="text-[10px] font-bold tracking-[0.2em] text-gray-400 mb-1">WELLNESS SCORE</p>
+                <p className="text-[9px] text-gray-500 mb-3 text-center">5-pillar composite · Updated on each sync</p>
+                <svg viewBox="0 0 180 180" className="w-44 h-44">
+                  <defs>
+                    <filter id="bvGlow" x="-50%" y="-50%" width="200%" height="200%">
+                      <feGaussianBlur stdDeviation="5" result="blur" />
+                      <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+                    </filter>
+                    <linearGradient id="bvGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                      <stop offset="0%" stopColor="#a855f7" />
+                      <stop offset="100%" stopColor="#6366f1" />
+                    </linearGradient>
+                  </defs>
+                  <circle cx={cx} cy={cy} r={R} fill="none" stroke="#1f2937" strokeWidth={12} />
+                  {sc != null && (
+                    <circle cx={cx} cy={cy} r={R} fill="none" stroke="url(#bvGrad)" strokeWidth={12}
+                      strokeDasharray={`${(sc / 100) * circ} ${circ}`}
+                      transform={`rotate(-90 ${cx} ${cy})`}
+                      strokeLinecap="round" filter="url(#bvGlow)" />
+                  )}
+                  <text x={cx} y={cy - 8} textAnchor="middle" fill="white" fontSize="42" fontWeight="900" fontFamily="system-ui">{sc ?? '—'}</text>
+                  {trendArrow && <text x={cx} y={cy + 14} textAnchor="middle" fontSize="18" fontWeight="900" fill={trendArrow.color}>{trendArrow.symbol}</text>}
+                  <text x={cx} y={cy + (trendArrow ? 30 : 16)} textAnchor="middle" fontSize="8" fill="#4b5563" letterSpacing="2">WELLNESS SCORE</text>
+                </svg>
+                <div className="flex gap-2 mt-2 w-full justify-center">
+                  {pillars.map(p => (
+                    <div key={p.key} className="flex flex-col items-center gap-1 flex-1 max-w-[44px]">
+                      <div className="w-full h-1 rounded-full bg-gray-700">
+                        <div className="h-full rounded-full" style={{ width: `${p.value ?? 0}%`, background: p.color }} />
+                      </div>
+                      <span className="text-[7px] text-gray-500">{p.label}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Pillar cards */}
+              <div className="grid grid-cols-5 gap-1.5">
+                {pillars.map(p => {
+                  const sl = scoreLabel(p.value)
+                  return (
+                    <div key={p.key} className="rounded-xl bg-gray-800/60 border border-gray-700/50 p-2 flex flex-col items-center gap-0.5">
+                      <p className="text-sm font-black tabular-nums" style={{ color: p.color }}>{p.value ?? '—'}</p>
+                      <p className="text-[8px] text-gray-500">{p.label}</p>
+                      <p className="text-[9px] font-bold" style={{ color: sl.color }}>{sl.arrow} {sl.label}</p>
+                    </div>
+                  )
+                })}
+              </div>
+
+              {/* 30-day trend */}
+              <div className="rounded-2xl bg-gray-800/60 border border-gray-700/50 p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-[10px] font-bold tracking-widest text-gray-400">30-DAY TREND</p>
+                  {validTrend.length > 0 && (
+                    <span className="text-[10px] text-gray-500">avg <strong style={{ color: '#a855f7' }}>{Math.round(bvMean(validTrend.map(d => d.score!)))}</strong></span>
+                  )}
+                </div>
+                {pathD ? (
+                  <svg viewBox={`0 0 ${W} ${H + 14}`} className="w-full">
+                    <defs>
+                      <linearGradient id="bvAreaGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                        <stop offset="0%" stopColor="#a855f7" stopOpacity="0.25" />
+                        <stop offset="100%" stopColor="#a855f7" stopOpacity="0" />
+                      </linearGradient>
+                    </defs>
+                    {[25, 50, 75].map(v => {
+                      const y = H - ((v - minS) / (maxS - minS)) * H
+                      if (y < 0 || y > H) return null
+                      return <g key={v}><line x1={0} y1={y} x2={W} y2={y} stroke="#374151" strokeWidth={0.5} /><text x={0} y={y - 2} fontSize="7" fill="#4b5563">{v}</text></g>
+                    })}
+                    {areaD && <path d={areaD} fill="url(#bvAreaGrad)" />}
+                    <path d={pathD} fill="none" stroke="#a855f7" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
+                    {pts.length > 0 && (() => { const last = pts[pts.length - 1]; return (<><circle cx={last.x} cy={last.y!} r={4} fill="#a855f7" /><text x={last.x} y={last.y! - 6} textAnchor="middle" fontSize="8" fill="#a855f7" fontWeight="700">{last.score}</text></>) })()}
+                    <text x={0} y={H + 12} fontSize="7" fill="#374151">30d ago</text>
+                    <text x={W} y={H + 12} textAnchor="end" fontSize="7" fill="#374151">Today</text>
+                  </svg>
+                ) : <p className="text-gray-500 text-xs text-center py-4">Building your trend — sync daily to fill this in</p>}
+              </div>
+
+              {/* Insights */}
+              {insights.length > 0 && (
+                <div className="rounded-2xl bg-gray-800/60 border border-gray-700/50 p-4 space-y-3">
+                  <p className="text-[10px] font-bold tracking-widest text-gray-400">INSIGHTS</p>
+                  {insights.map((insight, i) => (
+                    <div key={i} className="flex gap-3 items-start">
+                      <div className="w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0" style={{ background: '#a855f7' }} />
+                      <p className="text-xs text-gray-300 leading-relaxed">{insight}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Biomarkers */}
+              <div className="rounded-2xl bg-gray-800/60 border border-gray-700/50 p-4">
+                <p className="text-[10px] font-bold tracking-widest text-gray-400 mb-3">BIOMARKER BASELINES</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    { label: 'HRV 28-day avg', value: hrv28 != null ? `${hrv28} ms` : '—', color: '#a855f7' },
+                    { label: 'RHR 14-day avg', value: rhr14 != null ? `${rhr14} bpm` : '—', color: '#f43f5e' },
+                    { label: 'Sleep 7-day avg', value: sleep7 != null ? `${sleep7}/100` : '—', color: '#818cf8' },
+                    { label: 'Steps 7-day avg', value: steps7 != null ? `${steps7}k/day` : '—', color: '#22c55e' },
+                  ].map(bm => (
+                    <div key={bm.label} className="rounded-xl bg-gray-800/60 border border-gray-700/50 p-3 flex items-center gap-2.5">
+                      <div>
+                        <p className="text-sm font-bold" style={{ color: bm.color }}>{bm.value}</p>
+                        <p className="text-[9px] text-gray-500 mt-0.5">{bm.label}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Score composition */}
+              <div className="rounded-2xl bg-gray-800/60 border border-gray-700/50 p-4">
+                <p className="text-[10px] font-bold tracking-widest text-gray-400 mb-3">SCORE COMPOSITION</p>
+                <div className="space-y-2">
+                  {[
+                    { label: 'Heart (HRV + RHR)', pct: 30, color: '#f43f5e', value: scores.heart },
+                    { label: 'Sleep', pct: 25, color: '#818cf8', value: scores.sleep },
+                    { label: 'Energy (Body Battery)', pct: 20, color: '#22d3ee', value: scores.energy },
+                    { label: 'Move (Steps)', pct: 15, color: '#22c55e', value: scores.move },
+                    { label: 'Calm (Stress)', pct: 10, color: '#fb923c', value: scores.calm },
+                  ].map(row => (
+                    <div key={row.label} className="flex items-center gap-2">
+                      <span className="text-[9px] text-gray-500 w-36 flex-shrink-0">{row.label}</span>
+                      <div className="flex-1 h-1.5 rounded-full bg-gray-700">
+                        <div className="h-full rounded-full" style={{ width: `${row.value ?? 0}%`, background: row.color }} />
+                      </div>
+                      <span className="text-[9px] font-bold w-6 text-right" style={{ color: row.color }}>{row.value ?? '—'}</span>
+                      <span className="text-[9px] text-gray-600 w-6">{row.pct}%</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )
+        })()}
 
         {/* Legend (today view only) */}
         {view === 'today' && (

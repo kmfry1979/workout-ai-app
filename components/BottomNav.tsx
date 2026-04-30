@@ -24,29 +24,21 @@ const tabs = [
     ),
   },
   {
-    href: '/athlytic',
-    label: 'Athlytic',
-    icon: (active: boolean) => (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? 2.5 : 2} className="w-5 h-5">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M3 12h3l2.5-7 4 14 2.5-7H21" />
-      </svg>
-    ),
-  },
-  {
-    href: '/bevel',
-    label: 'Bevel',
-    icon: (active: boolean) => (
-      <svg viewBox="0 0 24 24" fill={active ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={2} className="w-5 h-5">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M12 2l9 4.5v9L12 20l-9-4.5v-9L12 2z" />
-      </svg>
-    ),
-  },
-  {
     href: '/activities',
     label: 'Activities',
     icon: (active: boolean) => (
       <svg viewBox="0 0 24 24" fill={active ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={2} className="w-5 h-5">
         <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+      </svg>
+    ),
+  },
+  {
+    href: '/history',
+    label: 'History',
+    icon: (active: boolean) => (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active ? 2.5 : 2} className="w-5 h-5">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3 3v18h18" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M7 16l4-4 4 4 4-6" />
       </svg>
     ),
   },

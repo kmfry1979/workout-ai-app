@@ -175,7 +175,7 @@ export default function ProfilePage() {
 
   return (
     <main className="min-h-screen bg-gray-50 p-6">
-      <div className="mx-auto w-full max-w-lg rounded-2xl bg-white p-6 shadow">
+      <div className="mx-auto w-full max-w-2xl rounded-2xl bg-white p-6 shadow">
         <h1 className="text-2xl font-bold mb-4">Your Profile</h1>
 
         <div className="mb-6 flex gap-2">

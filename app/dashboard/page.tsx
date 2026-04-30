@@ -563,6 +563,13 @@ export default function DashboardPage() {
   const [stepGoalInput, setStepGoalInput] = useState('10000')
   const [savingGoal, setSavingGoal] = useState(false)
 
+  // ── Brain insight state ───────────────────────────────────────────────────
+  const [dashBrainInsight, setDashBrainInsight] = useState<{
+    headline: string; insight: string; suggested_focus: string
+    readiness_score: number; readiness_label: 'green' | 'amber' | 'red'; insight_date: string
+  } | null>(null)
+  const [dashBrainLoading, setDashBrainLoading] = useState(false)
+
   // ── Check-in state ────────────────────────────────────────────────────────
   type MorningCheckinData = {
     feeling_score: number | null
@@ -1016,6 +1023,20 @@ export default function DashboardPage() {
 
       setUserId(user.id)
       await Promise.all([loadDashboardData(user.id), loadLastSync(user.id)])
+      // Load brain insight
+      try {
+        const { data: insightRow } = await supabase
+          .from('daily_insights')
+          .select('insight_date, insight_text, readiness_score, readiness_label, suggested_focus, raw_context')
+          .eq('user_id', user.id)
+          .order('insight_date', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        if (insightRow) {
+          const r = insightRow as { insight_date: string; insight_text: string; readiness_score: number; readiness_label: 'green' | 'amber' | 'red'; suggested_focus: string; raw_context: { headline?: string } | null }
+          setDashBrainInsight({ headline: r.raw_context?.headline ?? '', insight: r.insight_text, suggested_focus: r.suggested_focus, readiness_score: r.readiness_score, readiness_label: r.readiness_label, insight_date: r.insight_date })
+        }
+      } catch { /* optional */ }
       setLoading(false)
     }
     load()
@@ -3143,6 +3164,107 @@ export default function DashboardPage() {
               </div>
             )}
           </div>
+
+          {/* ── AI Brain Readiness Insight ────────────────────────────── */}
+          {(dashBrainInsight || dashBrainLoading) && (
+            <div className={`mb-3 rounded-2xl p-4 border ${
+              dashBrainLoading ? 'border-gray-700 bg-gray-900/40' :
+              dashBrainInsight!.readiness_label === 'green' ? 'border-green-500/30 bg-green-950/20' :
+              dashBrainInsight!.readiness_label === 'amber' ? 'border-orange-500/30 bg-orange-950/20' :
+              'border-red-500/30 bg-red-950/20'
+            }`}>
+              {dashBrainLoading ? (
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-orange-500 animate-pulse" />
+                  <p className="text-xs text-gray-400">Brain is analysing your 7-day data…</p>
+                </div>
+              ) : dashBrainInsight && (
+                <>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2 flex-1">
+                      <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 mt-0.5 ${
+                        dashBrainInsight.readiness_label === 'green' ? 'bg-green-400' :
+                        dashBrainInsight.readiness_label === 'amber' ? 'bg-orange-400' : 'bg-red-400'
+                      }`} />
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className={`text-xs font-bold uppercase tracking-wider ${
+                            dashBrainInsight.readiness_label === 'green' ? 'text-green-400' :
+                            dashBrainInsight.readiness_label === 'amber' ? 'text-orange-400' : 'text-red-400'
+                          }`}>
+                            🧠 {dashBrainInsight.readiness_label === 'green' ? 'In the Green' :
+                               dashBrainInsight.readiness_label === 'amber' ? 'Amber' : 'Rest Day'}
+                          </p>
+                          <p className="text-gray-600 text-[10px]">{dashBrainInsight.readiness_score}/100</p>
+                          <p className="text-gray-700 text-[10px]">· {dashBrainInsight.insight_date}</p>
+                        </div>
+                        {dashBrainInsight.headline && (
+                          <p className="text-white text-sm font-semibold mt-1 leading-snug">{dashBrainInsight.headline}</p>
+                        )}
+                        <p className="text-gray-300 text-xs mt-1.5 leading-relaxed">{dashBrainInsight.insight}</p>
+                        {dashBrainInsight.suggested_focus && (
+                          <p className="text-gray-400 text-xs mt-2 border-t border-gray-800 pt-2">
+                            <span className="text-gray-500 font-medium">Today: </span>{dashBrainInsight.suggested_focus}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      onClick={async () => {
+                        if (dashBrainLoading || !userId) return
+                        setDashBrainLoading(true)
+                        try {
+                          const { data: sess } = await supabase.auth.getSession()
+                          const token = sess.session?.access_token
+                          if (!token) return
+                          const res = await fetch('/api/brain/generate-insight', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                            body: JSON.stringify({ date: new Date().toISOString().split('T')[0] }),
+                          })
+                          if (res.ok) {
+                            const result = await res.json() as { headline: string; insight: string; suggested_focus: string; readiness_score: number; readiness_label: 'green' | 'amber' | 'red'; insight_date: string }
+                            setDashBrainInsight(result)
+                          }
+                        } finally { setDashBrainLoading(false) }
+                      }}
+                      title="Regenerate insight"
+                      className="shrink-0 text-gray-600 hover:text-gray-300 transition-colors mt-0.5"
+                    >
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-4 h-4">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+                      </svg>
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+          {!dashBrainInsight && !dashBrainLoading && userId && (
+            <button
+              onClick={async () => {
+                setDashBrainLoading(true)
+                try {
+                  const { data: sess } = await supabase.auth.getSession()
+                  const token = sess.session?.access_token
+                  if (!token) return
+                  const res = await fetch('/api/brain/generate-insight', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                    body: JSON.stringify({ date: new Date().toISOString().split('T')[0] }),
+                  })
+                  if (res.ok) {
+                    const result = await res.json() as { headline: string; insight: string; suggested_focus: string; readiness_score: number; readiness_label: 'green' | 'amber' | 'red'; insight_date: string }
+                    setDashBrainInsight(result)
+                  }
+                } finally { setDashBrainLoading(false) }
+              }}
+              className="w-full mb-3 rounded-2xl p-4 border border-dashed border-gray-700 text-center hover:border-orange-600/50 transition-colors group"
+            >
+              <p className="text-gray-500 text-sm group-hover:text-orange-400 transition-colors">🧠 Generate AI Daily Insight</p>
+              <p className="text-gray-700 text-xs mt-0.5">7-day analysis · green / amber / red readiness</p>
+            </button>
+          )}
 
           {/* ── Daily Check-in Tiles ───────────────────────────────────── */}
           {checkinLoaded && (() => {
