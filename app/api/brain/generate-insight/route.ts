@@ -121,10 +121,10 @@ function buildPrompt(
 
   const latestWeight = weights[0]
 
-  return `You are an elite sports scientist AI generating a daily performance insight for an athlete. Analyse the data below carefully and produce a personalised, specific daily readiness summary.
+  return `You are a personal performance coach speaking directly to Kelvin. Write in second person ("your HRV", "you recovered well") — never third person ("the athlete"). Be direct, warm, and specific. Reference the actual numbers.
 
 ## Today's Data (${targetDate})
-- HRV: ${today?.hrv_avg ?? '—'}ms ${hrv7Avg ? `(7-day avg: ${hrv7Avg}ms, ${today?.hrv_avg && hrv7Avg ? (((today.hrv_avg - hrv7Avg) / hrv7Avg) * 100).toFixed(0) : '?'}% vs avg)` : ''}
+- HRV: ${today?.hrv_avg ?? '—'}ms ${hrv7Avg ? `(your 7-day avg: ${hrv7Avg}ms, ${today?.hrv_avg && hrv7Avg ? (((today.hrv_avg - hrv7Avg) / hrv7Avg) * 100).toFixed(0) : '?'}% vs your avg)` : ''}
 - HRV status: ${today?.hrv_status ?? '—'}
 - Body Battery: ${today?.body_battery_end ?? '—'}/100
 - Stress avg: ${today?.stress_avg ?? '—'}/100
@@ -135,11 +135,11 @@ function buildPrompt(
 
 ## Sleep
 - Last night: score ${todaySleep?.sleep_score ?? '—'}/100, duration ${fmtDur(todaySleep?.sleep_duration_seconds ?? null)}, deep ${fmtDur(todaySleep?.deep_sleep_seconds ?? null)}, REM ${fmtDur(todaySleep?.rem_sleep_seconds ?? null)}
-- 7-day sleep avg: ${sleep7Avg ? fmtDur(sleep7Avg) : '—'}
+- Your 7-day sleep avg: ${sleep7Avg ? fmtDur(sleep7Avg) : '—'}
 
 ## Today's Completed Workouts (IMPORTANT — already done today)
 ${todayActsText}
-${alreadyTrainedHard ? `Total training today: ~${Math.round(todayTotalDurMin)} minutes across ${todayActivities.length} session(s).` : ''}
+${alreadyTrainedHard ? `You have already trained ~${Math.round(todayTotalDurMin)} minutes today across ${todayActivities.length} session(s).` : ''}
 
 ## Steps & Activity
 - Steps: ${todaySteps?.total_steps?.toLocaleString() ?? '—'}
@@ -152,16 +152,16 @@ ${recentActsText || '— No recent activities'}
 ${latestWeight ? `${latestWeight.weight_kg.toFixed(1)} kg${latestWeight.body_fat_pct ? ` · ${latestWeight.body_fat_pct.toFixed(1)}% body fat` : ''} (${latestWeight.weigh_date})` : '— No recent data'}
 
 ## Your Task
-Based on ALL the data above, generate a JSON response. Be specific — reference actual numbers.
+Generate a personalised JSON response speaking directly to Kelvin in second person. Reference actual numbers. Be specific and actionable.
 
 Rules:
-- "green" label = good recovery/readiness at the START of the day (HRV normal/above, good sleep, BB > 60)
-- "amber" label = moderate recovery — train but keep intensity moderate (HRV slightly low, ok sleep, BB 35-60)
-- "red" label = poor recovery — rest or very easy only (HRV significantly below avg, poor sleep, BB < 35, or multiple warning signs)
-- readiness_score: your 0-100 overall readiness assessment based on recovery metrics (HRV, sleep, body battery)
-- headline: one punchy sentence (max 15 words) — like a doctor's verdict on today's recovery
-- insight: 2-3 sentences referencing actual numbers explaining WHY you gave that label
-- suggested_focus: CRITICAL — if the athlete has ALREADY completed significant training today (see "Today's Completed Workouts"), your suggestion must reflect what to do FOR THE REST OF THE DAY (e.g. recovery, nutrition, mobility, rest). Do NOT recommend additional hard training if they have already trained. If no training yet today, recommend what to do.
+- "green" = good recovery (HRV normal/above avg, good sleep, BB > 60) — cleared for hard training if not already done
+- "amber" = moderate recovery (HRV slightly low, ok sleep, BB 35–60) — train but moderate intensity
+- "red" = poor recovery (HRV significantly below avg, poor sleep, BB < 35, or multiple warning signs) — rest or easy only
+- readiness_score: 0–100 overall readiness based on HRV, sleep, body battery
+- headline: one punchy sentence (max 15 words) speaking directly to Kelvin — e.g. "Your recovery is solid today, Kelvin"
+- insight: 2–3 sentences in second person referencing actual numbers — e.g. "Your HRV of 37ms is right on your 7-day average..." Never say "the athlete".
+- suggested_focus: CRITICAL — if training is already done today, tell Kelvin what to do for THE REST OF THE DAY (recovery, nutrition, mobility). If no training yet, recommend what to do. Always second person.
 
 Return ONLY valid JSON, no markdown fences:
 {
