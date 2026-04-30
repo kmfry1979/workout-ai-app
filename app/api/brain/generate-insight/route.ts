@@ -93,7 +93,11 @@ function buildPrompt(
   const sleep7Avg = sleepHistory.length > 0
     ? Math.round(sleepHistory.reduce((a, b) => a + b, 0) / sleepHistory.length) : null
 
-  const recentActs = activities.slice(0, 5).map(a => {
+  // Split activities into today's sessions vs recent history
+  const todayActivities = activities.filter(a => a.start_time.startsWith(targetDate))
+  const recentActs = activities.filter(a => !a.start_time.startsWith(targetDate)).slice(0, 5)
+
+  function fmtActivity(a: ActivityRow): string {
     const parts = [
       a.activity_type?.replace(/_/g, ' ') ?? 'activity',
       fmtDur(a.duration_sec),
@@ -101,7 +105,18 @@ function buildPrompt(
       a.avg_hr ? `${a.avg_hr}bpm` : null,
       a.training_effect ? `TE ${a.training_effect.toFixed(1)}` : null,
     ].filter(Boolean)
-    return `- ${new Date(a.start_time).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}: ${parts.join(' · ')}`
+    return parts.join(' · ')
+  }
+
+  const todayActsText = todayActivities.length > 0
+    ? todayActivities.map(a => `- ${fmtActivity(a)}`).join('\n')
+    : '— None recorded yet'
+
+  const todayTotalDurMin = todayActivities.reduce((s, a) => s + (a.duration_sec ?? 0), 0) / 60
+  const alreadyTrainedHard = todayTotalDurMin >= 30
+
+  const recentActsText = recentActs.map(a => {
+    return `- ${new Date(a.start_time).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}: ${fmtActivity(a)}`
   }).join('\n')
 
   const latestWeight = weights[0]
@@ -122,12 +137,16 @@ function buildPrompt(
 - Last night: score ${todaySleep?.sleep_score ?? '—'}/100, duration ${fmtDur(todaySleep?.sleep_duration_seconds ?? null)}, deep ${fmtDur(todaySleep?.deep_sleep_seconds ?? null)}, REM ${fmtDur(todaySleep?.rem_sleep_seconds ?? null)}
 - 7-day sleep avg: ${sleep7Avg ? fmtDur(sleep7Avg) : '—'}
 
-## Activity (today)
+## Today's Completed Workouts (IMPORTANT — already done today)
+${todayActsText}
+${alreadyTrainedHard ? `Total training today: ~${Math.round(todayTotalDurMin)} minutes across ${todayActivities.length} session(s).` : ''}
+
+## Steps & Activity
 - Steps: ${todaySteps?.total_steps?.toLocaleString() ?? '—'}
 - Active minutes: ${todaySteps?.active_minutes ?? '—'}
 
-## Last 5 Workouts
-${recentActs || '— No recent activities'}
+## Recent Workouts (previous days)
+${recentActsText || '— No recent activities'}
 
 ## Weight
 ${latestWeight ? `${latestWeight.weight_kg.toFixed(1)} kg${latestWeight.body_fat_pct ? ` · ${latestWeight.body_fat_pct.toFixed(1)}% body fat` : ''} (${latestWeight.weigh_date})` : '— No recent data'}
@@ -136,13 +155,13 @@ ${latestWeight ? `${latestWeight.weight_kg.toFixed(1)} kg${latestWeight.body_fat
 Based on ALL the data above, generate a JSON response. Be specific — reference actual numbers.
 
 Rules:
-- "green" label = good recovery, cleared for hard training (HRV normal/above, good sleep, BB > 60)
-- "amber" label = moderate recovery, train but keep intensity moderate (HRV slightly low, ok sleep, BB 35-60)
-- "red" label = poor recovery, rest or very easy only (HRV significantly below avg, poor sleep, BB < 35, or multiple warning signs)
-- readiness_score: your 0-100 overall readiness assessment
-- headline: one punchy sentence (max 15 words) — like a doctor's verdict
+- "green" label = good recovery/readiness at the START of the day (HRV normal/above, good sleep, BB > 60)
+- "amber" label = moderate recovery — train but keep intensity moderate (HRV slightly low, ok sleep, BB 35-60)
+- "red" label = poor recovery — rest or very easy only (HRV significantly below avg, poor sleep, BB < 35, or multiple warning signs)
+- readiness_score: your 0-100 overall readiness assessment based on recovery metrics (HRV, sleep, body battery)
+- headline: one punchy sentence (max 15 words) — like a doctor's verdict on today's recovery
 - insight: 2-3 sentences referencing actual numbers explaining WHY you gave that label
-- suggested_focus: one specific training recommendation for today (e.g. "Easy 30-40 min run at conversational pace" or "Full rest — prioritise 9h sleep tonight")
+- suggested_focus: CRITICAL — if the athlete has ALREADY completed significant training today (see "Today's Completed Workouts"), your suggestion must reflect what to do FOR THE REST OF THE DAY (e.g. recovery, nutrition, mobility, rest). Do NOT recommend additional hard training if they have already trained. If no training yet today, recommend what to do.
 
 Return ONLY valid JSON, no markdown fences:
 {
