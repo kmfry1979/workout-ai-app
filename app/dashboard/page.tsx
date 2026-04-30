@@ -609,6 +609,13 @@ export default function DashboardPage() {
   const [morningStreak, setMorningStreak] = useState(0)
   const [eveningStreak, setEveningStreak] = useState(0)
   const [checkinSaving, setCheckinSaving] = useState(false)
+  const [morningPhase, setMorningPhase] = useState<'questions' | 'summary'>('questions')
+  const [eveningPhase, setEveningPhase] = useState<'questions' | 'summary'>('questions')
+  type MorningAISummary = { headline: string; sleep_overview: string; recommended_activity: string; quote: string }
+  type EveningAISummary = { headline: string; day_summary: string; highlights: string; sleep_recommendation: string; recommended_sleep_hours: number }
+  const [morningAISummary, setMorningAISummary] = useState<MorningAISummary | null>(null)
+  const [eveningAISummary, setEveningAISummary] = useState<EveningAISummary | null>(null)
+  const [checkinSummaryLoading, setCheckinSummaryLoading] = useState(false)
   const [journalTags, setJournalTags] = useState<string[]>([])
   const [journalLoaded, setJournalLoaded] = useState(false)
 
@@ -692,6 +699,9 @@ export default function DashboardPage() {
     if (dates.length === 0) return 0
     let streak = 0
     const d = new Date(); d.setHours(0, 0, 0, 0)
+    // If today's check-in isn't done yet, start counting from yesterday so the
+    // previous streak is shown (instead of 0) until the user completes today's.
+    if (!dates.includes(localDateStr(d))) d.setDate(d.getDate() - 1)
     for (const date of dates) {
       const expected = localDateStr(d)
       if (date === expected) { streak++; d.setDate(d.getDate() - 1) } else break
@@ -775,6 +785,35 @@ export default function DashboardPage() {
     setCheckinHistory(hist)
     setMorningStreak(calcCheckinStreak('morning', hist))
     setCheckinSaving(false)
+    // Generate AI morning summary
+    setMorningPhase('summary')
+    setCheckinSummaryLoading(true)
+    setMorningAISummary(null)
+    try {
+      const res = await fetch('/api/checkin/summary', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'morning',
+          checkin: draft,
+          sleep: sleepData ? {
+            sleep_score: sleepData.sleep_score,
+            sleep_duration_seconds: sleepData.sleep_duration_seconds,
+            deep_sleep_seconds: sleepData.deep_sleep_seconds,
+            rem_sleep_seconds: sleepData.rem_sleep_seconds,
+            light_sleep_seconds: sleepData.light_sleep_seconds,
+          } : null,
+          health: dailyHealth ? {
+            hrv_avg: dailyHealth.hrv_avg,
+            body_battery_end: dailyHealth.body_battery_end,
+            stress_avg: dailyHealth.stress_avg,
+          } : null,
+        }),
+      })
+      const data = await res.json() as MorningAISummary
+      setMorningAISummary(data)
+    } catch { /* silent — summary is optional */ }
+    setCheckinSummaryLoading(false)
   }
 
   const saveEveningCheckin = async (draft: EveningCheckinData) => {
@@ -798,6 +837,43 @@ export default function DashboardPage() {
     setCheckinHistory(hist)
     setEveningStreak(calcCheckinStreak('evening', hist))
     setCheckinSaving(false)
+    // Generate AI evening summary
+    setEveningPhase('summary')
+    setCheckinSummaryLoading(true)
+    setEveningAISummary(null)
+    try {
+      const todayStr2 = localDateStr(new Date())
+      const todayActs = activities.filter(a => a.start_time.startsWith(todayStr2))
+      const res = await fetch('/api/checkin/summary', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'evening',
+          checkin: draft,
+          sleep: sleepData ? {
+            sleep_score: sleepData.sleep_score,
+            sleep_duration_seconds: sleepData.sleep_duration_seconds,
+            deep_sleep_seconds: sleepData.deep_sleep_seconds,
+            rem_sleep_seconds: sleepData.rem_sleep_seconds,
+          } : null,
+          health: {
+            hrv_avg: dailyHealth?.hrv_avg ?? metrics?.garmin_hrv_nightly_avg ?? null,
+            body_battery_end: dailyHealth?.body_battery_end ?? null,
+            stress_avg: dailyHealth?.stress_avg ?? metrics?.garmin_stress_avg ?? null,
+            steps: dailySteps?.total_steps ?? metrics?.steps ?? null,
+          },
+          activities: todayActs.map(a => ({
+            activity_type: a.activity_type,
+            duration_sec: a.duration_sec,
+            calories: a.calories,
+          })),
+          morning_checkin: morningCheckin,
+        }),
+      })
+      const data = await res.json() as EveningAISummary
+      setEveningAISummary(data)
+    } catch { /* silent */ }
+    setCheckinSummaryLoading(false)
   }
 
   const loadDashboardData = async (userId: string) => {
@@ -3326,7 +3402,7 @@ export default function DashboardPage() {
               <>
                 <div className="grid grid-cols-2 gap-3">
                   {/* Morning tile */}
-                  <button type="button" onClick={() => { setMorningDraft(morningCheckin ?? EMPTY_MORNING); setMorningStep(0); setMorningModalOpen(true) }}
+                  <button type="button" onClick={() => { setMorningDraft(morningCheckin ?? EMPTY_MORNING); setMorningStep(0); setMorningPhase('questions'); setMorningAISummary(null); setMorningModalOpen(true) }}
                     className="rounded-2xl p-4 text-left transition-colors hover:opacity-90 active:scale-95"
                     style={{ background: '#111827', border: '1px solid #1f2937' }}>
                     <div className="flex items-center justify-between mb-1">
@@ -3339,7 +3415,7 @@ export default function DashboardPage() {
                   </button>
 
                   {/* Evening tile */}
-                  <button type="button" onClick={() => { setEveningDraft(eveningCheckin ?? EMPTY_EVENING); setEveningStep(0); setEveningModalOpen(true) }}
+                  <button type="button" onClick={() => { setEveningDraft(eveningCheckin ?? EMPTY_EVENING); setEveningStep(0); setEveningPhase('questions'); setEveningAISummary(null); setEveningModalOpen(true) }}
                     className="rounded-2xl p-4 text-left transition-colors hover:opacity-90 active:scale-95"
                     style={{ background: '#111827', border: '1px solid #1f2937' }}>
                     <div className="flex items-center justify-between mb-1">
@@ -3425,58 +3501,99 @@ export default function DashboardPage() {
                       <div className="w-full max-w-md rounded-3xl p-6 overflow-y-auto" style={{ background: '#111827', border: '1px solid #1f2937', maxHeight: '90vh' }}>
                         {/* Header */}
                         <div className="flex items-center justify-between mb-4">
-                          <p className="text-[10px] font-bold tracking-widest text-indigo-400">🌙 EVENING CHECK-IN</p>
+                          <p className="text-[10px] font-bold tracking-widest text-indigo-400">
+                            {eveningPhase === 'summary' ? '🌙 DAY COMPLETE' : '🌙 EVENING CHECK-IN'}
+                          </p>
                           <button type="button" onClick={() => setEveningModalOpen(false)} className="text-gray-500 hover:text-gray-300 text-lg leading-none">✕</button>
                         </div>
-                        {/* Progress dots */}
-                        <div className="flex justify-center gap-1.5 mb-5">
-                          {ESTEPS.map((_, i) => (
-                            <div key={i} className="rounded-full transition-all" style={{ width: i === eveningStep ? 20 : 6, height: 6, background: i < eveningStep ? '#4f46e5' : i === eveningStep ? '#6366f1' : '#374151' }} />
-                          ))}
-                        </div>
-                        {/* Question */}
-                        <h2 className="text-lg font-bold text-white mb-1">{estep.title}</h2>
-                        <p className="text-xs text-gray-500 mb-5">{estep.subtitle}</p>
-                        {/* Options */}
-                        <div className="flex justify-around mb-6">
-                          {estep.options.map(opt => {
-                            const cur = estep.val()
-                            const sel = cur === opt.v
-                            return (
-                              <button key={opt.v} type="button"
-                                onClick={() => estep.set(opt.v as number)}
-                                className="flex flex-col items-center gap-1.5 transition-all"
-                                style={{ opacity: cur != null && !sel ? 0.4 : 1 }}>
-                                <span className={`text-3xl transition-transform ${sel ? 'scale-125' : 'hover:scale-110'}`}>{opt.emoji}</span>
-                                <span className="text-[10px] font-medium" style={{ color: sel ? '#6366f1' : '#6b7280' }}>{opt.label}</span>
+
+                        {eveningPhase === 'summary' ? (
+                          /* ── Evening AI Summary Screen ── */
+                          checkinSummaryLoading || !eveningAISummary ? (
+                            <div className="flex flex-col items-center justify-center py-12 gap-4">
+                              <div className="w-8 h-8 border-2 border-indigo-600 border-t-indigo-300 rounded-full animate-spin" />
+                              <p className="text-sm text-gray-400">Generating your day summary…</p>
+                            </div>
+                          ) : (
+                            <div className="space-y-4">
+                              <h2 className="text-lg font-bold text-white leading-snug">{eveningAISummary.headline}</h2>
+                              <div className="rounded-2xl p-4" style={{ background: '#1f2937' }}>
+                                <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest mb-2">Today in Review</p>
+                                <p className="text-sm text-gray-200 leading-relaxed">{eveningAISummary.day_summary}</p>
+                              </div>
+                              <div className="rounded-2xl p-4" style={{ background: '#1f2937' }}>
+                                <p className="text-[10px] font-bold text-green-400 uppercase tracking-widest mb-2">✨ Highlights</p>
+                                <p className="text-sm text-gray-200 leading-relaxed whitespace-pre-line">{eveningAISummary.highlights}</p>
+                              </div>
+                              <div className="rounded-2xl p-4 flex items-start gap-3" style={{ background: '#1f2937' }}>
+                                <div className="text-3xl">😴</div>
+                                <div className="flex-1">
+                                  <p className="text-[10px] font-bold text-blue-400 uppercase tracking-widest mb-1">
+                                    Tonight&apos;s Sleep Target: <span className="text-white text-sm">{eveningAISummary.recommended_sleep_hours}h</span>
+                                  </p>
+                                  <p className="text-xs text-gray-400 leading-relaxed">{eveningAISummary.sleep_recommendation}</p>
+                                </div>
+                              </div>
+                              <button type="button" onClick={() => setEveningModalOpen(false)}
+                                className="w-full py-3 rounded-2xl text-sm font-bold text-white"
+                                style={{ background: '#4f46e5' }}>
+                                Good night 🌙
                               </button>
-                            )
-                          })}
-                        </div>
-                        {/* Nav buttons */}
-                        <div className="flex gap-3">
-                          {eveningStep > 0 && (
-                            <button type="button" onClick={() => setEveningStep(s => s - 1)}
-                              className="flex-1 py-3 rounded-2xl text-sm font-semibold text-gray-400 transition-colors"
-                              style={{ background: '#1f2937' }}>
-                              Back
-                            </button>
-                          )}
-                          <button type="button"
-                            onClick={async () => {
-                              if (eIsLast) {
-                                await saveEveningCheckin(eveningDraft)
-                                setEveningModalOpen(false)
-                              } else {
-                                setEveningStep(s => s + 1)
-                              }
-                            }}
-                            disabled={!eCanNext}
-                            className="flex-1 py-3 rounded-2xl text-sm font-bold text-white transition-colors"
-                            style={{ background: eCanNext ? '#4f46e5' : '#374151' }}>
-                            {eIsLast ? (checkinSaving ? 'Saving…' : 'Save Check-in') : 'Next →'}
-                          </button>
-                        </div>
+                            </div>
+                          )
+                        ) : (
+                          /* ── Questions ── */
+                          <>
+                            {/* Progress dots */}
+                            <div className="flex justify-center gap-1.5 mb-5">
+                              {ESTEPS.map((_, i) => (
+                                <div key={i} className="rounded-full transition-all" style={{ width: i === eveningStep ? 20 : 6, height: 6, background: i < eveningStep ? '#4f46e5' : i === eveningStep ? '#6366f1' : '#374151' }} />
+                              ))}
+                            </div>
+                            {/* Question */}
+                            <h2 className="text-lg font-bold text-white mb-1">{estep.title}</h2>
+                            <p className="text-xs text-gray-500 mb-5">{estep.subtitle}</p>
+                            {/* Options */}
+                            <div className="flex justify-around mb-6">
+                              {estep.options.map(opt => {
+                                const cur = estep.val()
+                                const sel = cur === opt.v
+                                return (
+                                  <button key={opt.v} type="button"
+                                    onClick={() => estep.set(opt.v as number)}
+                                    className="flex flex-col items-center gap-1.5 transition-all"
+                                    style={{ opacity: cur != null && !sel ? 0.4 : 1 }}>
+                                    <span className={`text-3xl transition-transform ${sel ? 'scale-125' : 'hover:scale-110'}`}>{opt.emoji}</span>
+                                    <span className="text-[10px] font-medium" style={{ color: sel ? '#6366f1' : '#6b7280' }}>{opt.label}</span>
+                                  </button>
+                                )
+                              })}
+                            </div>
+                            {/* Nav buttons */}
+                            <div className="flex gap-3">
+                              {eveningStep > 0 && (
+                                <button type="button" onClick={() => setEveningStep(s => s - 1)}
+                                  className="flex-1 py-3 rounded-2xl text-sm font-semibold text-gray-400 transition-colors"
+                                  style={{ background: '#1f2937' }}>
+                                  Back
+                                </button>
+                              )}
+                              <button type="button"
+                                onClick={async () => {
+                                  if (eIsLast) {
+                                    await saveEveningCheckin(eveningDraft)
+                                  } else {
+                                    setEveningStep(s => s + 1)
+                                  }
+                                }}
+                                disabled={!eCanNext}
+                                className="flex-1 py-3 rounded-2xl text-sm font-bold text-white transition-colors"
+                                style={{ background: eCanNext ? '#4f46e5' : '#374151' }}>
+                                {eIsLast ? (checkinSaving ? 'Saving…' : 'Save Check-in') : 'Next →'}
+                              </button>
+                            </div>
+                          </>
+                        )}
                       </div>
                     </div>
                   )
@@ -3580,76 +3697,111 @@ export default function DashboardPage() {
                       <div className="w-full max-w-md rounded-3xl p-6 overflow-y-auto" style={{ background: '#111827', border: '1px solid #1f2937', maxHeight: '90vh' }}>
                         {/* Header */}
                         <div className="flex items-center justify-between mb-4">
-                          <p className="text-[10px] font-bold tracking-widest text-orange-400">🌅 MORNING CHECK-IN</p>
+                          <p className="text-[10px] font-bold tracking-widest text-orange-400">
+                            {morningPhase === 'summary' ? '🌅 GOOD MORNING' : '🌅 MORNING CHECK-IN'}
+                          </p>
                           <button type="button" onClick={() => setMorningModalOpen(false)} className="text-gray-500 hover:text-gray-300 text-lg leading-none">✕</button>
                         </div>
-                        {/* Progress dots */}
-                        <div className="flex justify-center gap-1.5 mb-5">
-                          {STEPS.map((_, i) => (
-                            <div key={i} className="rounded-full transition-all" style={{ width: i === morningStep ? 20 : 6, height: 6, background: i < morningStep ? '#1d4ed8' : i === morningStep ? '#f97316' : '#374151' }} />
-                          ))}
-                        </div>
-                        {/* Question */}
-                        <h2 className="text-lg font-bold text-white mb-1">{step.title}</h2>
-                        <p className="text-xs text-gray-500 mb-5">{step.subtitle}</p>
-                        {/* Options */}
-                        {step.key === 'aches' ? (
-                          <div className="grid grid-cols-3 gap-2 mb-6">
-                            {step.options.map(opt => {
-                              const areas = morningDraft.body_ache_areas
-                              const sel = areas.includes(String(opt.v))
-                              return (
-                                <button key={String(opt.v)} type="button"
-                                  onClick={() => step.toggleAche?.(String(opt.v))}
-                                  className="flex flex-col items-center gap-1.5 py-3 rounded-2xl transition-all"
-                                  style={{ background: sel ? 'rgba(59,130,246,0.25)' : '#1f2937', border: sel ? '1px solid #3b82f6' : '1px solid #374151' }}>
-                                  <span className="text-2xl">{opt.emoji}</span>
-                                  <span className="text-[10px] font-medium" style={{ color: sel ? '#60a5fa' : '#9ca3af' }}>{opt.label}</span>
-                                </button>
-                              )
-                            })}
-                          </div>
+
+                        {morningPhase === 'summary' ? (
+                          /* ── Morning AI Summary Screen ── */
+                          checkinSummaryLoading || !morningAISummary ? (
+                            <div className="flex flex-col items-center justify-center py-12 gap-4">
+                              <div className="w-8 h-8 border-2 border-orange-600 border-t-orange-300 rounded-full animate-spin" />
+                              <p className="text-sm text-gray-400">Building your morning overview…</p>
+                            </div>
+                          ) : (
+                            <div className="space-y-4">
+                              <h2 className="text-lg font-bold text-white leading-snug">{morningAISummary.headline}</h2>
+                              <div className="rounded-2xl p-4" style={{ background: '#1f2937' }}>
+                                <p className="text-[10px] font-bold text-blue-400 uppercase tracking-widest mb-2">Sleep Overview</p>
+                                <p className="text-sm text-gray-200 leading-relaxed">{morningAISummary.sleep_overview}</p>
+                              </div>
+                              <div className="rounded-2xl p-4" style={{ background: '#1f2937' }}>
+                                <p className="text-[10px] font-bold text-orange-400 uppercase tracking-widest mb-2">Recommended for Today</p>
+                                <p className="text-sm text-gray-200 leading-relaxed">{morningAISummary.recommended_activity}</p>
+                              </div>
+                              <div className="rounded-2xl p-4" style={{ background: 'rgba(249,115,22,0.08)', border: '1px solid rgba(249,115,22,0.2)' }}>
+                                <p className="text-xs text-orange-300 leading-relaxed italic">&ldquo;{morningAISummary.quote}&rdquo;</p>
+                              </div>
+                              <button type="button" onClick={() => setMorningModalOpen(false)}
+                                className="w-full py-3 rounded-2xl text-sm font-bold text-white"
+                                style={{ background: '#f97316' }}>
+                                Let&apos;s go! 🌅
+                              </button>
+                            </div>
+                          )
                         ) : (
-                          <div className="flex justify-around mb-6">
-                            {step.options.map(opt => {
-                              const cur = step.val()
-                              const sel = cur === opt.v
-                              return (
-                                <button key={opt.v} type="button"
-                                  onClick={() => step.set?.(opt.v as number)}
-                                  className="flex flex-col items-center gap-1.5 transition-all"
-                                  style={{ opacity: cur != null && !sel ? 0.4 : 1 }}>
-                                  <span className={`text-3xl transition-transform ${sel ? 'scale-125' : 'hover:scale-110'}`}>{opt.emoji}</span>
-                                  <span className="text-[10px] font-medium" style={{ color: sel ? '#f97316' : '#6b7280' }}>{opt.label}</span>
+                          /* ── Questions ── */
+                          <>
+                            {/* Progress dots */}
+                            <div className="flex justify-center gap-1.5 mb-5">
+                              {STEPS.map((_, i) => (
+                                <div key={i} className="rounded-full transition-all" style={{ width: i === morningStep ? 20 : 6, height: 6, background: i < morningStep ? '#1d4ed8' : i === morningStep ? '#f97316' : '#374151' }} />
+                              ))}
+                            </div>
+                            {/* Question */}
+                            <h2 className="text-lg font-bold text-white mb-1">{step.title}</h2>
+                            <p className="text-xs text-gray-500 mb-5">{step.subtitle}</p>
+                            {/* Options */}
+                            {step.key === 'aches' ? (
+                              <div className="grid grid-cols-3 gap-2 mb-6">
+                                {step.options.map(opt => {
+                                  const areas = morningDraft.body_ache_areas
+                                  const sel = areas.includes(String(opt.v))
+                                  return (
+                                    <button key={String(opt.v)} type="button"
+                                      onClick={() => step.toggleAche?.(String(opt.v))}
+                                      className="flex flex-col items-center gap-1.5 py-3 rounded-2xl transition-all"
+                                      style={{ background: sel ? 'rgba(59,130,246,0.25)' : '#1f2937', border: sel ? '1px solid #3b82f6' : '1px solid #374151' }}>
+                                      <span className="text-2xl">{opt.emoji}</span>
+                                      <span className="text-[10px] font-medium" style={{ color: sel ? '#60a5fa' : '#9ca3af' }}>{opt.label}</span>
+                                    </button>
+                                  )
+                                })}
+                              </div>
+                            ) : (
+                              <div className="flex justify-around mb-6">
+                                {step.options.map(opt => {
+                                  const cur = step.val()
+                                  const sel = cur === opt.v
+                                  return (
+                                    <button key={opt.v} type="button"
+                                      onClick={() => step.set?.(opt.v as number)}
+                                      className="flex flex-col items-center gap-1.5 transition-all"
+                                      style={{ opacity: cur != null && !sel ? 0.4 : 1 }}>
+                                      <span className={`text-3xl transition-transform ${sel ? 'scale-125' : 'hover:scale-110'}`}>{opt.emoji}</span>
+                                      <span className="text-[10px] font-medium" style={{ color: sel ? '#f97316' : '#6b7280' }}>{opt.label}</span>
+                                    </button>
+                                  )
+                                })}
+                              </div>
+                            )}
+                            {/* Nav buttons */}
+                            <div className="flex gap-3">
+                              {morningStep > 0 && (
+                                <button type="button" onClick={() => setMorningStep(s => s - 1)}
+                                  className="flex-1 py-3 rounded-2xl text-sm font-semibold text-gray-400 transition-colors"
+                                  style={{ background: '#1f2937' }}>
+                                  Back
                                 </button>
-                              )
-                            })}
-                          </div>
+                              )}
+                              <button type="button"
+                                onClick={async () => {
+                                  if (isLast) {
+                                    await saveMorningCheckin(morningDraft)
+                                  } else {
+                                    setMorningStep(s => s + 1)
+                                  }
+                                }}
+                                disabled={!canNext && step.key !== 'aches'}
+                                className="flex-1 py-3 rounded-2xl text-sm font-bold text-white transition-colors"
+                                style={{ background: canNext || step.key === 'aches' ? '#f97316' : '#374151' }}>
+                                {isLast ? (checkinSaving ? 'Saving…' : 'Save Check-in') : 'Next →'}
+                              </button>
+                            </div>
+                          </>
                         )}
-                        {/* Nav buttons */}
-                        <div className="flex gap-3">
-                          {morningStep > 0 && (
-                            <button type="button" onClick={() => setMorningStep(s => s - 1)}
-                              className="flex-1 py-3 rounded-2xl text-sm font-semibold text-gray-400 transition-colors"
-                              style={{ background: '#1f2937' }}>
-                              Back
-                            </button>
-                          )}
-                          <button type="button"
-                            onClick={async () => {
-                              if (isLast) {
-                                await saveMorningCheckin(morningDraft)
-                                setMorningModalOpen(false)
-                              } else {
-                                setMorningStep(s => s + 1)
-                              }
-                            }}
-                            disabled={!canNext && step.key !== 'aches'}
-                            className="flex-1 py-3 rounded-2xl text-sm font-bold text-white transition-colors"
-                            style={{ background: canNext || step.key === 'aches' ? '#f97316' : '#374151' }}>
-                            {isLast ? (checkinSaving ? 'Saving…' : 'Save Check-in') : 'Next →'}
-                          </button>
-                        </div>
                       </div>
                     </div>
                   )
