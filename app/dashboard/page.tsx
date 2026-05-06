@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
@@ -184,6 +184,23 @@ function SleepStat({
         {display !== '—' && unit && <span className="text-xs text-gray-500 font-normal ml-0.5">{unit}</span>}
       </p>
       <p className="text-[10px] text-gray-500 mt-0.5 leading-tight">{label}</p>
+    </div>
+  )
+}
+
+function RingGauge({ pct, color, label }: { pct: number; color: string; label: string }) {
+  const r = 36, cx = 44, cy = 44, sw = 7
+  const circ = 2 * Math.PI * r
+  const fill = Math.min(100, Math.max(0, pct))
+  return (
+    <div className="flex flex-col items-center gap-2">
+      <svg viewBox="0 0 88 88" className="w-24 h-24">
+        <circle cx={cx} cy={cy} r={r} fill="none" stroke="#1f2937" strokeWidth={sw} />
+        <circle cx={cx} cy={cy} r={r} fill="none" stroke={color} strokeWidth={sw} strokeLinecap="round"
+          strokeDasharray={`${(fill / 100) * circ} ${circ}`} transform={`rotate(-90 ${cx} ${cy})`} />
+        <text x={cx} y={cy + 7} textAnchor="middle" fill="white" fontSize="17" fontWeight="800" fontFamily="system-ui,sans-serif">{fill}%</text>
+      </svg>
+      <p className="text-xs text-gray-400 font-semibold tracking-wide">{label}</p>
     </div>
   )
 }
@@ -737,6 +754,17 @@ export default function DashboardPage() {
       motivation_level: te.motivation_level,
     } : null)
     setCheckinLoaded(true)
+    // Load cached AI summaries from localStorage if check-ins done today
+    try {
+      if (tm) {
+        const cached = localStorage.getItem(`morning_ai_summary_${today}`)
+        if (cached) setMorningAISummary(JSON.parse(cached) as MorningAISummary)
+      }
+      if (te) {
+        const cached = localStorage.getItem(`evening_ai_summary_${today}`)
+        if (cached) setEveningAISummary(JSON.parse(cached) as EveningAISummary)
+      }
+    } catch { /* ignore */ }
     // Load today's journal entry alongside check-in
     const todayForJournal = localDateStr(new Date())
     const { data: jData } = await supabase
@@ -812,6 +840,7 @@ export default function DashboardPage() {
       })
       const data = await res.json() as MorningAISummary
       setMorningAISummary(data)
+      try { localStorage.setItem(`morning_ai_summary_${localDateStr(new Date())}`, JSON.stringify(data)) } catch { /* ignore */ }
     } catch { /* silent — summary is optional */ }
     setCheckinSummaryLoading(false)
   }
@@ -872,6 +901,7 @@ export default function DashboardPage() {
       })
       const data = await res.json() as EveningAISummary
       setEveningAISummary(data)
+      try { localStorage.setItem(`evening_ai_summary_${localDateStr(new Date())}`, JSON.stringify(data)) } catch { /* ignore */ }
     } catch { /* silent */ }
     setCheckinSummaryLoading(false)
   }
@@ -1271,8 +1301,8 @@ export default function DashboardPage() {
   // Latest progress row drives the headline + percent in the modal.
   const latestProgress = progressRows[progressRows.length - 1] ?? null
 
-  const getDaySession = (h: number) => h < 12 ? 'morning' : h < 17 ? 'afternoon' : 'evening'
-  const sessionLabel = (s: string) => s === 'morning' ? '🌅 Morning Briefing' : s === 'afternoon' ? '☀️ Afternoon Check-in' : '🌙 Evening Report'
+  const getDaySession = (h: number) => h < 17 ? 'morning' : 'evening'
+  const sessionLabel = (s: string) => s === 'morning' ? '🌅 Morning Briefing' : '🌙 Evening Report'
 
   const fetchDailyBriefing = async () => {
     if (briefingLoading) return
@@ -2466,686 +2496,254 @@ export default function DashboardPage() {
           }
         </div>
 
-        {/* Three metric tiles */}
-        <div className="grid grid-cols-3 gap-2">
-          {/* Tile 1: Power Reserve + Load */}
-          {(() => {
-            const clampV = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
-            const lerpHex = (c1: string, c2: string, t: number) => {
-              const r1 = parseInt(c1.slice(1,3),16), g1 = parseInt(c1.slice(3,5),16), b1 = parseInt(c1.slice(5,7),16)
-              const r2 = parseInt(c2.slice(1,3),16), g2 = parseInt(c2.slice(3,5),16), b2 = parseInt(c2.slice(5,7),16)
-              return `#${Math.round(r1+(r2-r1)*t).toString(16).padStart(2,'0')}${Math.round(g1+(g2-g1)*t).toString(16).padStart(2,'0')}${Math.round(b1+(b2-b1)*t).toString(16).padStart(2,'0')}`
-            }
-            const hrv = dailyHealth?.hrv_avg ?? metrics?.garmin_hrv_nightly_avg ?? null
-            const hrvStatus = (dailyHealth?.hrv_status ?? metrics?.garmin_hrv_status ?? '').toLowerCase()
-            const sleepScore = sleepData?.sleep_score ?? metrics?.garmin_sleep_score ?? null
-            const rhr = metrics?.resting_hr ?? metrics?.resting_heart_rate_bpm ?? null
-            const hrvScore = hrv != null
-              ? hrvStatus.includes('balanced') || hrvStatus.includes('good') ? Math.min(85, 50 + (hrv - 30) * 1.5)
-              : hrvStatus.includes('poor') || hrvStatus.includes('low') ? Math.max(15, 40 - (40 - hrv))
-              : Math.max(0, Math.min(100, ((hrv - 20) / 60) * 100))
-              : null
-            let recScore = 0, recWeight = 0
-            if (hrvScore != null) { recScore += hrvScore * 0.45; recWeight += 0.45 }
-            if (sleepScore != null) { recScore += sleepScore * 0.35; recWeight += 0.35 }
-            if (rhr != null) { recScore += (100 - ((clampV(rhr, 40, 80) - 40) / 40) * 100) * 0.20; recWeight += 0.20 }
-            const reserve = recWeight > 0 ? Math.round(recScore / recWeight) : null
-            const modMin = dailySteps?.moderate_intensity_minutes ?? null
-            const vigMin = dailySteps?.vigorous_intensity_minutes ?? null
-            const activeMin = dailySteps?.active_minutes ?? null
-            const intensityMin = modMin != null || vigMin != null ? (modMin ?? 0) + (vigMin ?? 0) * 2 : (activeMin ?? 0) * 0.6
-            const load = Math.min(21, 21 * Math.log10(1 + intensityMin) / Math.log10(301))
-            const reservePct = reserve != null ? clampV(reserve, 0, 100) / 100 : 0
-            const loadPct = clampV(load, 0, 21) / 21
-            const reserveColor = reserve != null ? lerpHex('#f97316', '#dc2626', 1 - reservePct) : '#475569'
-            const loadColor = lerpHex('#3b82f6', '#2dd4bf', loadPct)
-            const reserveLabel = reserve == null ? '—' : reserve >= 80 ? 'Deep Reserve' : reserve >= 67 ? 'Charged' : reserve >= 34 ? 'Building' : 'Reserve Deficit'
-            const cx = 90, cy = 90
-            const rOuter = 68, rInner = 52, swOuter = 9, swInner = 12
-            const circumOuter = 2 * Math.PI * rOuter
-            const circumInner = 2 * Math.PI * rInner
-            return (
-              <>
-                <button type="button" onClick={() => setOpenTile('reserve')}
-                  className="rounded-2xl p-3 flex flex-col items-center w-full transition-opacity hover:opacity-90 active:opacity-75"
-                  style={{ background: 'linear-gradient(160deg,#0f1629 0%,#0a0f1e 100%)', border: '1px solid #1e293b' }}>
-                  <div className="flex items-center justify-center gap-1 mb-2">
-                    <p className="text-[9px] font-bold tracking-[0.15em]" style={{ color: reserveColor }}>READINESS INDEX</p>
-                    <span className="text-[9px] text-slate-600">ⓘ</span>
-                  </div>
-                  <svg viewBox="0 0 180 180" className="w-28 h-28">
-                    <defs>
-                      <filter id="glowReserve" x="-50%" y="-50%" width="200%" height="200%">
-                        <feGaussianBlur stdDeviation="3.5" result="blur" />
-                        <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
-                      </filter>
-                      <filter id="glowLoad" x="-50%" y="-50%" width="200%" height="200%">
-                        <feGaussianBlur stdDeviation="2.5" result="blur" />
-                        <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
-                      </filter>
-                    </defs>
-                    <circle cx={cx} cy={cy} r={rOuter} fill="none" stroke="#0f172a" strokeWidth={swOuter} />
-                    <circle cx={cx} cy={cy} r={rInner} fill="none" stroke="#0f172a" strokeWidth={swInner} />
-                    <circle cx={cx} cy={cy} r={rOuter} fill="none" stroke={reserveColor} strokeWidth={swOuter} strokeLinecap="round"
-                      strokeDasharray={`${reservePct * circumOuter} ${circumOuter}`} transform={`rotate(-90 ${cx} ${cy})`}
-                      filter={reserve != null ? 'url(#glowReserve)' : undefined} />
-                    <circle cx={cx} cy={cy} r={rInner} fill="none" stroke={loadColor} strokeWidth={swInner} strokeLinecap="round"
-                      strokeDasharray={`${loadPct * circumInner} ${circumInner}`} transform={`rotate(-90 ${cx} ${cy})`}
-                      filter="url(#glowLoad)" />
-                    <text x={cx} y={cy - 4} textAnchor="middle" fill="white" fontSize="26" fontWeight="800" fontFamily="system-ui,sans-serif">
-                      {reserve ?? '—'}
-                    </text>
-                    <text x={cx} y={cy + 11} textAnchor="middle" fontSize="7.5" fontFamily="system-ui,sans-serif" letterSpacing="1" fill="#94a3b8">RESERVE</text>
-                    <text x={cx} y={cy + 23} textAnchor="middle" fontSize="7.5" fontFamily="system-ui,sans-serif" letterSpacing="1" fill={loadColor}>{load.toFixed(1)} LOAD</text>
-                  </svg>
-                  <div className="flex gap-3 mt-1.5 w-full justify-center">
-                    <div className="text-center">
-                      <p className="text-sm font-extrabold tabular-nums" style={{ color: reserveColor }}>{reserve ?? '—'}</p>
-                      <p className="text-[9px] font-bold uppercase tracking-wide mt-0.5" style={{ color: '#64748b' }}>Power Reserve</p>
-                    </div>
-                    <div className="w-px" style={{ background: '#1e293b' }} />
-                    <div className="text-center">
-                      <p className="text-sm font-extrabold tabular-nums" style={{ color: loadColor }}>{load.toFixed(1)}</p>
-                      <p className="text-[9px] font-bold uppercase tracking-wide mt-0.5" style={{ color: '#64748b' }}>Load / 21</p>
-                    </div>
-                  </div>
-                </button>
+        {/* ── Three Ring Overview ─────────────────────────────────── */}
+        {(() => {
+          const sleepScore = sleepData?.sleep_score ?? metrics?.garmin_sleep_score ?? null
+          const bodyBattery = dailyHealth?.body_battery_peak ?? dailyHealth?.body_battery_end ?? metrics?.garmin_body_battery_high ?? metrics?.garmin_body_battery_eod ?? null
+          const modMin = dailySteps?.moderate_intensity_minutes ?? null
+          const vigMin = dailySteps?.vigorous_intensity_minutes ?? null
+          const activeMin = dailySteps?.active_minutes ?? null
+          const intensityMin = modMin != null || vigMin != null ? (modMin ?? 0) + (vigMin ?? 0) * 2 : (activeMin ?? 0) * 0.6
+          const strainPct = Math.round(Math.min(100, intensityMin > 0 ? 100 * Math.log10(1 + intensityMin) / Math.log10(301) : 0))
+          const recoveryPct = bodyBattery ?? 0
+          const sleepPct = sleepScore ?? 0
+          const coachingText = dashBrainInsight?.suggested_focus
+            ?? (strainPct >= 70 ? "Target strain reached. Focus on recovery — refuel and rest."
+              : recoveryPct <= 30 ? "Low battery — prioritise rest and easy movement today."
+              : recoveryPct >= 70 && strainPct < 30 ? "Well recovered. Ready for a quality training session."
+              : "Good day for moderate effort. Listen to your body.")
+          return (
+            <div className="rounded-3xl p-5 border border-gray-800" style={{ background: "linear-gradient(160deg,#111827 0%,#0d1117 100%)" }}>
+              <div className="flex justify-around items-center mb-4">
+                <RingGauge pct={strainPct} color="#f97316" label="Strain" />
+                <RingGauge pct={recoveryPct} color="#22c55e" label="Recovery" />
+                <RingGauge pct={sleepPct} color="#6366f1" label="Sleep" />
+              </div>
+              <div className="border-t border-gray-800 pt-3">
+                <p className="text-[10px] text-gray-500 uppercase tracking-widest font-semibold mb-1">Coaching</p>
+                <p className="text-sm text-gray-200 leading-relaxed">{coachingText}</p>
+              </div>
+            </div>
+          )
+        })()}
 
-                <DetailModal open={openTile === 'reserve'} onClose={() => setOpenTile(null)}
-                  title="Power Reserve" subtitle={reserveLabel} icon="⚡"
-                  gradient="from-orange-950/60 via-gray-900 to-gray-950" border="border-orange-800/30">
-                  <div className="space-y-4 text-sm">
-                    <p className="text-gray-300 leading-relaxed">
-                      Power Reserve is how much energy your body has stored and ready to use. It&apos;s calculated from three overnight signals — the higher the score, the more capacity you have for hard training today.
-                    </p>
-                    <div className="bg-gray-800/60 rounded-2xl p-4 space-y-3">
-                      <p className="text-xs text-gray-400 uppercase tracking-wider font-semibold">Formula (0–100)</p>
-                      <div className="space-y-2">
-                        <div className="flex justify-between items-center">
-                          <div>
-                            <p className="text-white font-medium">HRV <span className="text-gray-500 text-xs font-normal">45% weight</span></p>
-                            <p className="text-gray-400 text-xs">Heart rate variability — how well your nervous system recovered overnight</p>
-                          </div>
-                          <p className="text-white font-bold tabular-nums ml-3">{hrv != null ? `${hrv}ms` : '—'}</p>
-                        </div>
-                        <div className="flex justify-between items-center">
-                          <div>
-                            <p className="text-white font-medium">Sleep Score <span className="text-gray-500 text-xs font-normal">35% weight</span></p>
-                            <p className="text-gray-400 text-xs">Garmin&apos;s composite sleep quality score</p>
-                          </div>
-                          <p className="text-white font-bold tabular-nums ml-3">{sleepScore != null ? `${sleepScore}/100` : '—'}</p>
-                        </div>
-                        <div className="flex justify-between items-center">
-                          <div>
-                            <p className="text-white font-medium">Resting HR <span className="text-gray-500 text-xs font-normal">20% weight</span></p>
-                            <p className="text-gray-400 text-xs">Lower resting HR signals stronger recovery</p>
-                          </div>
-                          <p className="text-white font-bold tabular-nums ml-3">{rhr != null ? `${rhr}bpm` : '—'}</p>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="bg-gray-800/60 rounded-2xl p-4 space-y-2">
-                      <p className="text-xs text-gray-400 uppercase tracking-wider font-semibold">Reserve Levels</p>
-                      <div className="space-y-1.5 text-xs">
-                        <div className="flex justify-between"><span style={{ color: lerpHex('#f97316','#dc2626',0) }}>⚡ Deep Reserve (80–100)</span><span className="text-gray-400">Extra gear — peak output day</span></div>
-                        <div className="flex justify-between"><span style={{ color: lerpHex('#f97316','#dc2626',0.15) }}>⚡ Charged (67–79)</span><span className="text-gray-400">Good to train hard</span></div>
-                        <div className="flex justify-between"><span style={{ color: lerpHex('#f97316','#dc2626',0.55) }}>⚡ Building (34–66)</span><span className="text-gray-400">Moderate intensity recommended</span></div>
-                        <div className="flex justify-between"><span style={{ color: '#dc2626' }}>⚡ Reserve Deficit (&lt;34)</span><span className="text-gray-400">Rest or light movement only</span></div>
-                      </div>
-                    </div>
-                    <div className="bg-gray-800/60 rounded-2xl p-4 space-y-2">
-                      <p className="text-xs text-gray-400 uppercase tracking-wider font-semibold">Training Load (inner ring)</p>
-                      <p className="text-gray-300 text-xs leading-relaxed">Logarithmic 0–21 scale based on today&apos;s intensity minutes. A score of 10 is a moderate session; 18+ is an elite-level effort. Low load on a high-reserve day = opportunity. High load on a deficit = overreaching risk.</p>
-                      <p className="text-white font-bold text-lg tabular-nums">{load.toFixed(1)} <span className="text-gray-500 text-sm font-normal">/ 21</span></p>
+        {/* ── Stress & Energy ─────────────────────────────────────── */}
+        {(() => {
+          const stressAvg = dailyHealth?.stress_avg ?? metrics?.garmin_stress_avg ?? null
+          const stressMax = dailyHealth?.stress_max ?? null
+          const bodyBattery = dailyHealth?.body_battery_end ?? dailyHealth?.body_battery_peak ?? metrics?.garmin_body_battery_eod ?? metrics?.garmin_body_battery_high ?? null
+          if (stressAvg == null && stressMax == null && bodyBattery == null) return null
+          const stressLabel = stressAvg == null ? "—" : stressAvg < 26 ? "Rest" : stressAvg < 51 ? "Low" : stressAvg < 76 ? "Medium" : "High"
+          const stressColor = stressAvg == null ? "#6b7280" : stressAvg < 26 ? "#22c55e" : stressAvg < 51 ? "#84cc16" : stressAvg < 76 ? "#eab308" : "#ef4444"
+          const bbPct = bodyBattery != null ? Math.min(100, Math.max(0, bodyBattery)) : null
+          const bbColor = bbPct == null ? "#374151" : bbPct >= 70 ? "#22c55e" : bbPct >= 40 ? "#eab308" : "#ef4444"
+          return (
+            <div className="rounded-2xl p-4 border border-gray-800 bg-gray-900/60 space-y-3">
+              <p className="text-xs text-gray-400 font-bold uppercase tracking-wider">Stress &amp; Energy</p>
+              <div className="rounded-xl p-3 border border-gray-700/50 bg-gray-800/60">
+                <p className="text-xs font-semibold text-white flex items-center gap-1.5 mb-3">
+                  <span className="w-2 h-2 rounded-full bg-green-400 inline-block" />
+                  {"Today's stress"}
+                </p>
+                <div className="flex items-center gap-6">
+                  <div>
+                    <p className="text-2xl font-bold tabular-nums" style={{ color: "#ef4444" }}>{stressMax ?? "—"}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">Highest</p>
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold tabular-nums text-gray-300">{stressAvg != null ? Math.round(stressAvg) : "—"}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">Average</p>
+                  </div>
+                  <div className="ml-auto text-right">
+                    <p className="text-lg font-bold tabular-nums" style={{ color: stressColor }}>{stressLabel}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">Status</p>
+                  </div>
+                </div>
+              </div>
+              {bbPct != null && (
+                <div className="rounded-xl p-3 border border-gray-700/50 bg-gray-800/60 flex items-center gap-3">
+                  <span className="text-base">⚡</span>
+                  <div className="flex-1">
+                    <div className="h-2.5 rounded-full bg-gray-700 overflow-hidden">
+                      <div className="h-full rounded-full transition-all duration-500" style={{ width: `${bbPct}%`, background: bbColor }} />
                     </div>
                   </div>
-                </DetailModal>
-              </>
-            )
-          })()}
+                  <span className="text-sm font-bold tabular-nums shrink-0" style={{ color: bbColor }}>{bbPct}%</span>
+                </div>
+              )}
+            </div>
+          )
+        })()}
 
-          {/* Tile 2: Vitals (HRV + RHR) */}
-          {(() => {
-            const clampV = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
-            const hrv = dailyHealth?.hrv_avg ?? metrics?.garmin_hrv_nightly_avg ?? null
-            const rhr = metrics?.resting_hr ?? metrics?.resting_heart_rate_bpm ?? null
-            const stress = dailyHealth?.stress_avg ?? metrics?.garmin_stress_avg ?? null
-            // HRV: 20–120ms → 0–100%, purple
-            const hrvPct = hrv != null ? clampV((hrv - 20) / 100, 0, 1) : 0
-            const hrvColor = '#a855f7' // violet
-            const hrvStatus = hrv == null ? '—' : hrv >= 70 ? 'Excellent' : hrv >= 50 ? 'Good' : hrv >= 30 ? 'Fair' : 'Low'
-            // RHR: 40–80bpm → 0–100% (lower RHR = higher fill = healthier), rose
-            const rhrPct = rhr != null ? clampV((80 - rhr) / 40, 0, 1) : 0
-            const rhrColor = rhr == null ? '#475569' : rhr <= 55 ? '#22d3ee' : rhr <= 65 ? '#4ade80' : rhr <= 72 ? '#fb923c' : '#f43f5e'
-            const cx = 90, cy = 90
-            const rOuter = 68, rInner = 52, swOuter = 9, swInner = 12
-            const circumOuter = 2 * Math.PI * rOuter
-            const circumInner = 2 * Math.PI * rInner
-            return (
-              <>
-                <button type="button" onClick={() => setOpenTile('vitals')}
-                  className="rounded-2xl p-3 flex flex-col items-center w-full transition-opacity hover:opacity-90 active:opacity-75"
-                  style={{ background: 'linear-gradient(160deg,#0f1629 0%,#0a0f1e 100%)', border: '1px solid #1e293b' }}>
-                  <div className="flex items-center justify-center gap-1 mb-2">
-                    <p className="text-[9px] font-bold tracking-[0.15em]" style={{ color: hrvColor }}>VITALS</p>
-                    <span className="text-[9px] text-slate-600">ⓘ</span>
-                  </div>
-                  <svg viewBox="0 0 180 180" className="w-28 h-28">
-                    <defs>
-                      <filter id="glowHRV" x="-50%" y="-50%" width="200%" height="200%">
-                        <feGaussianBlur stdDeviation="3.5" result="blur" />
-                        <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
-                      </filter>
-                      <filter id="glowRHR" x="-50%" y="-50%" width="200%" height="200%">
-                        <feGaussianBlur stdDeviation="2.5" result="blur" />
-                        <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
-                      </filter>
-                    </defs>
-                    <circle cx={cx} cy={cy} r={rOuter} fill="none" stroke="#0f172a" strokeWidth={swOuter} />
-                    <circle cx={cx} cy={cy} r={rInner} fill="none" stroke="#0f172a" strokeWidth={swInner} />
-                    <circle cx={cx} cy={cy} r={rOuter} fill="none" stroke={hrvColor} strokeWidth={swOuter} strokeLinecap="round"
-                      strokeDasharray={`${hrvPct * circumOuter} ${circumOuter}`} transform={`rotate(-90 ${cx} ${cy})`}
-                      filter={hrv != null ? 'url(#glowHRV)' : undefined} />
-                    <circle cx={cx} cy={cy} r={rInner} fill="none" stroke={rhrColor} strokeWidth={swInner} strokeLinecap="round"
-                      strokeDasharray={`${rhrPct * circumInner} ${circumInner}`} transform={`rotate(-90 ${cx} ${cy})`}
-                      filter={rhr != null ? 'url(#glowRHR)' : undefined} />
-                    <text x={cx} y={cy - 4} textAnchor="middle" fill="white" fontSize="26" fontWeight="800" fontFamily="system-ui,sans-serif">
-                      {hrv != null ? Math.round(hrv) : '—'}
-                    </text>
-                    <text x={cx} y={cy + 11} textAnchor="middle" fontSize="7.5" fontFamily="system-ui,sans-serif" letterSpacing="1" fill={hrvColor}>HRV ms</text>
-                    <text x={cx} y={cy + 23} textAnchor="middle" fontSize="7.5" fontFamily="system-ui,sans-serif" letterSpacing="1" fill={rhrColor}>{rhr != null ? `${rhr} RHR` : '— RHR'}</text>
-                  </svg>
-                  <div className="flex gap-3 mt-1.5 w-full justify-center">
-                    <div className="text-center">
-                      <p className="text-sm font-extrabold tabular-nums" style={{ color: hrvColor }}>{hrv != null ? Math.round(hrv) : '—'}</p>
-                      <p className="text-[9px] font-bold uppercase tracking-wide mt-0.5" style={{ color: '#64748b' }}>{hrv != null ? `${hrvStatus}` : 'HRV'}</p>
-                    </div>
-                    <div className="w-px" style={{ background: '#1e293b' }} />
-                    <div className="text-center">
-                      <p className="text-sm font-extrabold tabular-nums" style={{ color: rhrColor }}>{rhr ?? '—'}</p>
-                      <p className="text-[9px] font-bold uppercase tracking-wide mt-0.5" style={{ color: '#64748b' }}>RHR bpm</p>
-                    </div>
-                  </div>
-                </button>
-
-                <DetailModal open={openTile === 'vitals'} onClose={() => setOpenTile(null)}
-                  title="Vitals" subtitle={`HRV ${hrv != null ? Math.round(hrv) + 'ms' : '—'} · RHR ${rhr ?? '—'} bpm`} icon="💓"
-                  gradient="from-violet-950/60 via-gray-900 to-gray-950" border="border-violet-800/30">
-                  <div className="space-y-4 text-sm">
-                    <p className="text-gray-300 leading-relaxed">
-                      Core physiological markers measured during rest and sleep — the two signals that most reliably reveal how your body is coping with training and daily stress.
-                    </p>
-                    <div className="bg-gray-800/60 rounded-2xl p-4 space-y-4">
-                      <div>
-                        <div className="flex justify-between items-start mb-1">
-                          <p className="font-medium" style={{ color: hrvColor }}>HRV <span className="text-gray-500 text-xs font-normal">(outer ring)</span></p>
-                          <p className="font-bold tabular-nums text-lg" style={{ color: hrvColor }}>{hrv != null ? Math.round(hrv) : '—'}<span className="text-xs text-gray-500"> ms</span></p>
-                        </div>
-                        <p className="text-gray-400 text-xs leading-relaxed">Heart Rate Variability — the millisecond variation between heartbeats during sleep. Higher HRV means your nervous system is in a parasympathetic (recovery) state. A drop of 10ms+ below your baseline is a strong signal to take it easy.</p>
-                        <div className="mt-2 grid grid-cols-4 gap-1.5 text-xs text-center">
-                          <div className="bg-gray-700/50 rounded-xl p-2"><p style={{ color: '#a855f7' }} className="font-bold">70+</p><p className="text-gray-500 mt-0.5">Excellent</p></div>
-                          <div className="bg-gray-700/50 rounded-xl p-2"><p style={{ color: '#818cf8' }} className="font-bold">50–69</p><p className="text-gray-500 mt-0.5">Good</p></div>
-                          <div className="bg-gray-700/50 rounded-xl p-2"><p style={{ color: '#fb923c' }} className="font-bold">30–49</p><p className="text-gray-500 mt-0.5">Fair</p></div>
-                          <div className="bg-gray-700/50 rounded-xl p-2"><p style={{ color: '#f43f5e' }} className="font-bold">&lt;30</p><p className="text-gray-500 mt-0.5">Low</p></div>
-                        </div>
+        {/* ── Health Monitor ──────────────────────────────────────── */}
+        {(() => {
+          const hrv = dailyHealth?.hrv_avg ?? metrics?.garmin_hrv_nightly_avg ?? null
+          const rhr = metrics?.resting_hr ?? metrics?.resting_heart_rate_bpm ?? null
+          const spo2 = dailyHealth?.spo2_avg ?? metrics?.garmin_spo2_avg ?? metrics?.pulse_ox ?? null
+          const rr = dailyHealth?.respiration_avg_bpm ?? sleepData?.avg_respiration_bpm ?? null
+          const sleepDurSec = sleepData?.sleep_duration_seconds ?? (metrics?.sleep_minutes != null ? metrics.sleep_minutes * 60 : null)
+          const sleepDur = sleepDurSec != null
+            ? `${Math.floor(sleepDurSec / 3600)}h ${Math.floor((sleepDurSec % 3600) / 60)}m`
+            : "—"
+          const sleepDurHrs = sleepDurSec != null ? sleepDurSec / 3600 : null
+          type HMTile = { icon: string; label: string; value: string | number | null; unit: string; status: { label: string; color: string }; barPct: number }
+          const tiles: HMTile[] = [
+            {
+              icon: "🫁", label: "RR", unit: "rpm",
+              value: rr != null ? Number(rr.toFixed(1)) : null,
+              status: rr == null ? { label: "—", color: "#6b7280" } : rr < 12 ? { label: "Low", color: "#f97316" } : rr > 20 ? { label: "High", color: "#f97316" } : { label: "Normal", color: "#22c55e" },
+              barPct: rr != null ? Math.min(100, (rr / 25) * 100) : 0,
+            },
+            {
+              icon: "❤️", label: "RHR", unit: "bpm",
+              value: rhr != null ? Number(rhr.toFixed(1)) : null,
+              status: rhr == null ? { label: "—", color: "#6b7280" } : rhr <= 55 ? { label: "Excellent", color: "#22c55e" } : rhr <= 65 ? { label: "Normal", color: "#22c55e" } : rhr <= 75 ? { label: "Elevated", color: "#eab308" } : { label: "High", color: "#ef4444" },
+              barPct: rhr != null ? Math.min(100, Math.max(0, ((80 - rhr) / 40) * 100)) : 0,
+            },
+            {
+              icon: "📊", label: "HRV", unit: "ms",
+              value: hrv != null ? Math.round(hrv) : null,
+              status: hrv == null ? { label: "—", color: "#6b7280" } : hrv >= 50 ? { label: "Good", color: "#22c55e" } : hrv >= 30 ? { label: "Normal", color: "#eab308" } : { label: "Low", color: "#ef4444" },
+              barPct: hrv != null ? Math.min(100, (hrv / 100) * 100) : 0,
+            },
+            {
+              icon: "💧", label: "SpO2", unit: "%",
+              value: spo2 != null ? Number(spo2.toFixed(1)) : null,
+              status: spo2 == null ? { label: "—", color: "#6b7280" } : spo2 >= 95 ? { label: "Normal", color: "#22c55e" } : spo2 >= 90 ? { label: "Lower", color: "#f97316" } : { label: "Low", color: "#ef4444" },
+              barPct: spo2 != null ? Math.min(100, Math.max(0, (spo2 - 90) / 10 * 100)) : 0,
+            },
+            {
+              icon: "🛏️", label: "Sleep", unit: "",
+              value: sleepDur !== "—" ? sleepDur : null,
+              status: sleepDurHrs == null ? { label: "—", color: "#6b7280" } : sleepDurHrs >= 7 && sleepDurHrs <= 9 ? { label: "Normal", color: "#22c55e" } : sleepDurHrs >= 6 ? { label: "Short", color: "#eab308" } : { label: "Low", color: "#ef4444" },
+              barPct: sleepDurHrs != null ? Math.min(100, (sleepDurHrs / 10) * 100) : 0,
+            },
+            {
+              icon: "🩺", label: "HRV Status", unit: "",
+              value: (() => {
+                const s = (dailyHealth?.hrv_status ?? metrics?.garmin_hrv_status ?? "").toLowerCase()
+                if (!s) return null
+                return s.charAt(0).toUpperCase() + s.slice(1)
+              })(),
+              status: (() => {
+                const s = (dailyHealth?.hrv_status ?? metrics?.garmin_hrv_status ?? "").toLowerCase()
+                return s.includes("balanced") || s.includes("good") ? { label: "Balanced", color: "#22c55e" }
+                  : s.includes("poor") ? { label: "Poor", color: "#ef4444" }
+                  : s.includes("unbalanced") ? { label: "Unbalanced", color: "#eab308" }
+                  : s.includes("low") ? { label: "Low", color: "#f97316" }
+                  : { label: "—", color: "#6b7280" }
+              })(),
+              barPct: (() => {
+                const s = (dailyHealth?.hrv_status ?? metrics?.garmin_hrv_status ?? "").toLowerCase()
+                return s.includes("balanced") || s.includes("good") ? 80 : s.includes("poor") || s.includes("low") ? 20 : s.includes("unbalanced") ? 35 : 50
+              })(),
+            },
+          ]
+          return (
+            <div className="rounded-2xl p-4 border border-gray-800 bg-gray-900/60">
+              <p className="text-xs text-gray-400 font-bold uppercase tracking-wider mb-3">Health Monitor</p>
+              <div className="grid grid-cols-2 gap-3">
+                {tiles.map((t, i) => (
+                  <div key={i} className="rounded-xl p-3 bg-gray-800/60 border border-gray-700/50 flex items-start justify-between gap-2">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold flex items-center gap-1 mb-1">
+                        <span>{t.icon}</span>
+                        <span>{t.label}</span>
+                      </p>
+                      <p className="text-xl font-bold text-white leading-tight">
+                        {t.value ?? "—"}
+                        {t.value != null && t.unit && <span className="text-xs text-gray-500 font-normal ml-0.5">{t.unit}</span>}
+                      </p>
+                      <div className="flex items-center gap-1 mt-1">
+                        {t.value != null && <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: t.status.color }} />}
+                        <p className="text-xs font-semibold" style={{ color: t.status.color }}>{t.value != null ? t.status.label : "—"}</p>
                       </div>
-                      <div className="border-t border-gray-700/50 pt-4">
-                        <div className="flex justify-between items-start mb-1">
-                          <p className="font-medium" style={{ color: rhrColor }}>Resting Heart Rate <span className="text-gray-500 text-xs font-normal">(inner ring)</span></p>
-                          <p className="font-bold tabular-nums text-lg" style={{ color: rhrColor }}>{rhr ?? '—'}<span className="text-xs text-gray-500"> bpm</span></p>
-                        </div>
-                        <p className="text-gray-400 text-xs leading-relaxed">Your lowest heart rate during sleep. A rising RHR (even 2–3 bpm above your norm) often indicates under-recovery, oncoming illness, or accumulated fatigue. Elite endurance athletes typically see 40–50 bpm.</p>
-                        <div className="mt-2 grid grid-cols-4 gap-1.5 text-xs text-center">
-                          <div className="bg-gray-700/50 rounded-xl p-2"><p style={{ color: '#22d3ee' }} className="font-bold">≤55</p><p className="text-gray-500 mt-0.5">Athletic</p></div>
-                          <div className="bg-gray-700/50 rounded-xl p-2"><p style={{ color: '#4ade80' }} className="font-bold">56–65</p><p className="text-gray-500 mt-0.5">Good</p></div>
-                          <div className="bg-gray-700/50 rounded-xl p-2"><p style={{ color: '#fb923c' }} className="font-bold">66–72</p><p className="text-gray-500 mt-0.5">Fair</p></div>
-                          <div className="bg-gray-700/50 rounded-xl p-2"><p style={{ color: '#f43f5e' }} className="font-bold">73+</p><p className="text-gray-500 mt-0.5">High</p></div>
-                        </div>
-                      </div>
-                      {stress != null && (
-                        <div className="border-t border-gray-700/50 pt-4">
-                          <div className="flex justify-between items-start mb-1">
-                            <p className="font-medium text-amber-400">Stress</p>
-                            <p className="font-bold tabular-nums text-lg text-amber-400">{Math.round(stress)}<span className="text-xs text-gray-500">/100</span></p>
-                          </div>
-                          <p className="text-gray-400 text-xs leading-relaxed">Physiological stress estimated from HRV fluctuations throughout the day. Chronically high stress suppresses HRV and elevates RHR — the two signals in this tile.</p>
-                        </div>
+                    </div>
+                    <div className="relative shrink-0" style={{ width: 12, height: 54 }}>
+                      <div className="absolute left-1/2 top-1 bottom-1 rounded-sm" style={{ width: 2, transform: "translateX(-50%)", background: "#1f2937" }} />
+                      {t.value != null && (
+                        <div className="absolute left-1/2 rounded-full transition-all duration-500"
+                          style={{ width: 10, height: 10, transform: "translateX(-50%)", top: `${Math.max(1, Math.min(44, (1 - t.barPct / 100) * 44))}px`, background: t.status.color, boxShadow: `0 0 5px ${t.status.color}99` }} />
                       )}
                     </div>
                   </div>
-                </DetailModal>
-              </>
-            )
-          })()}
+                ))}
+              </div>
+            </div>
+          )
+        })()}
 
-          {/* Tile 3: Bio Battery */}
-          {(() => {
-            const clampV = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
-            const lerpHex = (c1: string, c2: string, t: number) => {
-              const r1 = parseInt(c1.slice(1,3),16), g1 = parseInt(c1.slice(3,5),16), b1 = parseInt(c1.slice(5,7),16)
-              const r2 = parseInt(c2.slice(1,3),16), g2 = parseInt(c2.slice(3,5),16), b2 = parseInt(c2.slice(5,7),16)
-              return `#${Math.round(r1+(r2-r1)*t).toString(16).padStart(2,'0')}${Math.round(g1+(g2-g1)*t).toString(16).padStart(2,'0')}${Math.round(b1+(b2-b1)*t).toString(16).padStart(2,'0')}`
-            }
-            const bb = dailyHealth?.body_battery_end ?? metrics?.garmin_body_battery_eod ?? null
-            const bbStart = dailyHealth?.body_battery_start ?? metrics?.garmin_body_battery_high ?? null
-            const bbPeak = dailyHealth?.body_battery_peak ?? metrics?.garmin_body_battery_high ?? null
-            const stress = dailyHealth?.stress_avg ?? metrics?.garmin_stress_avg ?? null
-            const pct = bb != null ? clampV(bb, 0, 100) / 100 : 0
-            // Green (#22c55e) full → Red (#ef4444) depleted
-            const fillColor = bb != null ? lerpHex('#22c55e', '#ef4444', 1 - pct) : '#374151'
-            const bbLabel = bb == null ? '—' : bb >= 70 ? 'Charged' : bb >= 40 ? 'Draining' : 'Depleted'
-            // Battery SVG dimensions
-            const bW = 36, bH = 68, bX = 22, bY = 16, bR = 6
-            const nubW = 16, nubH = 7
-            const fillMaxH = bH - 8
-            const fillH = Math.round(fillMaxH * pct)
-            const fillY = bY + (bH - fillH) - 4
-            return (
-              <>
-                <button type="button" onClick={() => { setOpenTile('battery'); if (userId) loadIntradayBB(userId) }}
-                  className="rounded-2xl p-3 flex flex-col items-center w-full transition-opacity hover:opacity-90 active:opacity-75"
-                  style={{ background: 'linear-gradient(160deg,#0f1629 0%,#0a0f1e 100%)', border: '1px solid #1e293b' }}>
-                  <div className="flex items-center justify-center gap-1 mb-2">
-                    <p className="text-[9px] font-bold tracking-[0.15em]" style={{ color: fillColor }}>BIO BATTERY</p>
-                    <span className="text-[9px] text-slate-600">ⓘ</span>
+        {/* ── Timeline ─────────────────────────────────────────────── */}
+        {(() => {
+          const recentActs = activities.slice(0, 5)
+          if (recentActs.length === 0 && !sleepData) return null
+          const actDotColor = (type: string) => {
+            const t = (type ?? "").toLowerCase()
+            if (t.includes("run")) return "#22c55e"
+            if (t.includes("cycl") || t.includes("bike")) return "#3b82f6"
+            if (t.includes("swim")) return "#06b6d4"
+            if (t.includes("strength") || t.includes("gym") || t.includes("weight")) return "#f97316"
+            if (t.includes("walk") || t.includes("hike")) return "#eab308"
+            if (t.includes("yoga") || t.includes("stretch")) return "#a855f7"
+            return "#6b7280"
+          }
+          const fmtActivityDate = (iso: string) => {
+            try {
+              const d = new Date(iso)
+              return d.toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" }) +
+                " at " + d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })
+            } catch { return iso }
+          }
+          type TLEntry = { key: string; label: string; sub: string; dotColor: string; score?: number | null }
+          const entries: TLEntry[] = []
+          recentActs.forEach((a, idx) => {
+            const raw = (a.raw_payload ?? {}) as Record<string, unknown>
+            const typeKey = ((raw.activityType as Record<string, unknown> | undefined)?.typeKey as string | undefined) ?? String(a.activity_type ?? "")
+            const name = (raw.activityName as string | undefined) ?? typeKey.replace(/_/g, " ")
+            const durMin = a.duration_sec ? Math.round(Number(a.duration_sec) / 60) : null
+            entries.push({
+              key: `act-${idx}`,
+              label: name || typeKey.replace(/_/g, " "),
+              sub: fmtActivityDate(a.start_time) + (durMin ? ` · ${durMin}m` : ""),
+              dotColor: actDotColor(typeKey),
+              score: null,
+            })
+          })
+          if (sleepData) {
+            const sleepStart = sleepData.sleep_start ?? (sleepData.sleep_date ? sleepData.sleep_date + "T00:00:00" : null)
+            entries.push({
+              key: "sleep",
+              label: "Primary sleep",
+              sub: sleepStart ? fmtActivityDate(sleepStart) : (sleepData.sleep_date ?? "—"),
+              dotColor: "#6366f1",
+              score: sleepData.sleep_score,
+            })
+          }
+          return (
+            <div className="rounded-2xl p-4 border border-gray-800 bg-gray-900/60">
+              <p className="text-xs text-gray-400 font-bold uppercase tracking-wider mb-3">Timeline</p>
+              <div className="space-y-2">
+                {entries.map((e) => (
+                  <div key={e.key} className="flex items-center gap-3 rounded-xl p-3 border border-gray-700/50 bg-gray-800/60">
+                    <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
+                      style={{ background: e.dotColor + "20", border: `1px solid ${e.dotColor}50` }}>
+                      {e.score != null
+                        ? <span className="text-[11px] font-bold" style={{ color: e.dotColor }}>{e.score}</span>
+                        : <span className="w-2 h-2 rounded-full" style={{ background: e.dotColor }} />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-white leading-tight capitalize">{e.label}</p>
+                      <p className="text-xs text-gray-500 mt-0.5">{e.sub}</p>
+                    </div>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4 text-gray-600 shrink-0">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                    </svg>
                   </div>
-                  <svg viewBox="0 0 80 100" className="w-16 h-20">
-                    <defs>
-                      <filter id="glowBattery" x="-50%" y="-50%" width="200%" height="200%">
-                        <feGaussianBlur stdDeviation="2.5" result="blur" />
-                        <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
-                      </filter>
-                      <linearGradient id="battGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="#22c55e" />
-                        <stop offset="50%" stopColor="#f97316" />
-                        <stop offset="100%" stopColor="#ef4444" />
-                      </linearGradient>
-                      <clipPath id="battFill">
-                        <rect x={bX + 3} y={fillY} width={bW - 6} height={fillH} rx={4} />
-                      </clipPath>
-                    </defs>
-                    {/* Nub */}
-                    <rect x={(80 - nubW) / 2} y={bY - nubH} width={nubW} height={nubH + 2} rx={3} fill="#1e293b" />
-                    {/* Body outline */}
-                    <rect x={bX} y={bY} width={bW} height={bH} rx={bR} fill="#0f172a" stroke="#1e293b" strokeWidth={2.5} />
-                    {/* Gradient fill rectangle clipped to fill level */}
-                    <rect x={bX + 3} y={bY + 4} width={bW - 6} height={bH - 8} rx={4}
-                      fill="url(#battGrad)" clipPath="url(#battFill)"
-                      filter={bb != null && bb > 20 ? 'url(#glowBattery)' : undefined} />
-                    {/* Percentage text inside battery */}
-                    <text x={bX + bW / 2} y={bY + bH / 2 + 5} textAnchor="middle" fill="white"
-                      fontSize="15" fontWeight="800" fontFamily="system-ui,sans-serif">{bb ?? '—'}</text>
-                  </svg>
-                  <div className="mt-1.5 text-center">
-                    <p className="text-sm font-extrabold tabular-nums" style={{ color: fillColor }}>{bb ?? '—'}</p>
-                    <p className="text-[9px] font-bold uppercase tracking-wide mt-0.5" style={{ color: '#64748b' }}>{bbLabel}</p>
-                  </div>
-                </button>
-
-                <DetailModal open={openTile === 'battery'} onClose={() => setOpenTile(null)}
-                  title="Bio Battery" subtitle={null} icon="🔋"
-                  gradient="from-slate-900 via-gray-900 to-gray-950" border="border-slate-700/40">
-                  {(() => {
-                    const charged = bbPeak != null && bbStart != null ? Math.max(0, bbPeak - bbStart) : bbPeak ?? null
-                    const drained = bbPeak != null && bb != null ? Math.max(0, bbPeak - bb) : null
-                    const todayStr = new Date().toISOString().split('T')[0]
-                    const todayActs = activities.filter(a => {
-                      try { return new Date(a.start_time as string).toISOString().split('T')[0] === todayStr } catch { return false }
-                    })
-                    const statusMsg = stress != null && stress > 50
-                      ? { title: 'Stressful day', body: 'Your stress has been elevated today. Try to find time to rest and relax to help recharge your battery.' }
-                      : bb != null && bb < 40
-                      ? { title: 'Battery low', body: 'Your body battery is depleted. Prioritise rest, avoid hard training, and focus on recovery tonight.' }
-                      : bb != null && bb >= 70
-                      ? { title: 'Well charged', body: 'Your battery is in great shape. You have plenty of energy available for training or a demanding day.' }
-                      : { title: 'Moderate charge', body: 'You have a reasonable amount of energy available. Keep activity moderate and prioritise a good night\'s sleep.' }
-                    const actDotColor = (type: string) => {
-                      const t = type.toLowerCase()
-                      if (t.includes('run')) return '#22c55e'
-                      if (t.includes('cycl') || t.includes('bike')) return '#3b82f6'
-                      if (t.includes('swim')) return '#06b6d4'
-                      if (t.includes('strength') || t.includes('gym') || t.includes('weight')) return '#f97316'
-                      if (t.includes('walk') || t.includes('hike')) return '#eab308'
-                      if (t.includes('yoga') || t.includes('stretch')) return '#a855f7'
-                      return '#6b7280'
-                    }
-                    const rr = 44, sw = 9, circ = 2 * Math.PI * rr
-                    const ringPct = bb != null ? clampV(bb, 0, 100) / 100 : 0
-                    return (
-                      <div className="space-y-3 text-sm">
-
-                        {/* ── Summary ── */}
-                        <div className="bg-gray-800/50 rounded-2xl p-4">
-                          <p className="text-xs text-gray-500 uppercase tracking-wider font-semibold mb-3">Summary</p>
-                          <div className="flex items-center gap-5">
-                            {/* Ring */}
-                            <svg viewBox="0 0 110 110" className="w-28 h-28 shrink-0">
-                              <defs>
-                                <filter id="bbRingGlow" x="-30%" y="-30%" width="160%" height="160%">
-                                  <feGaussianBlur stdDeviation="2.5" result="blur" />
-                                  <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
-                                </filter>
-                              </defs>
-                              <circle cx={55} cy={55} r={rr} fill="none" stroke="#1e293b" strokeWidth={sw} />
-                              <circle cx={55} cy={55} r={rr} fill="none" stroke={fillColor} strokeWidth={sw} strokeLinecap="round"
-                                strokeDasharray={`${ringPct * circ} ${circ}`} transform="rotate(-90 55 55)"
-                                filter={bb != null ? 'url(#bbRingGlow)' : undefined} />
-                              <text x={55} y={50} textAnchor="middle" fill="white" fontSize="26" fontWeight="800" fontFamily="system-ui,sans-serif">{bb ?? '—'}</text>
-                              <text x={55} y={65} textAnchor="middle" fill="#475569" fontSize="10" fontFamily="system-ui,sans-serif">/ 100</text>
-                            </svg>
-                            {/* Stats */}
-                            <div className="space-y-4 flex-1">
-                              {charged != null && (
-                                <div>
-                                  <p className="text-2xl font-bold tabular-nums text-emerald-400">+{charged}</p>
-                                  <p className="text-xs text-gray-500 mt-0.5">Charged</p>
-                                </div>
-                              )}
-                              {drained != null && (
-                                <div>
-                                  <p className="text-2xl font-bold tabular-nums text-rose-400">−{drained}</p>
-                                  <p className="text-xs text-gray-500 mt-0.5">Drained</p>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* ── Status message ── */}
-                        <div className="bg-gray-800/50 rounded-2xl p-4">
-                          <p className="font-semibold text-white mb-1">{statusMsg.title}</p>
-                          <p className="text-gray-400 text-xs leading-relaxed">{statusMsg.body}</p>
-                        </div>
-
-                        {/* ── Chart with tabs ── */}
-                        <div className="bg-gray-800/50 rounded-2xl p-4">
-                          {/* Tab bar */}
-                          <div className="flex items-center gap-1 mb-3 bg-gray-900/60 rounded-xl p-1">
-                            {(['1day', '7days', '4weeks'] as const).map(tab => (
-                              <button key={tab} type="button"
-                                onClick={() => { setBbChartTab(tab); setBbChartOffset(0); setNavIntradayBB([]) }}
-                                className={`flex-1 text-xs py-1.5 rounded-lg font-semibold transition-colors ${bbChartTab === tab ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-gray-300'}`}>
-                                {tab === '1day' ? '1 Day' : tab === '7days' ? '7 Days' : '4 Weeks'}
-                              </button>
-                            ))}
-                          </div>
-
-                          {/* Navigation row */}
-                          {(() => {
-                            const periodDays = bbChartTab === '1day' ? 1 : bbChartTab === '7days' ? 7 : 28
-                            const canBack = bbChartTab === '1day'
-                              ? bbChartOffset < 55
-                              : (bbChartOffset + 1) * periodDays < histBB.length
-                            const canFwd = bbChartOffset > 0
-                            // Date range label
-                            let rangeLabel = ''
-                            const fmt = (d: string) => new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
-                            if (bbChartTab === '1day') {
-                              const d = new Date(Date.now() - bbChartOffset * 86400000)
-                              rangeLabel = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
-                            } else {
-                              const end = histBB.length - bbChartOffset * periodDays
-                              const start = Math.max(0, end - periodDays)
-                              const sl = histBB.slice(start, end)
-                              if (sl.length) rangeLabel = `${fmt(sl[0].metric_date)} – ${fmt(sl[sl.length - 1].metric_date)}`
-                            }
-                            const goBack = () => {
-                              const n = bbChartOffset + 1
-                              setBbChartOffset(n)
-                              setHoveredBBIdx(null)
-                              if (bbChartTab === '1day' && userId) {
-                                const date = new Date(Date.now() - n * 86400000).toISOString().split('T')[0]
-                                loadIntradayForDate(userId, date)
-                              }
-                            }
-                            const goFwd = () => {
-                              const n = Math.max(0, bbChartOffset - 1)
-                              setBbChartOffset(n)
-                              setHoveredBBIdx(null)
-                              if (bbChartTab === '1day') {
-                                if (n === 0) setNavIntradayBB([])
-                                else if (userId) {
-                                  const date = new Date(Date.now() - n * 86400000).toISOString().split('T')[0]
-                                  loadIntradayForDate(userId, date)
-                                }
-                              }
-                            }
-                            return (
-                              <div className="flex items-center gap-2 mb-3">
-                                <button type="button" onClick={goBack} disabled={!canBack}
-                                  className="w-7 h-7 rounded-full flex items-center justify-center bg-gray-700/60 disabled:opacity-30 hover:bg-gray-600 transition-colors">
-                                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} className="w-3.5 h-3.5 text-gray-300">
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-                                  </svg>
-                                </button>
-                                <button type="button" onClick={goFwd} disabled={!canFwd}
-                                  className="w-7 h-7 rounded-full flex items-center justify-center bg-gray-700/60 disabled:opacity-30 hover:bg-gray-600 transition-colors">
-                                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} className="w-3.5 h-3.5 text-gray-300">
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-                                  </svg>
-                                </button>
-                                {rangeLabel && (
-                                  <span className="text-xs text-gray-400 font-medium">{rangeLabel}</span>
-                                )}
-                              </div>
-                            )
-                          })()}
-
-                          {(intradayLoading || navIntradayLoading) && (
-                            <div className="flex items-center gap-2 text-gray-500 text-xs py-6 justify-center">
-                              <span className="w-3 h-3 border border-gray-400 border-t-transparent rounded-full animate-spin" />
-                              Loading…
-                            </div>
-                          )}
-
-                          {/* 1 Day — intraday line chart */}
-                          {!intradayLoading && !navIntradayLoading && bbChartTab === '1day' && (() => {
-                            const active = bbChartOffset === 0 ? intradayBB : navIntradayBB
-                            if (active.length < 2) return (
-                              <div className="text-center py-4 space-y-1">
-                                <p className="text-gray-400 text-xs">Intraday data not available yet</p>
-                                <p className="text-gray-600 text-xs">Run a sync after creating the garmin_intraday_body_battery table</p>
-                              </div>
-                            )
-                            const W = 320, H = 90, pad = 6
-                            const xS = (i: number) => pad + (i / (intradayBB.length - 1)) * (W - pad * 2)
-                            const yS = (v: number) => H - pad - (v / 100) * (H - pad * 2)
-                            const pts = intradayBB.map((d, i) => `${xS(i)},${yS(d.level)}`).join(' ')
-                            const area = `${xS(0)},${H - pad} ${pts} ${xS(intradayBB.length - 1)},${H - pad}`
-                            const hourLabels: { x: number; label: string }[] = []
-                            intradayBB.forEach((d, i) => {
-                              const dt = new Date(d.recorded_at)
-                              if (dt.getMinutes() < 15 && dt.getHours() % 4 === 0)
-                                hourLabels.push({ x: xS(i), label: `${dt.getHours()}:00` })
-                            })
-                            return (
-                              <svg viewBox={`0 0 ${W} ${H + 18}`} className="w-full">
-                                <defs>
-                                  <linearGradient id="bbGrad1d" x1="0" y1="0" x2="0" y2="1">
-                                    <stop offset="0%" stopColor={fillColor} stopOpacity="0.3" />
-                                    <stop offset="100%" stopColor={fillColor} stopOpacity="0.02" />
-                                  </linearGradient>
-                                </defs>
-                                {[25, 50, 75, 100].map(v => (
-                                  <g key={v}>
-                                    <line x1={pad} y1={yS(v)} x2={W - pad} y2={yS(v)} stroke="#1e293b" strokeWidth={0.75} strokeDasharray="4,4" />
-                                    <text x={W - pad + 3} y={yS(v) + 3.5} fontSize="8" fill="#374151">{v}</text>
-                                  </g>
-                                ))}
-                                <polygon points={area} fill="url(#bbGrad1d)" />
-                                <polyline points={pts} fill="none" stroke={fillColor} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
-                                {hourLabels.map(({ x, label }) => (
-                                  <text key={label} x={x} y={H + 14} textAnchor="middle" fontSize="8" fill="#475569">{label}</text>
-                                ))}
-                              </svg>
-                            )
-                          })()}
-
-                          {/* 7 Days / 4 Weeks — dumbbell chart */}
-                          {!intradayLoading && (bbChartTab === '7days' || bbChartTab === '4weeks') && (() => {
-                            const days = bbChartTab === '7days' ? 7 : 28
-                            const end = histBB.length - bbChartOffset * days
-                            const start = Math.max(0, end - days)
-                            const slice = histBB.slice(start, end)
-                            if (slice.length === 0) return (
-                              <div className="text-center py-4">
-                                <p className="text-gray-500 text-xs">No historical data available</p>
-                              </div>
-                            )
-                            const W = 320, H = 100, padL = 6, padR = 24, padT = 6, padB = 18
-                            const cols = slice.length
-                            const xS = (i: number) => padL + (i + 0.5) * ((W - padL - padR) / cols)
-                            const yS = (v: number) => padT + ((100 - v) / 100) * (H - padT - padB)
-                            const dayLabel = (d: string) => {
-                              if (bbChartTab === '4weeks') {
-                                const dt = new Date(d)
-                                return `${dt.getDate()}/${dt.getMonth() + 1}`
-                              }
-                              return new Date(d).toLocaleDateString('en-GB', { weekday: 'short' })
-                            }
-                            const fullDateLabel = (d: string) => new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
-                            const showLabel = (i: number) => bbChartTab === '7days' || i % 7 === 0
-                            const hov = hoveredBBIdx !== null ? slice[hoveredBBIdx] : null
-                            const hovX = hoveredBBIdx !== null ? xS(hoveredBBIdx) : 0
-                            // Keep tooltip inside viewBox horizontally
-                            const ttW = 92, ttH = 52
-                            const ttX = Math.min(Math.max(hovX - ttW / 2, padL), W - padR - ttW)
-                            const ttY = padT
-                            return (
-                              <svg viewBox={`0 0 ${W} ${H + padB}`} className="w-full"
-                                onMouseLeave={() => setHoveredBBIdx(null)}>
-                                {[0, 25, 50, 75, 100].map(v => (
-                                  <g key={v}>
-                                    <line x1={padL} y1={yS(v)} x2={W - padR} y2={yS(v)} stroke="#1e293b" strokeWidth={0.75} />
-                                    <text x={W - padR + 3} y={yS(v) + 3.5} fontSize="8" fill="#374151">{v}</text>
-                                  </g>
-                                ))}
-                                {slice.map((d, i) => {
-                                  const hi = d.body_battery_peak
-                                  const lo = d.body_battery_low
-                                  const x = xS(i)
-                                  if (hi == null && lo == null) return null
-                                  const yHi = hi != null ? yS(hi) : yS(lo ?? 0)
-                                  const yLo = lo != null ? yS(lo) : yS(hi ?? 0)
-                                  const isHov = hoveredBBIdx === i
-                                  return (
-                                    <g key={d.metric_date} style={{ cursor: 'pointer' }}
-                                      onMouseEnter={() => setHoveredBBIdx(i)}>
-                                      {/* Invisible wide hit target */}
-                                      <rect x={x - 10} y={padT} width={20} height={H - padT} fill="transparent" />
-                                      {/* Vertical connector */}
-                                      {hi != null && lo != null && (
-                                        <line x1={x} y1={yHi} x2={x} y2={yLo}
-                                          stroke={isHov ? '#64748b' : '#334155'} strokeWidth={isHov ? 3 : 2.5} strokeLinecap="round" />
-                                      )}
-                                      {hi != null && <circle cx={x} cy={yHi} r={isHov ? 6 : 4.5} fill="#3b82f6" />}
-                                      {lo != null && <circle cx={x} cy={yLo} r={isHov ? 5 : 4} fill={isHov ? '#64748b' : '#475569'} />}
-                                      {showLabel(i) && (
-                                        <text x={x} y={H + padB - 2} textAnchor="middle" fontSize="8"
-                                          fill={isHov ? '#94a3b8' : '#475569'}>{dayLabel(d.metric_date)}</text>
-                                      )}
-                                    </g>
-                                  )
-                                })}
-                                {/* Tooltip */}
-                                {hov && (
-                                  <g>
-                                    <rect x={ttX} y={ttY} width={ttW} height={ttH} rx={6}
-                                      fill="#0f172a" stroke="#334155" strokeWidth={1} />
-                                    <text x={ttX + 10} y={ttY + 14} fontSize="9" fontWeight="600" fill="#94a3b8">
-                                      {fullDateLabel(hov.metric_date)}
-                                    </text>
-                                    <circle cx={ttX + 13} cy={ttY + 27} r={3.5} fill="#3b82f6" />
-                                    <text x={ttX + 21} y={ttY + 31} fontSize="9" fill="white">
-                                      {hov.body_battery_peak ?? '—'} Highest
-                                    </text>
-                                    <circle cx={ttX + 13} cy={ttY + 42} r={3} fill="#64748b" />
-                                    <text x={ttX + 21} y={ttY + 46} fontSize="9" fill="white">
-                                      {hov.body_battery_low ?? '—'} Lowest
-                                    </text>
-                                  </g>
-                                )}
-                              </svg>
-                            )
-                          })()}
-
-                          {/* Legend for dumbbell chart */}
-                          {!intradayLoading && bbChartTab !== '1day' && (
-                            <div className="flex items-center gap-4 justify-center mt-2">
-                              <div className="flex items-center gap-1.5">
-                                <span className="w-2.5 h-2.5 rounded-full bg-blue-500" />
-                                <span className="text-[10px] text-gray-500">Daily High</span>
-                              </div>
-                              <div className="flex items-center gap-1.5">
-                                <span className="w-2.5 h-2.5 rounded-full bg-slate-500" />
-                                <span className="text-[10px] text-gray-500">Daily Low</span>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-
-                        {/* ── Factors ── */}
-                        <div className="bg-gray-800/50 rounded-2xl p-4">
-                          <p className="text-xs text-gray-500 uppercase tracking-wider font-semibold mb-3">Factors</p>
-                          {charged != null && charged > 0 && (
-                            <div className="flex items-center justify-between py-2.5 border-b border-gray-700/40">
-                              <div className="flex items-center gap-3">
-                                <span className="text-lg">😴</span>
-                                <div>
-                                  <p className="text-white font-medium text-sm">Sleep</p>
-                                  {sleepData?.sleep_duration_seconds != null && (
-                                    <p className="text-gray-500 text-xs">{Math.floor(sleepData.sleep_duration_seconds / 3600)}h {Math.floor((sleepData.sleep_duration_seconds % 3600) / 60)}m</p>
-                                  )}
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-1.5 shrink-0">
-                                <span className="text-emerald-400 font-bold tabular-nums text-base">+{charged}</span>
-                                <svg viewBox="0 0 24 24" fill="none" stroke="#34d399" strokeWidth={3} className="w-3.5 h-3.5">
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 15l7-7 7 7" />
-                                </svg>
-                              </div>
-                            </div>
-                          )}
-                          {todayActs.length > 0 ? todayActs.map((a, i) => {
-                            const raw = (a.raw_payload ?? {}) as Record<string, unknown>
-                            const typeKey = ((raw.activityType as Record<string, unknown> | undefined)?.typeKey as string | undefined)
-                              ?? String(a.activity_type ?? '')
-                            const name = (raw.activityName as string | undefined) ?? typeKey.replace(/_/g, ' ')
-                            const durMin = a.duration_sec ? Math.round(Number(a.duration_sec) / 60) : null
-                            const est = durMin ? Math.round(durMin / 4) : null
-                            const dotColor = actDotColor(typeKey)
-                            return (
-                              <div key={i} className="flex items-center justify-between py-2.5 border-b border-gray-700/40 last:border-0">
-                                <div className="flex items-center gap-3">
-                                  <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: dotColor }} />
-                                  <div>
-                                    <p className="text-white font-medium text-sm">{name || typeKey.replace(/_/g, ' ')}</p>
-                                    {durMin && <p className="text-gray-500 text-xs">{durMin}m</p>}
-                                  </div>
-                                </div>
-                                {est != null && (
-                                  <div className="flex items-center gap-1.5 shrink-0">
-                                    <span className="text-rose-400 font-bold tabular-nums text-base">−{est}</span>
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="#f87171" strokeWidth={3} className="w-3.5 h-3.5">
-                                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-                                    </svg>
-                                  </div>
-                                )}
-                              </div>
-                            )
-                          }) : (
-                            <p className="text-gray-600 text-xs py-2">No activities recorded today</p>
-                          )}
-                        </div>
-
-                      </div>
-                    )
-                  })()}
-                </DetailModal>
-              </>
-            )
-          })()}
-        </div>
+                ))}
+              </div>
+            </div>
+          )
+        })()}
 
           {/* Daily Briefing — full width */}
           <div className="bg-gray-900 rounded-3xl overflow-hidden">
@@ -3427,6 +3025,32 @@ export default function DashboardPage() {
                     <DayBubbles doneDates={eveningDates} />
                   </button>
                 </div>
+
+                {/* Morning AI summary — shown on dashboard after check-in completed */}
+                {morningCheckin && morningAISummary && (
+                  <div className="rounded-2xl p-4 border border-orange-800/30 bg-orange-950/10 space-y-2">
+                    <p className="text-[10px] text-orange-400 uppercase tracking-widest font-bold">🌅 Morning Summary</p>
+                    <p className="text-sm font-semibold text-white leading-snug">{morningAISummary.headline}</p>
+                    {morningAISummary.sleep_overview && <p className="text-xs text-gray-300 leading-relaxed">{morningAISummary.sleep_overview}</p>}
+                    {morningAISummary.recommended_activity && <p className="text-xs text-gray-400 leading-relaxed border-t border-gray-800 pt-2">{morningAISummary.recommended_activity}</p>}
+                    {morningAISummary.quote && <p className="text-xs text-orange-300 italic">&ldquo;{morningAISummary.quote}&rdquo;</p>}
+                  </div>
+                )}
+
+                {/* Evening AI summary — shown on dashboard after check-in completed */}
+                {eveningCheckin && eveningAISummary && (
+                  <div className="rounded-2xl p-4 border border-indigo-800/30 bg-indigo-950/10 space-y-2">
+                    <p className="text-[10px] text-indigo-400 uppercase tracking-widest font-bold">🌙 Evening Summary</p>
+                    <p className="text-sm font-semibold text-white leading-snug">{eveningAISummary.headline}</p>
+                    {eveningAISummary.day_summary && <p className="text-xs text-gray-300 leading-relaxed">{eveningAISummary.day_summary}</p>}
+                    {eveningAISummary.recommended_sleep_hours && (
+                      <p className="text-xs text-indigo-300 border-t border-gray-800 pt-2">
+                        Sleep target: <span className="font-semibold">{eveningAISummary.recommended_sleep_hours}h</span>
+                        {eveningAISummary.sleep_recommendation && <span className="text-gray-400"> · {eveningAISummary.sleep_recommendation}</span>}
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 {/* Evening check-in modal */}
                 {eveningModalOpen && (() => {
