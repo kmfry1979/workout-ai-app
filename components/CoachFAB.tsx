@@ -99,6 +99,8 @@ export function CoachFAB() {
   const [greeting, setGreeting] = useState('')
   const [contextReady, setContextReady] = useState(false)
   const [brainInsight, setBrainInsight] = useState<BrainInsight | null>(null)
+  const [token, setToken] = useState<string | null>(null)
+  const [conversationId, setConversationId] = useState<string | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -122,6 +124,7 @@ export function CoachFAB() {
     const { data: session } = await supabase.auth.getSession()
     if (!session.session) { setCtxLoading(false); return }
     const user = session.session.user
+    setToken(session.session.access_token)
 
     const { data: profile } = await supabase
       .from('profiles').select('display_name, name').eq('user_id', user.id).maybeSingle()
@@ -228,13 +231,17 @@ export function CoachFAB() {
     const { metricsCtx, actsCtx } = buildContext(metrics, activities)
 
     try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      if (token) headers['Authorization'] = `Bearer ${token}`
+
       const res = await fetch('/api/coach/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           messages: newMessages,
           metrics: metricsCtx,
           activities: actsCtx,
+          conversationId,
           brainInsight: brainInsight ? {
             headline: brainInsight.headline,
             insight: brainInsight.insight,
@@ -244,11 +251,13 @@ export function CoachFAB() {
           } : null,
         }),
       })
-      const data = await res.json() as { reply?: string; error?: string }
+      const data = await res.json() as { reply?: string; error?: string; conversationId?: string }
       if (!res.ok) throw new Error(data.error ?? 'Coach unavailable')
       const updated = [...newMessages, { role: 'assistant' as const, content: data.reply! }]
       setMessages(updated)
-      // Persist memory
+      // Track conversation ID for DB persistence
+      if (data.conversationId && !conversationId) setConversationId(data.conversationId)
+      // Persist to localStorage as fallback
       try { localStorage.setItem(STORAGE_KEY, JSON.stringify(updated.slice(-MAX_MEMORY))) } catch { /* ignore */ }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Could not reach coach'
@@ -259,6 +268,7 @@ export function CoachFAB() {
 
   const clearMemory = () => {
     setMessages([])
+    setConversationId(null)
     try { localStorage.removeItem(STORAGE_KEY) } catch { /* ignore */ }
   }
 

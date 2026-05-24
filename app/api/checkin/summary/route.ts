@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY ?? ''
-const GROQ_MODEL = process.env.GROQ_MODEL ?? 'llama-3.3-70b-versatile'
+const GROQ_MODEL = process.env.GROQ_MODEL ?? 'qwen/qwen3-32b'
 
 function fmtDur(sec: number | null | undefined): string {
   if (sec == null || sec <= 0) return '—'

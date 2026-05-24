@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY ?? ''
-const GROQ_MODEL = process.env.GROQ_MODEL ?? 'llama-3.3-70b-versatile'
+const GROQ_MODEL = process.env.GROQ_MODEL ?? 'qwen/qwen3-32b'
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? ''
 // Strip any accidental newlines/extra lines that can sneak in when pasting env vars
 const SERVICE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY ?? '').split('\n')[0].trim()
