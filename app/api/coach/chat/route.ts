@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { createClient } from '@supabase/supabase-js'
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY
-const GROQ_MODEL = process.env.GROQ_MODEL ?? 'llama-3.3-70b-versatile'
+const GROQ_MODEL = process.env.GROQ_MODEL ?? 'qwen/qwen3-32b'
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
+const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
 
 type Message = { role: 'user' | 'assistant'; content: string }
 
@@ -53,7 +57,71 @@ type BrainInsightContext = {
   readiness_label: 'green' | 'amber' | 'red'
 }
 
-function buildSystemPrompt(metrics: MetricsContext | null, activities: ActivityContext[], brain?: BrainInsightContext | null): string {
+type CoachMemoryFacts = {
+  name?: string | null
+  weight_kg?: number | null
+  weight_date?: string | null
+  body_fat_pct?: number | null
+  threshold_5k_formatted?: string | null
+  threshold_5k_pace?: string | null
+  threshold_10k_formatted?: string | null
+  hrv_today?: number | null
+  hrv_7day_avg?: number | null
+  body_battery?: number | null
+  stress_avg?: number | null
+  resting_hr?: number | null
+  training_readiness?: number | null
+  sleep_score?: number | null
+  sleep_duration_hours?: number | null
+  steps_today?: number | null
+  weekly_runs?: number | null
+  weekly_run_distance_km?: number | null
+  weekly_run_duration_min?: number | null
+  weekly_strength_sessions?: number | null
+  weekly_total_activities?: number | null
+  last_run_date?: string | null
+  last_run_type?: string | null
+  last_run_distance_km?: number | null
+  last_run_duration_min?: number | null
+  last_run_avg_hr?: number | null
+  updated_at?: string | null
+}
+
+function buildMemorySection(facts: CoachMemoryFacts): string {
+  const lines: string[] = []
+
+  if (facts.weight_kg) lines.push(`- Weight: ${facts.weight_kg}kg${facts.body_fat_pct ? ` · Body fat: ${facts.body_fat_pct}%` : ''}${facts.weight_date ? ` (${facts.weight_date})` : ''}`)
+  if (facts.threshold_5k_formatted) lines.push(`- 5K time: ${facts.threshold_5k_formatted}${facts.threshold_5k_pace ? ` (${facts.threshold_5k_pace} pace)` : ''}`)
+  if (facts.threshold_10k_formatted) lines.push(`- 10K time: ${facts.threshold_10k_formatted}`)
+  if (facts.hrv_today) lines.push(`- HRV today: ${facts.hrv_today}ms${facts.hrv_7day_avg ? ` (7-day avg: ${facts.hrv_7day_avg}ms)` : ''}`)
+  if (facts.body_battery) lines.push(`- Body Battery: ${facts.body_battery}/100`)
+  if (facts.resting_hr) lines.push(`- Resting HR: ${facts.resting_hr} bpm`)
+  if (facts.sleep_score) lines.push(`- Sleep score: ${facts.sleep_score}/100${facts.sleep_duration_hours ? ` · ${facts.sleep_duration_hours}h` : ''}`)
+  if (facts.training_readiness) lines.push(`- Training Readiness: ${facts.training_readiness}/100`)
+  if (facts.steps_today) lines.push(`- Steps today: ${facts.steps_today.toLocaleString()}`)
+  if (facts.weekly_runs != null) {
+    lines.push(`- This week: ${facts.weekly_runs} runs · ${facts.weekly_run_distance_km ?? 0}km · ${facts.weekly_run_duration_min ?? 0} min${facts.weekly_strength_sessions ? ` · ${facts.weekly_strength_sessions} strength sessions` : ''}`)
+  }
+  if (facts.last_run_date) {
+    const runParts = [
+      facts.last_run_date,
+      facts.last_run_type,
+      facts.last_run_distance_km ? `${facts.last_run_distance_km}km` : null,
+      facts.last_run_duration_min ? `${facts.last_run_duration_min}min` : null,
+      facts.last_run_avg_hr ? `avg HR ${facts.last_run_avg_hr}bpm` : null,
+    ].filter(Boolean)
+    lines.push(`- Last run: ${runParts.join(' · ')}`)
+  }
+
+  return lines.length > 0 ? lines.join('\n') : 'No stored facts yet.'
+}
+
+function buildSystemPrompt(
+  metrics: MetricsContext | null,
+  activities: ActivityContext[],
+  brain?: BrainInsightContext | null,
+  memoryFacts?: CoachMemoryFacts | null
+): string {
   const today = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })
 
   let metricsSection = 'No health metrics available for today.'
@@ -105,9 +173,15 @@ function buildSystemPrompt(metrics: MetricsContext | null, activities: ActivityC
       }).join('\n')
     : 'No recent activities recorded.'
 
-  return `You are an expert personal fitness coach and sports scientist. Today is ${today}.
+  const memorySection = memoryFacts ? buildMemorySection(memoryFacts) : null
 
-## Athlete's Current Stats
+  return `You are an expert personal fitness coach and sports scientist. Today is ${today}.
+${memorySection ? `
+## Athlete Profile & Key Stats (from memory — always up to date)
+
+${memorySection}
+` : ''}
+## Today's Live Metrics
 
 ${metricsSection}
 
@@ -133,7 +207,7 @@ Headline: ${brain.headline}
 Analysis: ${brain.insight}
 Today's recommendation: ${brain.suggested_focus}
 
-Use this Brain Insight as authoritative context — it reflects a deep 7-day analysis. Reference it naturally when relevant (e.g. "The brain analysis shows your HRV has been trending down...").` : ''}`
+Use this Brain Insight as authoritative context — it reflects a deep 7-day analysis. Reference it naturally when relevant.` : ''}`
 }
 
 export async function POST(req: NextRequest) {
@@ -146,6 +220,7 @@ export async function POST(req: NextRequest) {
     metrics: MetricsContext | null
     activities: ActivityContext[]
     brainInsight?: BrainInsightContext | null
+    conversationId?: string | null
   }
 
   try {
@@ -154,8 +229,62 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
   }
 
-  const { messages, metrics, activities, brainInsight } = body
-  const systemPrompt = buildSystemPrompt(metrics ?? null, activities ?? [], brainInsight)
+  const { messages, metrics, activities, brainInsight, conversationId } = body
+
+  // Get auth token if present (for saving to DB)
+  const authHeader = req.headers.get('authorization')
+  const userToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null
+
+  let userId: string | null = null
+  let activeConversationId: string | null = conversationId ?? null
+  let memoryFacts: CoachMemoryFacts | null = null
+
+  if (userToken) {
+    try {
+      const userClient = createClient(supabaseUrl, anonKey, {
+        global: { headers: { Authorization: `Bearer ${userToken}` } },
+      })
+      const { data: { user } } = await userClient.auth.getUser()
+      userId = user?.id ?? null
+
+      if (userId) {
+        const sb = createClient(supabaseUrl, serviceKey)
+
+        // Read coach_memory for fast context
+        const { data: memRow } = await sb
+          .from('coach_memory')
+          .select('facts')
+          .eq('user_id', userId)
+          .single()
+        memoryFacts = memRow?.facts as CoachMemoryFacts ?? null
+
+        // Ensure conversation exists
+        if (!activeConversationId) {
+          const { data: newConv } = await sb
+            .from('coach_conversations')
+            .insert({ user_id: userId, title: null })
+            .select('id')
+            .single()
+          activeConversationId = newConv?.id ?? null
+        }
+
+        // Save the latest user message to DB
+        const lastUserMsg = [...messages].reverse().find(m => m.role === 'user')
+        if (lastUserMsg && activeConversationId) {
+          await sb.from('coach_messages').insert({
+            conversation_id: activeConversationId,
+            user_id: userId,
+            role: 'user',
+            content: lastUserMsg.content,
+          })
+        }
+      }
+    } catch (e) {
+      console.error('Auth/DB error (non-fatal):', e)
+    }
+  }
+
+  const systemPrompt = buildSystemPrompt(metrics ?? null, activities ?? [], brainInsight, memoryFacts)
 
   let res: Response
   try {
@@ -172,7 +301,7 @@ export async function POST(req: NextRequest) {
           ...messages,
         ],
         temperature: 0.75,
-        max_tokens: 600,
+        max_tokens: 800,
       }),
     })
   } catch (e: unknown) {
@@ -190,5 +319,42 @@ export async function POST(req: NextRequest) {
 
   if (!reply) return NextResponse.json({ error: 'No response from Groq' }, { status: 502 })
 
-  return NextResponse.json({ reply: reply.trim() })
+  const trimmedReply = reply.trim()
+
+  // Save assistant reply + auto-title conversation
+  if (userId && activeConversationId) {
+    try {
+      const sb = createClient(supabaseUrl, serviceKey)
+
+      await sb.from('coach_messages').insert({
+        conversation_id: activeConversationId,
+        user_id: userId,
+        role: 'assistant',
+        content: trimmedReply,
+      })
+
+      // Auto-title: use first user message (first 60 chars) if title is null
+      const firstUserMsg = messages.find(m => m.role === 'user')
+      if (firstUserMsg) {
+        await sb
+          .from('coach_conversations')
+          .update({
+            updated_at: new Date().toISOString(),
+            title: firstUserMsg.content.slice(0, 60).trim(),
+          })
+          .eq('id', activeConversationId)
+          .is('title', null)
+
+        // Always update updated_at
+        await sb
+          .from('coach_conversations')
+          .update({ updated_at: new Date().toISOString() })
+          .eq('id', activeConversationId)
+      }
+    } catch (e) {
+      console.error('Save reply error (non-fatal):', e)
+    }
+  }
+
+  return NextResponse.json({ reply: trimmedReply, conversationId: activeConversationId })
 }
