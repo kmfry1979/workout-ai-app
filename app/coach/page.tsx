@@ -283,7 +283,7 @@ export default function CoachPage() {
 
   const loadLiveContext = async (userId: string) => {
     const today = new Date().toISOString().split('T')[0]
-    const sevenAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0]
+    const sevenAgo = new Date(Date.now() - 28 * 86400000).toISOString().split('T')[0]
 
     const [garminHealth, legacyHealth, sleepData, stepsData, actsData] = await Promise.all([
       supabase.from('garmin_daily_health_metrics')
@@ -301,7 +301,7 @@ export default function CoachPage() {
         .eq('user_id', userId).eq('step_date', today).maybeSingle(),
       supabase.from('garmin_activities')
         .select('activity_type,start_time,duration_sec,distance_m,avg_hr,calories,training_effect,raw_payload,treadmill_segments,user_activity_notes')
-        .eq('user_id', userId).gte('start_time', new Date(Date.now() - 7 * 86400000).toISOString())
+        .eq('user_id', userId).gte('start_time', new Date(Date.now() - 28 * 86400000).toISOString())
         .order('start_time', { ascending: false }),
     ])
 

@@ -79,6 +79,11 @@ type CoachMemoryFacts = {
   weekly_run_duration_min?: number | null
   weekly_strength_sessions?: number | null
   weekly_total_activities?: number | null
+  monthly_runs?: number | null
+  monthly_run_distance_km?: number | null
+  monthly_run_duration_min?: number | null
+  monthly_strength_sessions?: number | null
+  monthly_total_activities?: number | null
   last_run_date?: string | null
   last_run_type?: string | null
   last_run_distance_km?: number | null
@@ -100,7 +105,10 @@ function buildMemorySection(facts: CoachMemoryFacts): string {
   if (facts.training_readiness) lines.push(`- Training Readiness: ${facts.training_readiness}/100`)
   if (facts.steps_today) lines.push(`- Steps today: ${facts.steps_today.toLocaleString()}`)
   if (facts.weekly_runs != null) {
-    lines.push(`- This week: ${facts.weekly_runs} runs · ${facts.weekly_run_distance_km ?? 0}km · ${facts.weekly_run_duration_min ?? 0} min${facts.weekly_strength_sessions ? ` · ${facts.weekly_strength_sessions} strength sessions` : ''}`)
+    lines.push(`- This week (7d): ${facts.weekly_runs} runs · ${facts.weekly_run_distance_km ?? 0}km · ${facts.weekly_run_duration_min ?? 0} min${facts.weekly_strength_sessions ? ` · ${facts.weekly_strength_sessions} strength` : ''}`)
+  }
+  if (facts.monthly_runs != null) {
+    lines.push(`- Last 28 days: ${facts.monthly_runs} runs · ${facts.monthly_run_distance_km ?? 0}km · ${facts.monthly_run_duration_min ?? 0} min${facts.monthly_strength_sessions ? ` · ${facts.monthly_strength_sessions} strength` : ''}`)
   }
   if (facts.last_run_date) {
     const runParts = [
@@ -150,7 +158,7 @@ function buildSystemPrompt(
   }
 
   const recentSection = activities.length > 0
-    ? activities.slice(0, 7).map(a => {
+    ? activities.slice(0, 25).map(a => {
         const parts = [
           a.name || a.type,
           a.date,
