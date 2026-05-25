@@ -51,7 +51,9 @@ GARMIN_EMAIL = os.getenv("GARMIN_EMAIL", "").strip()
 GARMIN_PASSWORD = os.getenv("GARMIN_PASSWORD", "").strip()
 TOKENS_DIR = Path(os.getenv("GARMINTOKENS", "./tokens")).expanduser()
 ACTIVITY_LIMIT = int(os.getenv("GARMIN_ACTIVITY_LIMIT", "10"))
-DAYS_BACK = int(os.getenv("GARMIN_DAYS_BACK", "1"))
+# DAYS_BACK: explicit override wins; None means "auto-calculate from last sync"
+_DAYS_BACK_OVERRIDE = os.getenv("GARMIN_DAYS_BACK")
+DAYS_BACK = int(_DAYS_BACK_OVERRIDE) if _DAYS_BACK_OVERRIDE else 1
 # Polite throttle between Garmin API calls to avoid tripping rate limiting on a
 # long backfill. Default 1.0s; set higher for very long runs.
 SYNC_DELAY_SECONDS = float(os.getenv("GARMIN_REQUEST_DELAY", "1.0"))
@@ -1730,7 +1732,7 @@ def upsert_weight_snapshots(user_id: str, connection_id: str, entries: list[dict
 
 def main() -> None:
     progress(
-        f"Starting Garmin sync (days_back={DAYS_BACK}, delay={SYNC_DELAY_SECONDS}s)",
+        f"Starting Garmin sync (days_back={DAYS_BACK if _DAYS_BACK_OVERRIDE else 'auto'}, delay={SYNC_DELAY_SECONDS}s)",
         stage="login",
     )
 
@@ -1748,6 +1750,37 @@ def main() -> None:
     connection = get_or_create_connection(SUPABASE_USER_ID)
     connection_id = str(connection["id"])
 
+    # ── Auto-calculate DAYS_BACK from last successful sync ────────────────────
+    # If GARMIN_DAYS_BACK was explicitly set, respect it (allows manual backfills).
+    # Otherwise derive the window from last_successful_sync_at so we only pull
+    # what has changed since the last run — keeps regular syncs fast.
+    import math as _math
+    effective_days = DAYS_BACK  # start with explicit override or default of 1
+
+    if not _DAYS_BACK_OVERRIDE:
+        last_ok = connection.get("last_successful_sync_at")
+        if last_ok:
+            try:
+                last_ok_str = last_ok.replace("Z", "+00:00")
+                last_ok_dt = datetime.fromisoformat(last_ok_str)
+                hours_since = (datetime.now(timezone.utc) - last_ok_dt).total_seconds() / 3600
+                # ceil to whole days + 1 overlap day to avoid edge-of-day gaps
+                auto_days = _math.ceil(hours_since / 24) + 1
+                # Cap at 30 days for auto mode; use GARMIN_DAYS_BACK for larger backfills
+                effective_days = max(1, min(auto_days, 30))
+                progress(
+                    f"Auto DAYS_BACK={effective_days} "
+                    f"(last sync {hours_since:.1f}h ago, "
+                    f"override=False)",
+                )
+            except Exception as exc:
+                progress(f"Could not parse last_successful_sync_at ({exc}), using DAYS_BACK={DAYS_BACK}")
+        else:
+            # No prior successful sync on record — do a 3-day catch-up
+            effective_days = 3
+            progress(f"No prior sync found, defaulting to DAYS_BACK={effective_days}")
+    # ─────────────────────────────────────────────────────────────────────────
+
     update_connection_status(
         connection_id,
         SUPABASE_USER_ID,
@@ -1758,10 +1791,10 @@ def main() -> None:
         last_error=None,
     )
 
-    # Sync DAYS_BACK days (default: just today)
+    # Sync effective_days days back from today
     dates_to_sync = [
         (date.today() - timedelta(days=i)).isoformat()
-        for i in range(DAYS_BACK)
+        for i in range(effective_days)
     ]
 
     total = len(dates_to_sync)
@@ -1893,7 +1926,7 @@ def main() -> None:
     )
 
     progress(
-        f"Sync complete. Days: {len(dates_to_sync)}, activities: {activity_count}",
+        f"Sync complete. Days: {len(dates_to_sync)} (auto={not bool(_DAYS_BACK_OVERRIDE)}), activities: {activity_count}",
         level="done",
         stage="complete",
         percent=100,
