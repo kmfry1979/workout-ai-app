@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
     sb.from('garmin_weight_snapshots').select('weight_kg,body_fat_pct,weigh_date').eq('user_id', userId).order('weigh_date', { ascending: false }).limit(1).single(),
     sb.from('garmin_daily_health_metrics').select('hrv_avg,body_battery_end,stress_avg,resting_heart_rate,spo2_avg,respiration_avg,training_readiness,raw_payload').eq('user_id', userId).order('calendar_date', { ascending: false }).limit(1).single(),
     sb.from('garmin_sleep_data').select('sleep_score,total_sleep_seconds,deep_sleep_seconds,rem_sleep_seconds,calendar_date').eq('user_id', userId).order('calendar_date', { ascending: false }).limit(1).single(),
-    sb.from('garmin_activities').select('activity_type,duration_sec,distance_meters,avg_hr,start_time_local').eq('user_id', userId).gte('start_time_local', monthAgo).order('start_time_local', { ascending: false }).limit(60),
+    sb.from('garmin_activities').select('activity_type,duration_sec,distance_m,avg_hr,start_time').eq('user_id', userId).gte('start_time', monthAgo).order('start_time', { ascending: false }).limit(60),
     sb.from('garmin_daily_steps').select('total_steps,total_distance_meters,active_minutes,calendar_date').eq('user_id', userId).eq('calendar_date', today).single(),
   ])
 
@@ -64,7 +64,7 @@ export async function POST(req: NextRequest) {
     strengthTypes.some(t => (a.activity_type ?? '').toLowerCase().includes(t))
 
   const weeklyActivities = activities.filter(a =>
-    (a.start_time_local ?? '') >= weekAgo)
+    (a.start_time ?? '') >= weekAgo)
   const runs = weeklyActivities.filter(isRun)
   const strengthSessions = weeklyActivities.filter(isStrength)
 
@@ -72,12 +72,12 @@ export async function POST(req: NextRequest) {
   const monthlyStrength = activities.filter(isStrength)
 
   const weeklyRunDistanceKm = runs.reduce((sum, r) =>
-    sum + (r.distance_meters ? r.distance_meters / 1000 : 0), 0)
+    sum + (r.distance_m ? r.distance_m / 1000 : 0), 0)
   const weeklyRunDurationMin = runs.reduce((sum, r) =>
     sum + (r.duration_sec ? r.duration_sec / 60 : 0), 0)
 
   const monthlyRunDistanceKm = monthlyRuns.reduce((sum, r) =>
-    sum + (r.distance_meters ? r.distance_meters / 1000 : 0), 0)
+    sum + (r.distance_m ? r.distance_m / 1000 : 0), 0)
   const monthlyRunDurationMin = monthlyRuns.reduce((sum, r) =>
     sum + (r.duration_sec ? r.duration_sec / 60 : 0), 0)
 
@@ -175,10 +175,10 @@ export async function POST(req: NextRequest) {
     monthly_total_activities: activities.length,
 
     // Last run
-    last_run_date: lastRun?.start_time_local?.split('T')[0] ?? null,
+    last_run_date: lastRun?.start_time?.split('T')[0] ?? null,
     last_run_type: lastRun?.activity_type ?? null,
-    last_run_distance_km: lastRun?.distance_meters
-      ? Math.round((lastRun.distance_meters / 1000) * 10) / 10
+    last_run_distance_km: lastRun?.distance_m
+      ? Math.round((lastRun.distance_m / 1000) * 10) / 10
       : null,
     last_run_duration_min: lastRun?.duration_sec
       ? Math.round(lastRun.duration_sec / 60)
@@ -186,7 +186,7 @@ export async function POST(req: NextRequest) {
     last_run_avg_hr: lastRun?.avg_hr ?? null,
 
     // Last activity (any type)
-    last_activity_date: lastActivity?.start_time_local?.split('T')[0] ?? null,
+    last_activity_date: lastActivity?.start_time?.split('T')[0] ?? null,
     last_activity_type: lastActivity?.activity_type ?? null,
 
     updated_at: new Date().toISOString(),
