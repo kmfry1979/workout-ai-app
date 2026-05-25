@@ -60,6 +60,7 @@ type DailyHealthMetrics = {
   hydration_intake_ml: number | null
   hydration_goal_ml: number | null
   hydration_remaining_ml: number | null
+  training_readiness: number | null
 }
 
 type DailySteps = {
@@ -188,19 +189,85 @@ function SleepStat({
   )
 }
 
-function RingGauge({ pct, color, label }: { pct: number; color: string; label: string }) {
+function RingGauge({ pct, color, label, target }: {
+  pct: number; color: string; label: string; target?: number
+}) {
   const r = 36, cx = 44, cy = 44, sw = 7
   const circ = 2 * Math.PI * r
   const fill = Math.min(100, Math.max(0, pct))
+  const fillArc = (fill / 100) * circ
+  const hasTarget = target != null && target > fill && target <= 100
+  const clampedTarget = hasTarget ? Math.min(100, target!) : fill
+  const targetArc = hasTarget ? ((clampedTarget - fill) / 100) * circ : 0
+  const maskId = `tgt-${label.toLowerCase().replace(/\s+/g, '-')}`
+
+  // Position of the target dot on the ring
+  const targetDot = hasTarget ? (() => {
+    const angle = (-90 + (clampedTarget / 100) * 360) * (Math.PI / 180)
+    return { x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) }
+  })() : null
+
   return (
     <div className="flex flex-col items-center gap-2">
       <svg viewBox="0 0 88 88" className="w-24 h-24">
+        <defs>
+          {hasTarget && (
+            <mask id={maskId}>
+              {/* White arc from current fill to target — defines visible area for hatch */}
+              <circle cx={cx} cy={cy} r={r} fill="none"
+                stroke="white" strokeWidth={sw + 2}
+                strokeLinecap="butt"
+                strokeDasharray={`${targetArc} ${circ}`}
+                strokeDashoffset={-fillArc}
+                transform={`rotate(-90 ${cx} ${cy})`}
+              />
+            </mask>
+          )}
+        </defs>
+
+        {/* Track background */}
         <circle cx={cx} cy={cy} r={r} fill="none" stroke="#1f2937" strokeWidth={sw} />
+
+        {/* Target zone — semi-transparent base fill */}
+        {hasTarget && (
+          <circle cx={cx} cy={cy} r={r} fill="none"
+            stroke={color} strokeWidth={sw} strokeLinecap="butt" strokeOpacity={0.15}
+            strokeDasharray={`${targetArc} ${circ}`}
+            strokeDashoffset={-fillArc}
+            transform={`rotate(-90 ${cx} ${cy})`}
+          />
+        )}
+
+        {/* Target zone — diagonal hatch (dashes clipped to target zone via mask) */}
+        {hasTarget && (
+          <circle cx={cx} cy={cy} r={r} fill="none"
+            stroke={color} strokeWidth={sw} strokeLinecap="butt" strokeOpacity={0.55}
+            strokeDasharray="3 6"
+            mask={`url(#${maskId})`}
+            transform={`rotate(-90 ${cx} ${cy})`}
+          />
+        )}
+
+        {/* Target dot marker at the target position */}
+        {hasTarget && targetDot && (
+          <circle cx={targetDot.x} cy={targetDot.y} r={sw / 2 + 1} fill={color} opacity={0.9} />
+        )}
+
+        {/* Current fill arc (solid, on top) */}
         <circle cx={cx} cy={cy} r={r} fill="none" stroke={color} strokeWidth={sw} strokeLinecap="round"
-          strokeDasharray={`${(fill / 100) * circ} ${circ}`} transform={`rotate(-90 ${cx} ${cy})`} />
-        <text x={cx} y={cy + 7} textAnchor="middle" fill="white" fontSize="17" fontWeight="800" fontFamily="system-ui,sans-serif">{fill}%</text>
+          strokeDasharray={`${fillArc} ${circ}`} transform={`rotate(-90 ${cx} ${cy})`} />
+
+        {/* Centre text */}
+        <text x={cx} y={cy + 7} textAnchor="middle" fill="white" fontSize="17" fontWeight="800"
+          fontFamily="system-ui,sans-serif">{fill}%</text>
       </svg>
-      <p className="text-xs text-gray-400 font-semibold tracking-wide">{label}</p>
+
+      <div className="flex flex-col items-center gap-0.5">
+        <p className="text-xs text-gray-400 font-semibold tracking-wide">{label}</p>
+        {hasTarget && (
+          <p className="text-[10px] font-medium" style={{ color }}>{`Target ${clampedTarget}%`}</p>
+        )}
+      </div>
     </div>
   )
 }
@@ -980,7 +1047,8 @@ export default function DashboardPage() {
       .from('garmin_daily_health_metrics')
       .select(`metric_date, body_battery_start, body_battery_end, body_battery_peak,
         body_battery_low, stress_avg, stress_max, hrv_avg, hrv_status,
-        respiration_avg_bpm, spo2_avg, hydration_intake_ml, hydration_goal_ml`)
+        respiration_avg_bpm, spo2_avg, hydration_intake_ml, hydration_goal_ml,
+        training_readiness`)
       .eq('user_id', userId)
       .eq('metric_date', today)
       .maybeSingle()
@@ -2505,6 +2573,12 @@ export default function DashboardPage() {
           const activeMin = dailySteps?.active_minutes ?? null
           const intensityMin = modMin != null || vigMin != null ? (modMin ?? 0) + (vigMin ?? 0) * 2 : (activeMin ?? 0) * 0.6
           const strainPct = Math.round(Math.min(100, intensityMin > 0 ? 100 * Math.log10(1 + intensityMin) / Math.log10(301) : 0))
+          const trainingReadiness = dailyHealth?.training_readiness ?? null
+          const targetStrain = trainingReadiness != null
+            ? Math.round(15 + (trainingReadiness / 100) * 65)
+            : bodyBattery != null
+            ? Math.round(15 + (bodyBattery / 100) * 60)
+            : null
           const recoveryPct = bodyBattery ?? 0
           const sleepPct = sleepScore ?? 0
           const coachingText = dashBrainInsight?.suggested_focus
@@ -2515,7 +2589,7 @@ export default function DashboardPage() {
           return (
             <div className="rounded-3xl p-5 border border-gray-800" style={{ background: "linear-gradient(160deg,#111827 0%,#0d1117 100%)" }}>
               <div className="flex justify-around items-center mb-4">
-                <RingGauge pct={strainPct} color="#f97316" label="Strain" />
+                <RingGauge pct={strainPct} color="#f97316" label="Strain" target={targetStrain ?? undefined} />
                 <RingGauge pct={recoveryPct} color="#22c55e" label="Recovery" />
                 <RingGauge pct={sleepPct} color="#6366f1" label="Sleep" />
               </div>
