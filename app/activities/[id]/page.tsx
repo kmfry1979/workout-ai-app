@@ -1176,6 +1176,454 @@ function ExerciseSetsCard({ sets }: { sets: ExerciseSet[] }) {
   )
 }
 
+// ─── Split Times ──────────────────────────────────────────────────────────────
+
+const RUN_TYPES = ['running', 'run', 'jogging', 'jog', 'trail', 'treadmill', 'indoor_run', 'track']
+
+function isRunActivity(activityType: string | null): boolean {
+  if (!activityType) return false
+  const t = activityType.toLowerCase()
+  return RUN_TYPES.some(k => t.includes(k))
+}
+
+function fmtSplitTime(sec: number): string {
+  const h = Math.floor(sec / 3600)
+  const m = Math.floor((sec % 3600) / 60)
+  const s = sec % 60
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+  return `${m}:${String(s).padStart(2, '0')}`
+}
+
+function computeSplitSec(laps: unknown[], targetM: number): number | null {
+  let cumDist = 0, cumTime = 0
+  for (const lap of laps) {
+    const l = lap as Record<string, unknown>
+    const dist = Number(l.distance ?? l.totalDistance ?? 0)
+    const time = Number(l.duration ?? l.movingDuration ?? l.elapsedDuration ?? 0)
+    if (dist <= 0 || time <= 0) continue
+    if (cumDist + dist >= targetM) {
+      const fraction = (targetM - cumDist) / dist
+      return Math.round(cumTime + time * fraction)
+    }
+    cumDist += dist
+    cumTime += time
+  }
+  return null
+}
+
+// ─── Split History Modal ──────────────────────────────────────────────────────
+
+type SplitRange = 'Week' | 'Month' | 'Year'
+
+function SplitHistoryModal({ distKm, userId, onClose }: {
+  distKm: 1 | 5 | 10
+  userId: string
+  onClose: () => void
+}) {
+  const now = new Date()
+  const [range, setRange] = useState<SplitRange>('Month')
+  const [periodOffset, setPeriodOffset] = useState(0) // 0 = current, -1 = previous, etc.
+  const [data, setData] = useState<{ date: string; sec: number }[]>([])
+  const [loading, setLoading] = useState(false)
+
+  // Compute period boundaries
+  function getPeriodBounds(r: SplitRange, offset: number): { start: Date; end: Date; label: string } {
+    const base = new Date(now)
+    if (r === 'Month') {
+      base.setMonth(base.getMonth() + offset)
+      const start = new Date(base.getFullYear(), base.getMonth(), 1)
+      const end = new Date(base.getFullYear(), base.getMonth() + 1, 0, 23, 59, 59)
+      const label = start.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
+      return { start, end, label }
+    } else if (r === 'Year') {
+      const year = base.getFullYear() + offset
+      const start = new Date(year, 0, 1)
+      const end = new Date(year, 11, 31, 23, 59, 59)
+      return { start, end, label: String(year) }
+    } else {
+      // Week — find Monday of current week, then offset by weeks
+      const day = base.getDay()
+      const diffToMon = (day === 0 ? -6 : 1 - day)
+      const monday = new Date(base)
+      monday.setDate(base.getDate() + diffToMon + offset * 7)
+      monday.setHours(0, 0, 0, 0)
+      const sunday = new Date(monday)
+      sunday.setDate(monday.getDate() + 6)
+      sunday.setHours(23, 59, 59)
+      const label = `${monday.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} – ${sunday.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}`
+      return { start: monday, end: sunday, label }
+    }
+  }
+
+  const { start, end, label } = getPeriodBounds(range, periodOffset)
+  const isCurrentPeriod = periodOffset === 0
+
+  useEffect(() => {
+    if (!userId) return
+    setLoading(true)
+    const targetM = distKm * 1000
+    supabase
+      .from('garmin_activities')
+      .select('start_time, duration_sec, distance_m, activity_type')
+      .eq('user_id', userId)
+      .gte('distance_m', targetM)
+      .gte('start_time', start.toISOString())
+      .lte('start_time', end.toISOString())
+      .order('start_time', { ascending: true })
+      .then(({ data: rows }) => {
+        if (!rows) { setData([]); setLoading(false); return }
+        // Filter to run types
+        const runs = (rows as { start_time: string; duration_sec: number | null; distance_m: number | null; activity_type: string | null }[])
+          .filter(r => isRunActivity(r.activity_type))
+        // Compute pace-based split
+        const mapped = runs
+          .filter(r => r.duration_sec && r.distance_m && r.distance_m >= targetM)
+          .map(r => ({
+            date: r.start_time.slice(0, 10),
+            sec: Math.round((r.duration_sec! / r.distance_m!) * targetM),
+          }))
+        // For same day: keep fastest
+        const byDay: Record<string, number> = {}
+        for (const m of mapped) {
+          if (byDay[m.date] == null || m.sec < byDay[m.date]) byDay[m.date] = m.sec
+        }
+        const result = Object.entries(byDay).map(([date, sec]) => ({ date, sec })).sort((a, b) => a.date.localeCompare(b.date))
+        setData(result)
+        setLoading(false)
+      })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [distKm, userId, range, periodOffset])
+
+  // Build X-axis slots
+  function buildSlots(): { key: string; label: string }[] {
+    if (range === 'Week') {
+      const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+      const monday = new Date(start)
+      return days.map((d, i) => {
+        const dt = new Date(monday)
+        dt.setDate(monday.getDate() + i)
+        return { key: `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`, label: d }
+      })
+    } else if (range === 'Month') {
+      const daysInMonth = end.getDate()
+      const slots: { key: string; label: string }[] = []
+      for (let d = 1; d <= daysInMonth; d++) {
+        const key = `${start.getFullYear()}-${String(start.getMonth()+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`
+        slots.push({ key, label: d % 5 === 1 ? String(d) : '' })
+      }
+      return slots
+    } else {
+      const months = ['J','F','M','A','M','J','J','A','S','O','N','D']
+      return months.map((m, i) => ({
+        key: `${start.getFullYear()}-${String(i+1).padStart(2,'0')}`,
+        label: m,
+      }))
+    }
+  }
+
+  const slots = buildSlots()
+
+  // For Year view: aggregate data by month (average)
+  function getSlotValue(key: string): number | null {
+    if (range === 'Year') {
+      const prefix = key // YYYY-MM
+      const entries = data.filter(d => d.date.startsWith(prefix))
+      if (entries.length === 0) return null
+      return Math.round(entries.reduce((s, e) => s + e.sec, 0) / entries.length)
+    }
+    const entry = data.find(d => d.date === key)
+    return entry ? entry.sec : null
+  }
+
+  // Build raw values array (actual data per slot, null if no data)
+  const rawValues: (number | null)[] = slots.map(s => getSlotValue(s.key))
+
+  // Gap-fill with linear interpolation between first and last actual data point
+  const firstIdx = rawValues.findIndex(v => v != null)
+  const lastIdx = rawValues.length - 1 - [...rawValues].reverse().findIndex(v => v != null)
+
+  const filledValues: (number | null)[] = rawValues.map((v, i) => {
+    if (v != null) return v
+    if (firstIdx < 0 || i < firstIdx || i > lastIdx) return null
+    // Find surrounding actual points
+    let prevIdx = i - 1
+    while (prevIdx >= 0 && rawValues[prevIdx] == null) prevIdx--
+    let nextIdx = i + 1
+    while (nextIdx < rawValues.length && rawValues[nextIdx] == null) nextIdx++
+    if (prevIdx < 0 || nextIdx >= rawValues.length) return null
+    const prevVal = rawValues[prevIdx]!
+    const nextVal = rawValues[nextIdx]!
+    const t = (i - prevIdx) / (nextIdx - prevIdx)
+    return Math.round(prevVal + (nextVal - prevVal) * t)
+  })
+
+  // Chart dimensions
+  const W = 300
+  const H = 120
+  const PAD = { t: 8, b: 20, l: 30, r: 6 }
+  const chartW = W - PAD.l - PAD.r
+  const chartH = H - PAD.t - PAD.b
+
+  const actualVals = rawValues.filter((v): v is number => v != null)
+  const yMin = actualVals.length > 0 ? Math.min(...actualVals) - 10 : 0
+  const yMax = actualVals.length > 0 ? Math.max(...actualVals) + 10 : 600
+  const yRange = yMax - yMin || 1
+
+  function xPos(i: number): number {
+    return PAD.l + (i / Math.max(slots.length - 1, 1)) * chartW
+  }
+  function yPos(sec: number): number {
+    // Inverted: lower time = visually lower
+    return (H - PAD.b) - ((sec - yMin) / yRange) * chartH
+  }
+
+  // Build SVG path segments distinguishing actual vs interpolated
+  type Segment = { points: { x: number; y: number }[]; isInterp: boolean }
+  const segments: Segment[] = []
+  let currentSeg: Segment | null = null
+
+  for (let i = 0; i <= slots.length; i++) {
+    const val = i < slots.length ? filledValues[i] : null
+    const isActual = i < slots.length && rawValues[i] != null
+    const isInterp = i < slots.length && val != null && rawValues[i] == null
+    const isData = isActual || isInterp
+
+    if (isData) {
+      const point = { x: xPos(i), y: yPos(val!) }
+      const segType = isInterp
+      if (!currentSeg || currentSeg.isInterp !== segType) {
+        // Close last segment with overlap point if exists
+        if (currentSeg && currentSeg.points.length > 0) {
+          currentSeg.points.push(point)
+          segments.push(currentSeg)
+        }
+        currentSeg = { points: currentSeg ? [currentSeg.points[currentSeg.points.length - 1], point] : [point], isInterp: segType }
+      } else {
+        currentSeg.points.push(point)
+      }
+    } else {
+      if (currentSeg && currentSeg.points.length > 0) {
+        segments.push(currentSeg)
+        currentSeg = null
+      }
+    }
+  }
+  if (currentSeg && currentSeg.points.length > 0) segments.push(currentSeg)
+
+  function pointsToPath(pts: { x: number; y: number }[]): string {
+    if (pts.length === 0) return ''
+    return pts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')
+  }
+
+  function pointsToArea(pts: { x: number; y: number }[]): string {
+    if (pts.length === 0) return ''
+    const bottom = H - PAD.b
+    const line = pointsToPath(pts)
+    return `${line} L ${pts[pts.length-1].x.toFixed(1)},${bottom} L ${pts[0].x.toFixed(1)},${bottom} Z`
+  }
+
+  // Y-axis grid lines (3 lines)
+  const yGrid = [yMin, yMin + yRange / 2, yMax].map(v => Math.round(v))
+
+  // Stats
+  const best = actualVals.length > 0 ? Math.min(...actualVals) : null
+  const avg = actualVals.length > 0 ? Math.round(actualVals.reduce((s, v) => s + v, 0) / actualVals.length) : null
+  const runsCount = actualVals.length
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center"
+      style={{ background: 'rgba(0,0,0,0.88)' }}
+      onClick={e => { if (e.target === e.currentTarget) onClose() }}
+    >
+      <div className="w-full max-w-lg bg-gray-900 rounded-t-3xl p-5 pb-8">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <p className="text-orange-400 text-xs font-bold uppercase tracking-wider">{distKm}K Split History</p>
+            <p className="text-white font-semibold text-sm mt-0.5">Best time at each {distKm}km</p>
+          </div>
+          <button type="button" onClick={onClose}
+            className="w-8 h-8 rounded-full flex items-center justify-center text-gray-400 hover:text-white hover:bg-gray-800">
+            ✕
+          </button>
+        </div>
+
+        {/* Range tabs */}
+        <div className="flex gap-2 mb-4">
+          {(['Week', 'Month', 'Year'] as SplitRange[]).map(r => (
+            <button key={r} type="button"
+              onClick={() => { setRange(r); setPeriodOffset(0) }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${range === r ? 'bg-orange-500 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'}`}>
+              {r}
+            </button>
+          ))}
+        </div>
+
+        {/* Period navigation */}
+        <div className="flex items-center justify-between mb-4">
+          <button type="button" onClick={() => setPeriodOffset(p => p - 1)}
+            className="w-8 h-8 rounded-full bg-gray-800 flex items-center justify-center text-gray-300 hover:text-white text-lg leading-none">
+            ‹
+          </button>
+          <p className="text-white text-sm font-medium">{label}</p>
+          <button type="button" onClick={() => setPeriodOffset(p => p + 1)}
+            disabled={isCurrentPeriod}
+            className="w-8 h-8 rounded-full bg-gray-800 flex items-center justify-center text-gray-300 hover:text-white text-lg leading-none disabled:opacity-30 disabled:cursor-not-allowed">
+            ›
+          </button>
+        </div>
+
+        {/* Chart */}
+        {loading ? (
+          <div className="flex items-center justify-center h-28 text-gray-500 text-sm">Loading...</div>
+        ) : actualVals.length === 0 ? (
+          <div className="flex items-center justify-center h-28 text-gray-600 text-sm">No runs this period</div>
+        ) : (
+          <div className="mb-4">
+            <p className="text-gray-600 text-[9px] text-right mb-1">Lower = Faster</p>
+            <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: H }}>
+              {/* Grid lines */}
+              {yGrid.map((v, i) => (
+                <g key={i}>
+                  <line x1={PAD.l} y1={yPos(v)} x2={W - PAD.r} y2={yPos(v)}
+                    stroke="#374151" strokeWidth="0.5" strokeDasharray="2,3" />
+                  <text x={PAD.l - 3} y={yPos(v) + 3} textAnchor="end"
+                    fill="#6b7280" fontSize="7">{fmtSplitTime(v)}</text>
+                </g>
+              ))}
+
+              {/* Area fills */}
+              {segments.map((seg, i) => (
+                seg.points.length >= 2 && (
+                  <path key={i} d={pointsToArea(seg.points)} fill="rgba(249,115,22,0.15)" />
+                )
+              ))}
+
+              {/* Lines */}
+              {segments.map((seg, i) => (
+                seg.points.length >= 2 && (
+                  <path key={i} d={pointsToPath(seg.points)}
+                    fill="none"
+                    stroke="#f97316"
+                    strokeWidth="1.5"
+                    strokeDasharray={seg.isInterp ? '3,4' : undefined}
+                    opacity={seg.isInterp ? 0.4 : 1}
+                  />
+                )
+              ))}
+
+              {/* Actual data dots */}
+              {rawValues.map((v, i) => v != null && (
+                <circle key={i} cx={xPos(i)} cy={yPos(v)} r="2.5" fill="#f97316" />
+              ))}
+
+              {/* X-axis labels */}
+              {slots.map((s, i) => s.label && (
+                <text key={i} x={xPos(i)} y={H - 4} textAnchor="middle"
+                  fill="#6b7280" fontSize="7">{s.label}</text>
+              ))}
+            </svg>
+          </div>
+        )}
+
+        {/* Stats chips */}
+        {!loading && actualVals.length > 0 && (
+          <div className="flex gap-3 justify-center">
+            <div className="bg-gray-800/60 rounded-xl px-4 py-2 text-center">
+              <p className="text-orange-400 text-[10px] uppercase tracking-wider">Best</p>
+              <p className="text-orange-400 font-bold text-base">{best != null ? fmtSplitTime(best) : '—'}</p>
+            </div>
+            <div className="bg-gray-800/60 rounded-xl px-4 py-2 text-center">
+              <p className="text-gray-400 text-[10px] uppercase tracking-wider">Avg</p>
+              <p className="text-white font-bold text-base">{avg != null ? fmtSplitTime(avg) : '—'}</p>
+            </div>
+            <div className="bg-gray-800/60 rounded-xl px-4 py-2 text-center">
+              <p className="text-gray-400 text-[10px] uppercase tracking-wider">Runs</p>
+              <p className="text-white font-bold text-base">{runsCount}</p>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── Split Times Card ─────────────────────────────────────────────────────────
+
+function SplitTimesCard({ activity, raw, userId }: {
+  activity: GarminActivity
+  raw: Record<string, unknown>
+  userId: string
+}) {
+  const [modalDist, setModalDist] = useState<1 | 5 | 10 | null>(null)
+
+  if (!isRunActivity(activity.activity_type)) return null
+  const distM = activity.distance_m ?? 0
+  const durationSec = activity.duration_sec ?? 0
+  const laps = raw.laps as unknown[] | undefined
+
+  function getSplit(targetM: number): number | null {
+    if (distM < targetM) return null
+    // Primary: lap-based
+    if (laps && laps.length > 0) {
+      const lapResult = computeSplitSec(laps, targetM)
+      if (lapResult != null) return lapResult
+    }
+    // Fallback: pace estimate
+    if (durationSec > 0 && distM > 0) {
+      return Math.round((durationSec / distM) * targetM)
+    }
+    return null
+  }
+
+  const splits: { label: string; distKm: 1 | 5 | 10; sec: number | null }[] = [
+    { label: '1K', distKm: 1, sec: getSplit(1000) },
+    { label: '5K', distKm: 5, sec: getSplit(5000) },
+    { label: '10K', distKm: 10, sec: getSplit(10000) },
+  ]
+
+  return (
+    <>
+      <div className="bg-gray-900 rounded-2xl p-4">
+        <h3 className="text-white font-semibold text-sm mb-3">Split Times</h3>
+        <div className="grid grid-cols-3 gap-2">
+          {splits.map(({ label, distKm, sec }) => {
+            const hasData = sec != null
+            return (
+              <button
+                key={label}
+                type="button"
+                disabled={!hasData}
+                onClick={() => hasData && setModalDist(distKm)}
+                className={`rounded-xl p-3 text-left transition-colors ${hasData ? 'bg-gray-800/60 hover:bg-gray-800 active:bg-gray-700' : 'bg-gray-800/30 cursor-default'}`}
+              >
+                <p className="text-gray-500 text-xs mb-1">{label}</p>
+                {hasData ? (
+                  <>
+                    <p className="text-white font-bold text-base leading-none">{fmtSplitTime(sec!)}</p>
+                    <p className="text-orange-400 text-[9px] mt-1">Tap for history</p>
+                  </>
+                ) : (
+                  <p className="text-gray-600 font-bold text-base leading-none">—</p>
+                )}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
+      {modalDist != null && (
+        <SplitHistoryModal
+          distKm={modalDist}
+          userId={userId}
+          onClose={() => setModalDist(null)}
+        />
+      )}
+    </>
+  )
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function ActivityDetailPage() {
@@ -1199,6 +1647,7 @@ export default function ActivityDetailPage() {
   const [exerciseSets, setExerciseSets] = useState<ExerciseSet[]>([])
   const [racePredictions, setRacePredictions] = useState<Record<string, unknown>[] | null>(null)
   const [profileLtSpeedMs, setProfileLtSpeedMs] = useState<number | null>(null)
+  const [userId, setUserId] = useState<string | null>(null)
 
   useEffect(() => {
     const load = async () => {
@@ -1215,6 +1664,7 @@ export default function ActivityDetailPage() {
       if (!data) { router.push('/activities'); return }
       const act = data as GarminActivity
       setActivity(act)
+      setUserId(session.session.user.id)
       if (act.treadmill_segments) setTreadmillSegments(act.treadmill_segments)
       if (act.ai_activity_summary) setTreadmillNotes(act.ai_activity_summary)
 
@@ -1433,6 +1883,9 @@ export default function ActivityDetailPage() {
 
         {/* Pace Zones + Athlete Intelligence pace insight */}
         <PaceZonesCard activity={activity} raw={raw} treadmillSegments={treadmillSegments} paceInsight={paceInsight} paceInsightLoading={analysisLoading} racePredictions={racePredictions} recentActivities={recentActivities} profileLtSpeedMs={profileLtSpeedMs} />
+
+        {/* Split Times */}
+        <SplitTimesCard activity={activity} raw={raw} userId={userId ?? ''} />
 
         {/* Primary stats */}
         {stats.length > 0 && (
