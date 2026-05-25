@@ -642,6 +642,7 @@ export default function DashboardPage() {
   const [stepsWeekOffset, setStepsWeekOffset] = useState(0) // 0 = current week, 1 = last week, etc.
   const [stepsMonthOffset, setStepsMonthOffset] = useState(0) // 0 = current month
   const [stepsYearOffset, setStepsYearOffset] = useState(0) // 0 = current year
+  const [hrv7DayAvg, setHrv7DayAvg] = useState<number | null>(null)
 
   const [stepGoal, setStepGoal] = useState(10000)
   const [stepGoalInput, setStepGoalInput] = useState('10000')
@@ -1054,6 +1055,16 @@ export default function DashboardPage() {
       .maybeSingle()
 
     setDailyHealth(health as DailyHealthMetrics | null)
+
+    // HRV 7-day average (for target strain calculation)
+    const { data: hrvRows } = await supabase
+      .from('garmin_daily_health_metrics')
+      .select('hrv_avg')
+      .eq('user_id', userId)
+      .gte('metric_date', sevenAgo)
+      .not('hrv_avg', 'is', null)
+    const hrvVals = (hrvRows ?? []).map(r => (r as { hrv_avg: number }).hrv_avg).filter(v => v > 0)
+    setHrv7DayAvg(hrvVals.length > 0 ? Math.round(hrvVals.reduce((a, b) => a + b, 0) / hrvVals.length) : null)
 
     // Load daily steps
     const { data: steps } = await supabase
@@ -2574,11 +2585,69 @@ export default function DashboardPage() {
           const intensityMin = modMin != null || vigMin != null ? (modMin ?? 0) + (vigMin ?? 0) * 2 : (activeMin ?? 0) * 0.6
           const strainPct = Math.round(Math.min(100, intensityMin > 0 ? 100 * Math.log10(1 + intensityMin) / Math.log10(301) : 0))
           const trainingReadiness = dailyHealth?.training_readiness ?? null
-          const targetStrain = trainingReadiness != null
-            ? Math.round(15 + (trainingReadiness / 100) * 65)
-            : bodyBattery != null
-            ? Math.round(15 + (bodyBattery / 100) * 60)
-            : null
+          const todayHrv = dailyHealth?.hrv_avg ?? null
+
+          // Yesterday's activities → strain carry-over penalty
+          const yesterdayStr = new Date(Date.now() - 86400000).toISOString().split('T')[0]
+          const yesterdayActs = activities.filter(a => a.start_time.startsWith(yesterdayStr))
+          const yesterdayIntMin = yesterdayActs.reduce((s, a) => s + (a.duration_sec ?? 0) / 60, 0)
+          const yesterdayStrainPct = Math.round(Math.min(100,
+            yesterdayIntMin > 0 ? 100 * Math.log10(1 + yesterdayIntMin) / Math.log10(301) : 0))
+
+          // Multi-factor recovery score (0–100)
+          // Factors: HRV ratio (35%), sleep (30%), body battery (20%), training readiness (15%)
+          let targetStrain: number | null = null
+          const hasAnySignal = todayHrv != null || sleepScore != null || bodyBattery != null || trainingReadiness != null
+          if (hasAnySignal) {
+            let rScore = 50 // neutral baseline
+            let weight = 0
+
+            // Factor 1: HRV ratio vs 7-day average (35%)
+            if (todayHrv != null && hrv7DayAvg != null && hrv7DayAvg > 0) {
+              const ratio = todayHrv / hrv7DayAvg
+              // ratio <0.85 = suppressed, ~1.0 = normal, >1.05 = elevated
+              const hrvScore = Math.min(100, Math.max(0, (ratio - 0.65) / 0.55 * 100))
+              rScore = weight === 0 ? hrvScore : rScore * (weight / (weight + 35)) + hrvScore * (35 / (weight + 35))
+              weight += 35
+            }
+
+            // Factor 2: Sleep score (30%)
+            if (sleepScore != null) {
+              rScore = weight === 0 ? sleepScore : rScore * (weight / (weight + 30)) + sleepScore * (30 / (weight + 30))
+              weight += 30
+            }
+
+            // Factor 3: Body battery end of yesterday (20%)
+            if (bodyBattery != null) {
+              rScore = weight === 0 ? bodyBattery : rScore * (weight / (weight + 20)) + bodyBattery * (20 / (weight + 20))
+              weight += 20
+            }
+
+            // Factor 4: Training Readiness (15%)
+            if (trainingReadiness != null) {
+              rScore = weight === 0 ? trainingReadiness : rScore * (weight / (weight + 15)) + trainingReadiness * (15 / (weight + 15))
+              weight += 15
+            }
+
+            // Non-linear zone mapping → target strain
+            let base: number
+            if (rScore >= 88)      base = 80  // Exceptional — peak performance day
+            else if (rScore >= 75) base = 70  // Optimal — hard training OK
+            else if (rScore >= 60) base = 58  // Good — quality session
+            else if (rScore >= 45) base = 44  // Moderate — aerobic focus
+            else if (rScore >= 30) base = 30  // Low — easy movement only
+            else                   base = 20  // Poor — active rest / walk
+
+            // Hard cap: dangerously low body battery always means rest
+            if (bodyBattery != null && bodyBattery < 30) base = Math.min(base, 22)
+            else if (bodyBattery != null && bodyBattery < 45) base = Math.min(base, 38)
+
+            // Yesterday's strain carry-over penalty
+            if (yesterdayStrainPct >= 75) base = Math.round(base * 0.78)
+            else if (yesterdayStrainPct >= 55) base = Math.round(base * 0.90)
+
+            targetStrain = Math.round(Math.max(15, Math.min(85, base)))
+          }
           const recoveryPct = bodyBattery ?? 0
           const sleepPct = sleepScore ?? 0
           const coachingText = dashBrainInsight?.suggested_focus
