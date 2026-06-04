@@ -1264,7 +1264,7 @@ function SplitHistoryModal({ distKm, userId, onClose }: {
     const targetM = distKm * 1000
     supabase
       .from('garmin_activities')
-      .select('start_time, duration_sec, distance_m, activity_type')
+      .select('start_time, duration_sec, distance_m, activity_type, raw_payload')
       .eq('user_id', userId)
       .gte('distance_m', targetM)
       .gte('start_time', start.toISOString())
@@ -1273,15 +1273,17 @@ function SplitHistoryModal({ distKm, userId, onClose }: {
       .then(({ data: rows }) => {
         if (!rows) { setData([]); setLoading(false); return }
         // Filter to run types
-        const runs = (rows as { start_time: string; duration_sec: number | null; distance_m: number | null; activity_type: string | null }[])
+        const runs = (rows as { start_time: string; duration_sec: number | null; distance_m: number | null; activity_type: string | null; raw_payload: Record<string, unknown> | null }[])
           .filter(r => isRunActivity(r.activity_type))
-        // Compute pace-based split
+        // Use lap-based split when available, fall back to pace estimate
         const mapped = runs
           .filter(r => r.duration_sec && r.distance_m && r.distance_m >= targetM)
-          .map(r => ({
-            date: r.start_time.slice(0, 10),
-            sec: Math.round((r.duration_sec! / r.distance_m!) * targetM),
-          }))
+          .map(r => {
+            const laps = r.raw_payload?.laps as unknown[] | undefined
+            const lapSplit = laps && laps.length > 0 ? computeSplitSec(laps, targetM) : null
+            const sec = lapSplit ?? Math.round((r.duration_sec! / r.distance_m!) * targetM)
+            return { date: r.start_time.slice(0, 10), sec }
+          })
         // For same day: keep fastest
         const byDay: Record<string, number> = {}
         for (const m of mapped) {
@@ -1436,7 +1438,7 @@ function SplitHistoryModal({ distKm, userId, onClose }: {
       style={{ background: 'rgba(0,0,0,0.88)' }}
       onClick={e => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div className="w-full max-w-lg bg-gray-900 rounded-t-3xl p-5 pb-8">
+      <div className="w-full max-w-lg bg-gray-900 rounded-t-3xl p-5 pb-28">
         {/* Header */}
         <div className="flex items-center justify-between mb-4">
           <div>
@@ -1482,7 +1484,7 @@ function SplitHistoryModal({ distKm, userId, onClose }: {
         ) : (
           <div className="mb-4">
             <p className="text-gray-600 text-[9px] text-right mb-1">Lower = Faster</p>
-            <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: H }}>
+            <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto">
               {/* Grid lines */}
               {yGrid.map((v, i) => (
                 <g key={i}>
