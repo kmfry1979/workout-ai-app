@@ -42,6 +42,7 @@ auth = GoogleProvider(
     client_secret=GOOGLE_CLIENT_SECRET,
     base_url=MCP_BASE_URL,
     jwt_signing_key=MCP_JWT_SIGNING_KEY,
+    required_scopes=["openid", "email", "profile"],
 )
 
 mcp = FastMCP("athleteiq", auth=auth)
