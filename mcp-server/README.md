@@ -22,6 +22,21 @@ API billing), unlike the in-app coach.
 All read-only SELECTs against Supabase, scoped to `SUPABASE_USER_ID`, using the
 service role key (bypasses RLS — same as the sync worker).
 
+## Auth
+
+Protected by Google OAuth (`GoogleProvider`) rather than a static bearer token,
+so it works with claude.ai's Connectors UI (web + iOS), which requires OAuth.
+Every tool call additionally checks the authenticated Google account's email
+against `ALLOWED_EMAIL` and rejects anyone else — this is a single-user server.
+
+Setup requires a Google Cloud OAuth client (Console → APIs & Services →
+Credentials → OAuth client ID → Web application), with an authorized redirect
+URI of `<MCP_BASE_URL>/auth/callback`. See `.env.example` for the exact vars.
+
+`MCP_JWT_SIGNING_KEY` must stay the same across restarts/redeploys — it signs
+FastMCP's own session tokens, so rotating it forces every connected client to
+re-authenticate.
+
 ## Run locally
 
 ```bash
@@ -31,16 +46,9 @@ cp .env.example .env   # fill in real values
 python server.py
 ```
 
-Server listens on `http://0.0.0.0:8000/mcp` (streamable-http transport) and
-requires `Authorization: Bearer <MCP_AUTH_TOKEN>` on every request.
-
-Test with the MCP inspector:
-
-```bash
-npx @modelcontextprotocol/inspector
-# Connect to http://localhost:8000/mcp, transport "Streamable HTTP",
-# header Authorization: Bearer <your MCP_AUTH_TOKEN>
-```
+Server listens on `http://0.0.0.0:8000/mcp` (streamable-http transport).
+First connection from any client triggers a Google login in the browser;
+after that, sessions persist via FastMCP's own tokens.
 
 ## Deploying to the Proxmox cluster
 
@@ -55,32 +63,42 @@ Handoff for the Claude CLI session with Proxmox access:
      --env-file .env \
      athleteiq-mcp
    ```
-3. Persist `.env` (same vars as `.env.example`) on the host — do not bake the
-   service role key or `MCP_AUTH_TOKEN` into the image.
-4. Expose port 8000 on a stable hostname/IP reachable from wherever Claude
-   Desktop runs (LAN, Tailscale, or a reverse proxy with TLS — recommended if
-   reachable from outside the LAN, since this currently sends the bearer
-   token over plain HTTP).
+3. Persist `.env` (same vars as `.env.example`) on the host — do not bake any
+   secret into the image. `MCP_JWT_SIGNING_KEY` especially must survive
+   redeploys unchanged.
+4. Expose port 8000 over real TLS at a stable public hostname — OAuth
+   redirects require HTTPS, this isn't optional like the old bearer-token
+   setup. (Already done: `https://athleteiq-mcp.fryski.duckdns.org` via Caddy.)
 5. No changes needed in the main Next.js app or Vercel deployment — this is a
    fully separate process reading the same Supabase database.
 
-## Connecting Claude Desktop
+## Connecting clients
 
-In Claude Desktop's MCP settings, add a remote server:
+**claude.ai (web) / Claude iOS app** — Settings → Connectors → Add custom
+connector → paste `https://athleteiq-mcp.fryski.duckdns.org/mcp`. It will
+walk you through the Google OAuth login itself.
+
+**Claude Desktop** — this app's local `mcpServers` config schema only
+supports `command`/`args` (no direct remote `url` field), so connect via the
+`mcp-remote` bridge, which auto-detects the OAuth requirement and opens a
+browser login on first connect:
 
 ```json
 {
   "mcpServers": {
     "athleteiq": {
-      "url": "http://<proxmox-host>:8000/mcp",
-      "transport": "streamable-http",
-      "headers": {
-        "Authorization": "Bearer <your MCP_AUTH_TOKEN>"
-      }
+      "command": "node",
+      "args": [
+        "C:\\Users\\Kelv\\AppData\\Roaming\\npm\\node_modules\\mcp-remote\\dist\\proxy.js",
+        "https://athleteiq-mcp.fryski.duckdns.org/mcp"
+      ]
     }
   }
 }
 ```
 
-(Exact config key names may differ slightly by Claude Desktop version — check
-the current remote MCP server docs if this doesn't connect.)
+(Requires `npm install -g mcp-remote` first. Using `node` + the resolved
+script path directly — rather than `npx`/`npx.cmd` — works around a bug in
+this Claude Desktop build where it spawns `.cmd` files via `cmd.exe` without
+quoting paths containing spaces, breaking on the default
+`C:\Program Files\nodejs` install location.)
