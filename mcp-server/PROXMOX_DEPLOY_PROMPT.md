@@ -6,7 +6,18 @@ Copy everything below into that session.
 
 I need you to deploy a small MCP server on this Proxmox cluster. It's a Python app that exposes my AthleteIQ fitness data (stored in Supabase) as read-only tools for Claude Desktop to query — things like recent Garmin activities, sleep, HRV, weight history, etc. It does not touch the cluster's other workloads; it's a standalone container.
 
-The code already exists at `mcp-server/` in my `workout-ai-app` repo (branch `claude/eloquent-mclean-d9187b`, or wherever it's since been merged) — pull that repo onto the cluster (or copy just the `mcp-server/` directory) rather than writing the code from scratch. It contains:
+The code already exists — pull it from:
+
+```
+git clone https://github.com/kmfry1979/workout-ai-app.git
+cd workout-ai-app
+git checkout claude/eloquent-mclean-d9187b
+cd mcp-server
+```
+
+(That branch may have been merged into `main` by the time you read this — if `claude/eloquent-mclean-d9187b` no longer exists, just use `main` instead; the `mcp-server/` directory should still be there.)
+
+Use that `mcp-server/` directory as-is rather than writing the code from scratch. It contains:
 - `server.py`, `supabase_client.py` — the app
 - `requirements.txt`, `Dockerfile`
 - `.env.example` — the env vars it needs
