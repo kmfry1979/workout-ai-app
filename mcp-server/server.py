@@ -38,7 +38,7 @@ def get_recent_activities(limit: int = 20, activity_type: str | None = None) -> 
     (e.g. "running", "strength", "treadmill").
     """
     params = {
-        "select": "id,activity_id,activity_type,start_time,duration_sec,distance_m,avg_hr,max_hr,training_effect,calories",
+        "select": "id,activity_type,start_time,duration_sec,distance_m,avg_hr,max_hr,training_effect,calories",
         "order": "start_time.desc",
         "limit": str(limit),
     }
@@ -49,10 +49,11 @@ def get_recent_activities(limit: int = 20, activity_type: str | None = None) -> 
 
 @mcp.tool
 def get_activity_detail(activity_id: str) -> list[dict]:
-    """Full detail for one activity, including raw_payload (laps, HR series, etc)."""
+    """Full detail for one activity (id from get_recent_activities), including
+    raw_payload (laps, HR series, etc)."""
     return db.select(
         "garmin_activities",
-        {"select": "*", "activity_id": f"eq.{activity_id}", "limit": "1"},
+        {"select": "*", "id": f"eq.{activity_id}", "limit": "1"},
     )
 
 
